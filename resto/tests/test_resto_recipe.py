@@ -99,6 +99,26 @@ class TestRestoRecipe(IntegrationTestCase):
 		self.assertEqual(got, {"RT-Kofta": 0.5, "RT-Rice": 0.3, "RT-Bread": 4})
 		self.assertEqual(mixed.product_bundle, "RT-Mixed-Grill")
 
+	def test_preview_cost_of_unsaved_recipe(self):
+		from resto.resto.doctype.resto_recipe.resto_recipe import preview_cost
+
+		doc = {
+			"doctype": "Resto Recipe",
+			"recipe_type": PREPARED,
+			"item": "RT-Kofta",
+			"quantity": 2,
+			"items": [
+				{"item_code": "RT-Meat", "qty": 0.9},
+				{"item_code": "RT-Onion", "qty": 0.1},
+				{"item_code": None, "qty": 1},  # a row still being typed
+			],
+		}
+		cost = preview_cost(frappe.as_json(doc))
+		self.assertAlmostEqual(cost["total_cost"], 0.9 * 400 + 0.1 * 20)
+		self.assertAlmostEqual(cost["cost_per_unit"], (0.9 * 400 + 0.1 * 20) / 2)
+		self.assertEqual([r["rate"] for r in cost["rows"]], [400, 20, 0])
+		self.assertFalse(frappe.db.exists("Resto Recipe", "RT-Kofta"), "preview must not save")
+
 	def test_menu_dish_rejects_non_stock_component(self):
 		doc = frappe.new_doc("Resto Recipe")
 		doc.update({"recipe_type": MENU, "item": "RT-Combo"})

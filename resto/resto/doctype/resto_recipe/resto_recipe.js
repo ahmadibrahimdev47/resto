@@ -1,3 +1,41 @@
+// Live cost while typing: the server computes it with the same rules as saving (preview_cost);
+// nothing is stored until the recipe is saved.
+const COST_FIELDS = ["main_cost", "total_cost", "cost_per_unit", "selling_rate", "food_cost_percent"];
+
+function preview_cost(frm) {
+	clearTimeout(frm._resto_cost_timer);
+	frm._resto_cost_timer = setTimeout(() => {
+		const rows = [...(frm.doc.items || []), ...(frm.doc.sides || [])];
+		if (!rows.some((r) => r.item_code)) return;
+		const seq = (frm._resto_cost_seq = (frm._resto_cost_seq || 0) + 1);
+		frappe.call({
+			method: "resto.resto.doctype.resto_recipe.resto_recipe.preview_cost",
+			args: { doc: frm.doc },
+			type: "POST",
+			callback: (r) => {
+				// A newer request is on its way, or the user left the form.
+				if (!r.message || seq !== frm._resto_cost_seq || frm.doc.doctype !== "Resto Recipe") return;
+				apply_cost(frm, r.message);
+			},
+		});
+	}, 400);
+}
+
+function apply_cost(frm, cost) {
+	const by_name = {};
+	for (const r of [...(frm.doc.items || []), ...(frm.doc.sides || [])]) by_name[r.name] = r;
+	for (const c of cost.rows) {
+		const row = by_name[c.name] || (frm.doc[c.parentfield] || []).find((r) => r.idx === c.idx);
+		if (!row) continue;
+		// Plain assignment: cost fields are read only and must not re-trigger this preview.
+		Object.assign(row, { rate: c.rate, amount: c.amount, stock_qty: c.stock_qty, conversion_factor: c.conversion_factor });
+	}
+	for (const f of COST_FIELDS) frm.doc[f] = cost[f];
+	frm.refresh_field("items");
+	frm.refresh_field("sides");
+	frm.refresh_fields(COST_FIELDS);
+}
+
 frappe.ui.form.on("Resto Recipe", {
 	setup(frm) {
 		frm.set_query("item", () => {
@@ -33,10 +71,22 @@ frappe.ui.form.on("Resto Recipe", {
 			frm.clear_table("sides");
 			frm.refresh_field("sides");
 		}
+		preview_cost(frm);
 	},
+
+	item: preview_cost,
+	quantity: preview_cost,
 
 	set_labels(frm) {
 		const is_menu = frm.doc.recipe_type === "Menu Dish";
 		frm.set_df_property("items", "label", is_menu ? __("Main Ingredients") : __("Ingredients"));
 	},
+});
+
+frappe.ui.form.on("Resto Recipe Item", {
+	item_code: preview_cost,
+	qty: preview_cost,
+	uom: preview_cost,
+	items_remove: preview_cost,
+	sides_remove: preview_cost,
 });

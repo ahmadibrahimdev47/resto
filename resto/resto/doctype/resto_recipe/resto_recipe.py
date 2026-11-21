@@ -85,21 +85,25 @@ class RestoRecipe(Document):
 		if flt(self.quantity) <= 0:
 			frappe.throw(_("Yield Quantity must be greater than zero"))
 
-	def set_row_details(self):
+	def set_row_details(self, strict=True):
+		"""strict=False (live preview while typing): unknown items and units count as zero."""
 		from erpnext.stock.get_item_details import get_conversion_factor
 
 		for row in self.all_rows():
-			item = frappe.db.get_value(
+			item = row.item_code and frappe.db.get_value(
 				"Item", row.item_code, ["item_name", "stock_uom"], as_dict=True
 			)
 			if not item:
+				if not strict:
+					row.conversion_factor = row.stock_qty = 0
+					continue
 				frappe.throw(_("Row {0}: Item {1} does not exist").format(row.idx, frappe.bold(row.item_code)))
 
 			row.item_name = item.item_name
 			row.stock_uom = item.stock_uom
 			row.uom = row.uom or item.stock_uom
 			row.conversion_factor = flt(
-				get_conversion_factor(row.item_code, row.uom, throw_if_missing=True)["conversion_factor"]
+				(get_conversion_factor(row.item_code, row.uom, throw_if_missing=strict) or {}).get("conversion_factor")
 			)
 			row.stock_qty = flt(flt(row.qty) * row.conversion_factor, QTY_PRECISION)
 			row.is_sub_recipe = 1 if get_active_recipe(row.item_code, MENU) else 0
@@ -150,6 +154,9 @@ class RestoRecipe(Document):
 		main_cost = 0
 		total_cost = 0
 		for row in self.all_rows():
+			if not row.item_code:
+				row.rate = row.amount = 0
+				continue
 			row.rate = flt(get_unit_cost(row.item_code, memo, stack=(self.item,)))
 			row.amount = flt(row.rate * flt(row.stock_qty))
 			total_cost += row.amount
@@ -161,7 +168,7 @@ class RestoRecipe(Document):
 		self.cost_per_unit = total_cost / flt(self.quantity or 1)
 
 		if self.recipe_type == MENU:
-			self.selling_rate = get_selling_rate(self.item)
+			self.selling_rate = get_selling_rate(self.item) if self.item else 0
 			self.food_cost_percent = (
 				flt(total_cost / self.selling_rate * 100, 2) if self.selling_rate else 0
 			)
@@ -307,6 +314,43 @@ class RestoRecipe(Document):
 
 	def all_rows(self):
 		return list(self.get("items") or []) + list(self.get("sides") or [])
+
+
+@frappe.whitelist(methods=["POST"])
+def preview_cost(doc):
+	"""Costs of the recipe as it is on the screen, saved or not, for the form to show while typing.
+
+	Same rules as saving (calculate_cost); nothing is written. Saving still recalculates and stores.
+	"""
+	doc = frappe.get_doc(frappe.parse_json(doc))
+	if doc.doctype != "Resto Recipe":
+		frappe.throw(_("Not a recipe"))
+	if not (frappe.has_permission("Resto Recipe", "write") or frappe.has_permission("Resto Recipe", "create")):
+		frappe.throw(_("Not permitted"), frappe.PermissionError)
+
+	if doc.recipe_type == MENU:
+		doc.quantity = 1
+	doc.set_row_details(strict=False)
+	doc.calculate_cost()
+	return {
+		"main_cost": doc.main_cost,
+		"total_cost": doc.total_cost,
+		"cost_per_unit": doc.cost_per_unit,
+		"selling_rate": doc.selling_rate,
+		"food_cost_percent": doc.food_cost_percent,
+		"rows": [
+			{
+				"name": row.name,
+				"parentfield": row.parentfield,
+				"idx": row.idx,
+				"rate": row.rate,
+				"amount": row.amount,
+				"stock_qty": row.stock_qty,
+				"conversion_factor": row.conversion_factor,
+			}
+			for row in doc.all_rows()
+		],
+	}
 
 
 def get_active_recipe(item_code, recipe_type=None):
