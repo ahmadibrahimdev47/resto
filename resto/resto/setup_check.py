@@ -187,7 +187,7 @@ class SetupCheck:
 		self.ok(area, _("Service charge {0}% to {1}").format(flt(s.service_charge_percent), s.service_charge_account))
 
 	def check_floor(self):
-		area = _("Floor")
+		area = _("Floor", context="Resto")
 		tables = frappe.db.count("Resto Table", {"is_active": 1})
 		if not tables:
 			self.warn(area, _("No active tables; only takeaway and delivery can be used"))
@@ -237,7 +237,7 @@ class SetupCheck:
 
 	def check_menu(self):
 		s = self.s
-		area = _("Menu")
+		area = _("Menu", context="Resto")
 		items = self.menu_items()
 		if not items:
 			self.warn(area, _("No sales items in the menu item group"))

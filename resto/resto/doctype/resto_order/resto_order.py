@@ -131,7 +131,7 @@ class RestoOrder(Document):
 
 	def validate_closed(self):
 		if self.before_doc and self.before_doc.status in CLOSED and not self.flags.resto_allow_closed:
-			frappe.throw(_("Order {0} is {1} and cannot be changed").format(self.name, _(self.before_doc.status)))
+			frappe.throw(_("Order {0} is {1} and cannot be changed").format(self.name, _(self.before_doc.status, context="Resto")))
 
 	def set_price_list(self):
 		if self.pos_profile:
@@ -290,9 +290,9 @@ class RestoOrder(Document):
 
 	def set_title(self):
 		if self.order_type == "Dine In":
-			self.title = _("Table {0}").format(self.resto_table)
+			self.title = _("Table {0}", context="Resto").format(self.resto_table)
 		else:
-			self.title = f"{_(self.order_type)} {self.customer_name or self.phone or ''}".strip()
+			self.title = f"{_(self.order_type, context='Resto')} {self.customer_name or self.phone or ''}".strip()
 
 	# ------------------------------------------------------------------ helpers
 

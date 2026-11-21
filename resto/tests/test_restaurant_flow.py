@@ -273,13 +273,13 @@ class TestRestaurantFlow(IntegrationTestCase):
 		floor.add_items(
 			order,
 			json.dumps(
-				[{"item_code": "DISH-FRIES", "qty": 1, "course": "Starter"}, dict(self.burger(1), course="Main", hold=1)]
+				[{"item_code": "DISH-FRIES", "qty": 1, "course": "Starter"}, dict(self.burger(1), course="Main Course", hold=1)]
 			),
 		)
 		floor.send_to_kitchen(order)
 		status = {d.item_code: d.kitchen_status for d in lines(order)}
 		self.assertEqual(status, {"DISH-FRIES": "Sent", "DISH-BURGER": "Not Sent"})
-		floor.fire_course(order, "Main")
+		floor.fire_course(order, "Main Course")
 		self.assertTrue(all(d.kitchen_status == "Sent" for d in lines(order)))
 
 	def test_modifier_rules(self):

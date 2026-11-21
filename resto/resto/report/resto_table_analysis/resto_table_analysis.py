@@ -72,7 +72,7 @@ def execute(filters=None):
 		)
 	data.sort(key=lambda r: -r["revenue"])
 	columns = [
-		{"fieldname": "group", "label": _(group_by), "fieldtype": "Data", "width": 140},
+		{"fieldname": "group", "label": _(group_by, context="Resto"), "fieldtype": "Data", "width": 140},
 		{"fieldname": "orders", "label": _("Orders"), "fieldtype": "Int", "width": 80},
 		{"fieldname": "guests", "label": _("Guests"), "fieldtype": "Int", "width": 80},
 		{"fieldname": "avg_guests", "label": _("Guests per Order"), "fieldtype": "Float", "precision": 1, "width": 110},

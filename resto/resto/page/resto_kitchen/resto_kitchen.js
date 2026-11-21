@@ -89,11 +89,11 @@ class RestoKitchen {
 			return;
 		}
 		const next = { New: "In Progress", "In Progress": "Ready", Ready: "Served" };
-		const label = { New: __("Start"), "In Progress": __("Ready"), Ready: __("Served") };
+		const label = { New: __("Start", null, "Resto"), "In Progress": __("Ready"), Ready: __("Served") };
 		this.$board.html(
 			this.tickets
 				.map((t) => {
-					const where = t.table ? __("Table {0}", [esc(t.table)]) : `${__(t.order_type)} · ${esc(t.order || "")}`;
+					const where = t.table ? __("Table {0}", [esc(t.table)], "Resto") : `${__(t.order_type, null, "Resto")} · ${esc(t.order || "")}`;
 					const m = this.minutes(t.sent_at);
 					const items = t.items
 						.map(
@@ -108,14 +108,14 @@ class RestoKitchen {
 						t.status === "Served"
 							? `<button class="btn btn-default btn-sm" data-s="Ready">${__("Recall")}</button>`
 							: isVoid
-								? `<button class="btn btn-danger btn-sm" data-s="Served">${__("Seen")}</button>`
+								? `<button class="btn btn-danger btn-sm" data-s="Served">${__("Seen", null, "Resto")}</button>`
 								: `<button class="btn btn-primary btn-sm" data-s="${next[t.status]}">${label[t.status]}</button>`;
 					return `<div class="rk-ticket s-${t.status.replace(/ /g, "")} ${isVoid ? "void" : ""} ${m >= 20 ? "late" : m >= 10 ? "warn" : ""}" data-name="${esc(t.name)}">
 						<div class="rk-head"><b>${where}</b><span data-since="${t.sent_at}">${m}′</span></div>
-						<div class="rk-sub">${isVoid ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${esc(t.waiter || "")} · ${__(t.status)}</div>
+						<div class="rk-sub">${isVoid ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${esc(t.waiter || "")} · ${__(t.status, null, "Resto")}</div>
 						<ul>${items}</ul>
 						<div class="rk-actions">${btn}
-							<button class="btn btn-default btn-sm" data-print="1">${__("Print")}</button></div>
+							<button class="btn btn-default btn-sm" data-print="1">${__("Print", null, "Resto")}</button></div>
 					</div>`;
 				})
 				.join("")

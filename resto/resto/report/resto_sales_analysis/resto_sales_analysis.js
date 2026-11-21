@@ -26,7 +26,7 @@ frappe.query_reports["Resto Sales Analysis"] = {
 			fieldname: "group_by",
 			label: __("Group By"),
 			fieldtype: "Select",
-			options: [{ value: "Day", label: __("Day") }, { value: "Hour", label: __("Hour") }, { value: "Weekday", label: __("Weekday") }, { value: "Month", label: __("Month") }, { value: "Order Type", label: __("Order Type") }, { value: "Table", label: __("Table") }, { value: "Hall", label: __("Hall") }, { value: "Waiter", label: __("Waiter") }, { value: "Cashier", label: __("Cashier") }, { value: "POS Profile", label: __("POS Profile") }, { value: "Item", label: __("Item") }, { value: "Item Group", label: __("Item Group") }, { value: "Payment Method", label: __("Payment Method") }],
+			options: [{ value: "Day", label: __("Day") }, { value: "Hour", label: __("Hour") }, { value: "Weekday", label: __("Weekday") }, { value: "Month", label: __("Month") }, { value: "Order Type", label: __("Order Type") }, { value: "Table", label: __("Table", null, "Resto") }, { value: "Hall", label: __("Hall") }, { value: "Waiter", label: __("Waiter") }, { value: "Cashier", label: __("Cashier") }, { value: "POS Profile", label: __("POS Profile") }, { value: "Item", label: __("Item") }, { value: "Item Group", label: __("Item Group") }, { value: "Payment Method", label: __("Payment Method") }],
 			default: "Day",
 		},
 	],

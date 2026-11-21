@@ -356,7 +356,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None):
 		if done:
 			return frappe.get_doc("Sales Invoice", done.sales_invoice)
 	if order.status not in ("Open", "Bill Requested"):
-		frappe.throw(_("Order {0} is {1}").format(order.name, _(order.status)))
+		frappe.throw(_("Order {0} is {1}").format(order.name, _(order.status, context="Resto")))
 	shift = get_open_shift(frappe.session.user, order.pos_profile)
 	if cint(settings.require_pos_shift) and posnext_installed() and not shift:
 		frappe.throw(

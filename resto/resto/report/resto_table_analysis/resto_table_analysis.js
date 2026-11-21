@@ -26,7 +26,7 @@ frappe.query_reports["Resto Table Analysis"] = {
 			fieldname: "group_by",
 			label: __("Group By"),
 			fieldtype: "Select",
-			options: [{ value: "Table", label: __("Table") }, { value: "Hall", label: __("Hall") }, { value: "Waiter", label: __("Waiter") }, { value: "Weekday", label: __("Weekday") }, { value: "Hour", label: __("Hour") }],
+			options: [{ value: "Table", label: __("Table", null, "Resto") }, { value: "Hall", label: __("Hall") }, { value: "Waiter", label: __("Waiter") }, { value: "Weekday", label: __("Weekday") }, { value: "Hour", label: __("Hour") }],
 			default: "Table",
 		},
 		{

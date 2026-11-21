@@ -115,7 +115,7 @@
   {
    "fieldname": "course",
    "fieldtype": "Select",
-   "options": "\nStarter\nMain\nDessert\nDrinks",
+   "options": "\nStarter\nMain Course\nDessert\nDrinks",
    "label": "Course"
   },
   {
@@ -177,7 +177,7 @@
  "is_submittable": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-21 12:23:55.136000",
+ "modified": "2026-11-21 22:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order Item",

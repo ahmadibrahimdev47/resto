@@ -58,7 +58,7 @@ def execute(filters=None):
 	waste, counts = extra.waste, extra.counts
 	total_cost = cogs + extra.total  # a negative count difference is a loss, adding to cost
 
-	columns = [{"fieldname": "group", "label": _(group_by), "fieldtype": "Link" if group_by != "Day" else "Date",
+	columns = [{"fieldname": "group", "label": _(group_by, context="Resto"), "fieldtype": "Link" if group_by != "Day" else "Date",
 	            "options": group_by if group_by != "Day" else None, "width": 160}]
 	if group_by == "Item":
 		columns.append({"fieldname": "item_name", "label": _("Item Name"), "fieldtype": "Data", "width": 170})

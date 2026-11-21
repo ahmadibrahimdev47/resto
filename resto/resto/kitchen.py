@@ -177,7 +177,7 @@ def set_ticket_status(ticket_name, status):
 		return ticket
 	if status not in TRANSITIONS.get(ticket.status, ()):
 		# A stale screen (or a ticket cancelled meanwhile) must not move it backwards.
-		frappe.throw(_("Ticket {0} is {1} and cannot become {2}").format(ticket.name, _(ticket.status), _(status)))
+		frappe.throw(_("Ticket {0} is {1} and cannot become {2}").format(ticket.name, _(ticket.status, context="Resto"), _(status, context="Resto")))
 	now = now_datetime()
 	ticket.status = status
 	if status == "In Progress" and not ticket.started_at:

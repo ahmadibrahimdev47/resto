@@ -42,7 +42,7 @@ def execute(filters=None):
 
 
 def group_column(group_by):
-	return {"fieldname": "group", "label": _(group_by), "fieldtype": "Data", "width": 160}
+	return {"fieldname": "group", "label": _(group_by, context="Resto"), "fieldtype": "Data", "width": 160}
 
 
 def cur(fieldname, label, width=120):
@@ -84,7 +84,7 @@ def by_invoice(filters, group_by):
 		elif group_by == "Hour" and r.group is not None:
 			r.group = f"{int(r.group):02d}:00"
 		elif group_by == "Order Type":
-			r.group = _(r.group)
+			r.group = _(r.group, context="Resto")
 		elif group_by in ("Waiter", "Cashier"):
 			r.group = frappe.utils.get_fullname(r.group)
 	columns = [

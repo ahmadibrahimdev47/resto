@@ -2,7 +2,7 @@
 // Plain JS on purpose (no build step); every action is checked again on the server.
 
 const API = "resto.resto.floor.";
-const COURSES = ["", "Starter", "Main", "Dessert", "Drinks"];
+const COURSES = ["", "Starter", "Main Course", "Dessert", "Drinks"];
 
 frappe.pages["resto-floor"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({ parent: wrapper, title: __("Restaurant Floor"), single_column: true });
@@ -153,11 +153,11 @@ class RestoFloor {
 			`<div class="rf-list">${orders
 				.map(
 					(o) => `<div class="rf-ocard ${o.status === "Bill Requested" ? "bill" : "occupied"}" data-order="${esc(o.name)}">
-					<div class="rf-name">${__(o.order_type)} · ${esc(o.name)}</div>
-					${o.rebill ? `<div class="text-danger">${__("To Bill Again")} · ${__("Table {0}", [esc(o.resto_table)])}</div>` : ""}
+					<div class="rf-name">${__(o.order_type, null, "Resto")} · ${esc(o.name)}</div>
+					${o.rebill ? `<div class="text-danger">${__("To Bill Again")} · ${__("Table {0}", [esc(o.resto_table)], "Resto")}</div>` : ""}
 					<div>${esc(o.customer_name || "")} ${esc(o.phone || "")}</div>
 					<div>${o.minutes}′ · <b>${money(o.net_total)}</b></div>
-					${o.delivery_status ? `<div class="text-muted">${__(o.delivery_status)}</div>` : ""}
+					${o.delivery_status ? `<div class="text-muted">${__(o.delivery_status, null, "Resto")}</div>` : ""}
 					${o.ready_count ? `<span class="rf-ready">${__("Ready")} ${o.ready_count}</span>` : ""}
 				</div>`
 				)
@@ -186,7 +186,7 @@ class RestoFloor {
 		const d = new frappe.ui.Dialog({
 			title: __("Open Table {0}", [t.name]),
 			fields: [{ fieldname: "guests", fieldtype: "Int", label: __("Guests"), default: 2, reqd: 1 }],
-			primary_action_label: __("Open"),
+			primary_action_label: __("Open", null, "Resto"),
 			primary_action: async (v) => {
 				d.hide();
 				const name = await call("create_order", { order_type: "Dine In", table: t.name, guests: v.guests }, true);
@@ -198,7 +198,7 @@ class RestoFloor {
 
 	new_order(order_type) {
 		const d = new frappe.ui.Dialog({
-			title: __("New {0} Order", [__(order_type)]),
+			title: __("New {0} Order", [__(order_type, null, "Resto")]),
 			fields: [
 				{ fieldname: "customer", fieldtype: "Link", options: "Customer", label: __("Customer") },
 				{ fieldname: "customer_name", fieldtype: "Data", label: __("Customer Name") },
@@ -210,7 +210,7 @@ class RestoFloor {
 					depends_on: `eval:${order_type === "Delivery"}`,
 				},
 			],
-			primary_action_label: __("Start"),
+			primary_action_label: __("Start", null, "Resto"),
 			primary_action: async (v) => {
 				d.hide();
 				const name = await call("create_order", { order_type, ...v }, true);
@@ -226,7 +226,7 @@ class RestoFloor {
 		const order = await call("get_order", { order: name });
 		if (!["Open", "Bill Requested"].includes(order.status)) {
 			this.close_order();
-			frappe.show_alert({ message: __("Order {0} is {1}", [name, __(order.status)]), indicator: "blue" });
+			frappe.show_alert({ message: __("Order {0} is {1}", [name, __(order.status, null, "Resto")]), indicator: "blue" });
 			return;
 		}
 		this.order = order;
@@ -258,11 +258,11 @@ class RestoFloor {
 		$(this.page.body).find(".resto-floor").hide();
 		const head =
 			o.order_type === "Dine In"
-				? `${__("Table {0}", [esc(o.resto_table)])} · ${__("{0} guests", [o.guests])}`
-				: `${__(o.order_type)} · ${esc(o.customer_name || "")} ${esc(o.phone || "")}`;
+				? `${__("Table {0}", [esc(o.resto_table)], "Resto")} · ${__("{0} guests", [o.guests])}`
+				: `${__(o.order_type, null, "Resto")} · ${esc(o.customer_name || "")} ${esc(o.phone || "")}`;
 		this.$order.show().html(`
 			<div class="rf-ohead">
-				<button class="btn btn-default btn-sm rf-back">${frappe.utils.is_rtl() ? "→" : "←"} ${__("Floor")}</button>
+				<button class="btn btn-default btn-sm rf-back">${frappe.utils.is_rtl() ? "→" : "←"} ${__("Floor", null, "Resto")}</button>
 				<div class="rf-otitle">${head} <span class="text-muted">${esc(o.name)}</span>
 					${o.status === "Bill Requested" ? `<span class="indicator-pill orange">${__("Bill Requested")}</span>` : ""}</div>
 				<div class="rf-oactions">
@@ -283,7 +283,7 @@ class RestoFloor {
 						<button class="btn btn-default" data-act="fire">${__("Fire Course")}</button>
 						<button class="btn btn-default" data-act="served">${__("Served")}</button>
 						<button class="btn btn-warning" data-act="bill">${__("Print Bill")}</button>
-						${this.floor.roles.cashier || this.floor.roles.manager ? `<button class="btn btn-success" data-act="pay">${__("Pay")}</button>` : ""}
+						${this.floor.roles.cashier || this.floor.roles.manager ? `<button class="btn btn-success" data-act="pay">${__("Pay", null, "Resto")}</button>` : ""}
 					</div>
 				</div>
 			</div>`);
@@ -359,13 +359,13 @@ class RestoFloor {
 		fields.push(
 			{ fieldtype: "Section Break" },
 			{ fieldname: "notes", fieldtype: "Small Text", label: __("Kitchen Note") },
-			{ fieldname: "course", fieldtype: "Select", options: COURSES.map((c) => ({ value: c, label: __(c) })), label: __("Course") },
+			{ fieldname: "course", fieldtype: "Select", options: COURSES.map((c) => ({ value: c, label: __(c) })), label: __("Course", null, "Resto") },
 			{ fieldname: "hold", fieldtype: "Check", label: __("Hold Until Fired") }
 		);
 		const d = new frappe.ui.Dialog({
 			title: esc(item.item_name),
 			fields,
-			primary_action_label: __("Add"),
+			primary_action_label: __("Add", null, "Resto"),
 			primary_action: async (v) => {
 				const modifiers = [];
 				groups.forEach((g, gi) =>
@@ -395,7 +395,7 @@ class RestoFloor {
 					${d.modifiers_text ? `<div class="rf-mod">${esc(d.modifiers_text)}</div>` : ""}
 					${d.notes ? `<div class="rf-mod">✎ ${esc(d.notes)}</div>` : ""}
 					<div class="rf-lmeta">
-						<span class="rf-status s-${(d.kitchen_status || "").replace(/ /g, "")}">${__(d.kitchen_status)}</span>
+						<span class="rf-status s-${(d.kitchen_status || "").replace(/ /g, "")}">${__(d.kitchen_status, null, "Resto")}</span>
 						${d.course ? `<span>${__(d.course)}</span>` : ""}
 						${d.hold && !sent ? `<span class="rf-hold">${__("Held")}</span>` : ""}
 						${d.billed_qty ? `<span>${__("Billed {0}", [d.billed_qty])}</span>` : ""}
@@ -445,7 +445,7 @@ class RestoFloor {
 		if (!sent) {
 			fields.push(
 				{ fieldname: "notes", fieldtype: "Small Text", label: __("Kitchen Note"), default: line.notes },
-				{ fieldname: "course", fieldtype: "Select", options: COURSES.map((c) => ({ value: c, label: __(c) })), label: __("Course"), default: line.course || "" },
+				{ fieldname: "course", fieldtype: "Select", options: COURSES.map((c) => ({ value: c, label: __(c) })), label: __("Course", null, "Resto"), default: line.course || "" },
 				{ fieldname: "hold", fieldtype: "Check", label: __("Hold Until Fired"), default: line.hold }
 			);
 		} else {
@@ -469,7 +469,7 @@ class RestoFloor {
 				else await this.line_call("update_line", { line: line.name, notes: v.notes || "", course: v.course || "", hold: v.hold ? 1 : 0 });
 			},
 		});
-		if (!sent) d.set_secondary_action_label(__("Remove"));
+		if (!sent) d.set_secondary_action_label(__("Remove", null, "Resto"));
 		if (!sent) d.set_secondary_action(() => { d.hide(); this.line_call("remove_line", { line: line.name }); });
 		d.show();
 	}
@@ -559,7 +559,7 @@ class RestoFloor {
 	move() {
 		const o = this.order;
 		frappe.prompt(
-			[{ fieldname: "table", fieldtype: "Select", label: __("Table"), options: this.free_tables(), reqd: 1 }],
+			[{ fieldname: "table", fieldtype: "Select", label: __("Table", null, "Resto"), options: this.free_tables(), reqd: 1 }],
 			async (v) => { await call("move_table", { order: o.name, table: v.table }, true); this.load_order(o.name); },
 			__("Move to Table")
 		);
@@ -580,12 +580,12 @@ class RestoFloor {
 		const o = this.order;
 		frappe.prompt(
 			[
-				{ fieldname: "delivery_status", fieldtype: "Select", label: __("Delivery Status"), options: ["Pending", "Out for Delivery", "Delivered"].map((s) => ({ value: s, label: __(s) })), default: o.delivery_status || "Pending" },
-				{ fieldname: "driver", fieldtype: "Link", options: "Employee", label: __("Driver"), default: o.driver },
+				{ fieldname: "delivery_status", fieldtype: "Select", label: __("Delivery Status"), options: ["Pending", "Out for Delivery", "Delivered"].map((s) => ({ value: s, label: __(s, null, "Resto") })), default: o.delivery_status || "Pending" },
+				{ fieldname: "driver", fieldtype: "Link", options: "Employee", label: __("Driver", null, "Resto"), default: o.driver },
 				{ fieldname: "delivery_fee", fieldtype: "Currency", label: __("Delivery Fee"), default: o.delivery_fee },
 			],
 			async (v) => { await call("set_delivery", { order: o.name, ...v }, true); this.load_order(o.name); },
-			__("Delivery")
+			__("Delivery", null, "Resto")
 		);
 	}
 
@@ -646,7 +646,7 @@ class RestoFloor {
 						title: __("Paid"),
 						indicator: "green",
 						message: `${__("Invoice")} <a href="/app/sales-invoice/${esc(r.sales_invoice)}">${esc(r.sales_invoice)}</a><br>
-							${r.change_amount ? `<b>${__("Change")}: ${money(r.change_amount)}</b>` : ""}`,
+							${r.change_amount ? `<b>${__("Change", null, "Resto")}: ${money(r.change_amount)}</b>` : ""}`,
 						primary_action: {
 							label: __("Print Receipt"),
 							action: () => window.open(frappe.urllib.get_full_url(`/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(r.sales_invoice)}${r.print_format ? "&format=" + encodeURIComponent(r.print_format) : ""}&trigger_print=1`)),
@@ -677,7 +677,7 @@ class RestoFloor {
 			const paid = modes.reduce((s, m, i) => s + (d.get_value(`p_${i}`) || 0), 0);
 			const diff = paid - bill.payable;
 			d.fields_dict.change.$wrapper.html(
-				diff >= 0 ? `<h4>${__("Change")}: ${money(diff)}</h4>` : `<h4 class="text-danger">${__("Remaining")}: ${money(-diff)}</h4>`
+				diff >= 0 ? `<h4>${__("Change", null, "Resto")}: ${money(diff)}</h4>` : `<h4 class="text-danger">${__("Remaining")}: ${money(-diff)}</h4>`
 			);
 		};
 		modes.forEach((m, i) => d.fields_dict[`p_${i}`].$input.on("input change", update_change));

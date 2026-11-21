@@ -41,9 +41,9 @@ def execute(filters=None):
 		d.share = pct(d.amount, total)
 		d.of_sales = pct(d.amount, sales)
 		if group_by == "Reason":
-			d.group = _(d.group)
+			d.group = _(d.group, context="Resto")
 
-	columns = [{"fieldname": "group", "label": _(group_by), "fieldtype": "Data", "width": 150}]
+	columns = [{"fieldname": "group", "label": _(group_by, context="Resto"), "fieldtype": "Data", "width": 150}]
 	if group_by == "Item":
 		columns += [
 			{"fieldname": "item_name", "label": _("Item Name"), "fieldtype": "Data", "width": 170},

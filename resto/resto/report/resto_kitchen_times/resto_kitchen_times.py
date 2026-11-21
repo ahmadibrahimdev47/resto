@@ -74,7 +74,7 @@ def execute(filters=None):
 	else:
 		data.sort(key=lambda r: -(r["avg_total"] or 0))
 
-	columns = [{"fieldname": "group", "label": _(group_by), "fieldtype": "Data", "width": 150}]
+	columns = [{"fieldname": "group", "label": _(group_by, context="Resto"), "fieldtype": "Data", "width": 150}]
 	if group_by == "Item":
 		columns.append({"fieldname": "item_name", "label": _("Item Name"), "fieldtype": "Data", "width": 170})
 	columns += [

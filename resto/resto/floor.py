@@ -34,7 +34,7 @@ def _get_order(name, statuses=ACTIVE):
 	"""Load and lock an order for change."""
 	order = frappe.get_doc("Resto Order", name, for_update=True)
 	if statuses and order.status not in statuses:
-		frappe.throw(_("Order {0} is {1}").format(order.name, _(order.status)))
+		frappe.throw(_("Order {0} is {1}").format(order.name, _(order.status, context="Resto")))
 	return order
 
 
@@ -615,7 +615,7 @@ def seat_reservation(reservation, table=None):
 	require_role(HOST, WAITER)
 	res = frappe.get_doc("Resto Reservation", reservation, for_update=True)
 	if res.status != "Booked":
-		frappe.throw(_("Reservation {0} is {1}").format(res.name, _(res.status)))
+		frappe.throw(_("Reservation {0} is {1}").format(res.name, _(res.status, context="Resto")))
 	table = table or res.resto_table
 	if not table:
 		frappe.throw(_("Choose a table"))

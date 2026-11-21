@@ -167,9 +167,9 @@ def get_dashboard(from_date=None, to_date=None, company=None):
 				"labels": [_(WEEKDAYS[i - 1]) for i in range(1, 8)],
 				"values": [flt(by_weekday.get(i)) for i in range(1, 8)],
 			},
-			"by_type": {"labels": [_(r[0]) for r in by_type], "values": [flt(r[1]) for r in by_type]},
+			"by_type": {"labels": [_(r[0], context="Resto") for r in by_type], "values": [flt(r[1]) for r in by_type]},
 			"top_items": {"labels": [r[0] for r in top_items], "values": [flt(r[2]) for r in top_items], "qty": [flt(r[1]) for r in top_items]},
-			"by_group": {"labels": [_(r[0]) for r in by_group], "values": [flt(r[1]) for r in by_group]},
+			"by_group": {"labels": [_(r[0], context="Resto") for r in by_group], "values": [flt(r[1]) for r in by_group]},
 			"by_waiter": {
 				"labels": [frappe.utils.get_fullname(r[0]) for r in by_waiter],
 				"values": [flt(r[1]) for r in by_waiter],
