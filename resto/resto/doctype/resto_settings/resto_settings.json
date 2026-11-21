@@ -39,7 +39,14 @@
   "discount_section",
   "waiter_discount_limit",
   "column_break_discount",
-  "cashier_discount_limit"
+  "cashier_discount_limit",
+  "printing_section",
+  "cashier_printer",
+  "print_bill_on_printer",
+  "print_receipt_on_printer",
+  "column_break_printing",
+  "bill_copies",
+  "receipt_copies"
  ],
  "fields": [
   {
@@ -250,12 +257,58 @@
    "fieldtype": "Percent",
    "label": "Cashier Discount Limit %",
    "description": "Bigger discounts need the Resto Manager role."
+  },
+  {
+   "fieldname": "printing_section",
+   "fieldtype": "Section Break",
+   "label": "Printing",
+   "description": "Bills and receipts go straight to the cashier printer (Network Printer Settings). Without a printer they open in the browser print window, one copy."
+  },
+  {
+   "fieldname": "cashier_printer",
+   "fieldtype": "Link",
+   "options": "Network Printer Settings",
+   "label": "Cashier Printer"
+  },
+  {
+   "default": "0",
+   "fieldname": "print_bill_on_printer",
+   "fieldtype": "Check",
+   "label": "Print the Bill on the Cashier Printer",
+   "depends_on": "cashier_printer"
+  },
+  {
+   "default": "0",
+   "fieldname": "print_receipt_on_printer",
+   "fieldtype": "Check",
+   "label": "Print the Receipt after Payment",
+   "depends_on": "cashier_printer"
+  },
+  {
+   "fieldname": "column_break_printing",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "bill_copies",
+   "fieldtype": "Table",
+   "options": "Resto Print Copy",
+   "label": "Bill Copies",
+   "depends_on": "print_bill_on_printer",
+   "description": "One row per copy. No rows: one copy."
+  },
+  {
+   "fieldname": "receipt_copies",
+   "fieldtype": "Table",
+   "options": "Resto Print Copy",
+   "label": "Receipt Copies",
+   "depends_on": "print_receipt_on_printer",
+   "description": "One row per copy. No rows: one copy."
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-21 12:03:06.202000",
+ "modified": "2026-11-21 23:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

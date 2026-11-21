@@ -6,7 +6,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, getdate, now_datetime, nowdate
 
-from resto.resto import billing, kitchen
+from resto.resto import billing, kitchen, printing
 from resto.resto.doctype.resto_modifier_group.resto_modifier_group import groups_for_item
 from resto.resto.doctype.resto_order.resto_order import ACTIVE, default_service_percent
 from resto.resto.utils import (
@@ -570,6 +570,8 @@ def request_bill(order):
 	doc.bill_grand_total = preview["payable"]
 	doc.bill_details = json.dumps(preview, default=str, ensure_ascii=False)
 	_save(doc)
+	# With a cashier printer the bill prints there (all its copies); else the browser prints it.
+	preview["on_printer"] = printing.queue_bill(doc.name)
 	return preview
 
 
@@ -604,6 +606,7 @@ def _settle_result(doc, si):
 		"change_amount": si.change_amount,
 		"status": frappe.db.get_value("Resto Order", doc.name, "status"),
 		"print_format": frappe.db.get_value("POS Profile", doc.pos_profile, "print_format"),
+		"receipt_on_printer": printing.receipt_on_printer(),
 	}
 
 

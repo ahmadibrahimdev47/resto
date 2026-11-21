@@ -418,6 +418,10 @@ def settle(order, payments, lines=None, expected=None, request_id=None):
 	order.flags.resto_billing = True
 	order.save()
 	publish("bill", order=order.name, table=order.resto_table)
+	# Only a newly paid invoice prints; a retried click (request_id) returned earlier.
+	from resto.resto import printing
+
+	printing.queue_receipt(si.name, order.pos_profile)
 	return si
 
 

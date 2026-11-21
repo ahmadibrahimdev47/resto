@@ -15,6 +15,7 @@
   "printer",
   "auto_print",
   "print_format",
+  "copies",
   "routing_section",
   "item_groups",
   "items"
@@ -72,6 +73,14 @@
    "description": "Leave empty to use Resto Kitchen Ticket."
   },
   {
+   "fieldname": "copies",
+   "fieldtype": "Table",
+   "options": "Resto Print Copy",
+   "label": "Ticket Copies",
+   "depends_on": "printer",
+   "description": "One row per copy. No rows: one copy."
+  },
+  {
    "fieldname": "routing_section",
    "fieldtype": "Section Break",
    "label": "What This Station Makes"
@@ -95,7 +104,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-21 13:31:36.000000",
+ "modified": "2026-11-21 23:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Kitchen Station",

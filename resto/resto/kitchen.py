@@ -148,17 +148,21 @@ def _queue_print(ticket):
 
 def print_ticket(ticket):
 	"""Background job: print a ticket on its station's network printer. Never raises."""
+	from resto.resto import printing
+
 	doc = frappe.get_doc("Resto Kitchen Ticket", ticket)
-	printer, print_format = frappe.db.get_value(
-		"Resto Kitchen Station", doc.station, ["printer", "print_format"]
-	) or (None, None)
-	if not printer:
+	if not doc.station or not frappe.db.exists("Resto Kitchen Station", doc.station):
+		return
+	station = frappe.get_doc("Resto Kitchen Station", doc.station)
+	if not station.printer:
 		return
 	try:
-		from frappe.utils.print_format import print_by_server
-
-		print_by_server(
-			"Resto Kitchen Ticket", doc.name, printer, print_format or "Resto Kitchen Ticket", no_letterhead=1
+		printing.print_copies(
+			"Resto Kitchen Ticket",
+			doc.name,
+			station.printer,
+			station.print_format or "Resto Kitchen Ticket",
+			printing.copy_labels(station.copies),
 		)
 		frappe.db.set_value("Resto Kitchen Ticket", doc.name, "printed", 1, update_modified=False)
 	except Exception:
