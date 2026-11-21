@@ -1,0 +1,273 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:item",
+ "creation": "2026-11-21 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "recipe_type",
+  "item",
+  "item_name",
+  "column_break_main",
+  "is_active",
+  "company",
+  "quantity",
+  "uom",
+  "ingredients_section",
+  "items",
+  "sides",
+  "cost_section",
+  "main_cost",
+  "total_cost",
+  "cost_per_unit",
+  "column_break_cost",
+  "selling_rate",
+  "food_cost_percent",
+  "cost_updated_on",
+  "links_section",
+  "bom",
+  "column_break_links",
+  "product_bundle",
+  "preparation_section",
+  "preparation"
+ ],
+ "fields": [
+  {
+   "default": "Prepared Ingredient",
+   "fieldname": "recipe_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Recipe Type",
+   "options": "Prepared Ingredient\nMenu Dish",
+   "reqd": 1
+  },
+  {
+   "description": "Prepared ingredient: a stock item made in the kitchen. Menu dish: a non-stock item sold at the POS.",
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_global_search": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1,
+   "set_only_once": 1,
+   "unique": 1
+  },
+  {
+   "fetch_from": "item.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_global_search": 1,
+   "in_list_view": 1,
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_standard_filter": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.recipe_type=='Prepared Ingredient'",
+   "description": "How much this recipe produces, in the item's stock unit.",
+   "fieldname": "quantity",
+   "fieldtype": "Float",
+   "label": "Yield Quantity",
+   "non_negative": 1,
+   "precision": "6",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "item.stock_uom",
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "label": "UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ingredients_section",
+   "fieldtype": "Section Break",
+   "label": "Ingredients"
+  },
+  {
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Ingredients",
+   "options": "Resto Recipe Item",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Menu Dish'",
+   "description": "Sides and packaging served with this dish (rice, bread, salad, sauces, box). They are not taken when this dish is part of another dish.",
+   "fieldname": "sides",
+   "fieldtype": "Table",
+   "label": "Served With",
+   "options": "Resto Recipe Item"
+  },
+  {
+   "fieldname": "cost_section",
+   "fieldtype": "Section Break",
+   "label": "Cost"
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Menu Dish'",
+   "fieldname": "main_cost",
+   "fieldtype": "Currency",
+   "label": "Main Ingredients Cost",
+   "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_cost",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Recipe Cost",
+   "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Prepared Ingredient'",
+   "fieldname": "cost_per_unit",
+   "fieldtype": "Currency",
+   "label": "Cost per Unit",
+   "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_cost",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Menu Dish'",
+   "fieldname": "selling_rate",
+   "fieldtype": "Currency",
+   "label": "Selling Price",
+   "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Menu Dish'",
+   "fieldname": "food_cost_percent",
+   "fieldtype": "Percent",
+   "in_list_view": 1,
+   "label": "Food Cost %",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cost_updated_on",
+   "fieldtype": "Datetime",
+   "label": "Cost Updated On",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "links_section",
+   "fieldtype": "Section Break",
+   "label": "Linked Documents"
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Prepared Ingredient'",
+   "fieldname": "bom",
+   "fieldtype": "Link",
+   "label": "BOM",
+   "no_copy": 1,
+   "options": "BOM",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_links",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Menu Dish'",
+   "fieldname": "product_bundle",
+   "fieldtype": "Link",
+   "label": "Product Bundle",
+   "no_copy": 1,
+   "options": "Product Bundle",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "preparation_section",
+   "fieldtype": "Section Break",
+   "label": "Preparation"
+  },
+  {
+   "fieldname": "preparation",
+   "fieldtype": "Text Editor",
+   "label": "Preparation Method"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-21 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Recipe",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Manufacturing Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "write": 1
+  },
+  {
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock User"
+  }
+ ],
+ "search_fields": "item_name,recipe_type",
+ "show_title_field_in_link": 1,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "item_name",
+ "track_changes": 1
+}

@@ -1,0 +1,139 @@
+{
+ "actions": [],
+ "creation": "2026-11-21 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "selling_price_list",
+  "column_break_main",
+  "main_warehouse",
+  "kitchen_warehouse",
+  "items_section",
+  "prepared_item_group",
+  "column_break_items",
+  "menu_item_group",
+  "stock_section",
+  "prepared_allow_negative",
+  "waste_account",
+  "column_break_stock",
+  "food_cost_alert_percent"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "description": "The selling price list used by the POS Profile. Menu dish prices are read from it.",
+   "fieldname": "selling_price_list",
+   "fieldtype": "Link",
+   "label": "Selling Price List",
+   "options": "Price List"
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "main_warehouse",
+   "fieldtype": "Link",
+   "label": "Main Store",
+   "options": "Warehouse"
+  },
+  {
+   "description": "The warehouse the POS sells from. Daily prep is posted here.",
+   "fieldname": "kitchen_warehouse",
+   "fieldtype": "Link",
+   "label": "Kitchen Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "items_section",
+   "fieldtype": "Section Break",
+   "label": "Item Groups"
+  },
+  {
+   "fieldname": "prepared_item_group",
+   "fieldtype": "Link",
+   "label": "Prepared Ingredients Group",
+   "options": "Item Group"
+  },
+  {
+   "fieldname": "column_break_items",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "menu_item_group",
+   "fieldtype": "Link",
+   "label": "Menu Group",
+   "options": "Item Group"
+  },
+  {
+   "fieldname": "stock_section",
+   "fieldtype": "Section Break",
+   "label": "Stock and Cost"
+  },
+  {
+   "default": "1",
+   "description": "Lets the POS sell a dish even when its prepared ingredients were not posted yet. Raw materials stay blocked from going negative.",
+   "fieldname": "prepared_allow_negative",
+   "fieldtype": "Check",
+   "label": "Allow Negative Stock for Prepared Ingredients"
+  },
+  {
+   "fieldname": "waste_account",
+   "fieldtype": "Link",
+   "label": "Food Waste Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "column_break_stock",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "35",
+   "description": "Dishes whose recipe cost is above this percentage of the selling price are flagged.",
+   "fieldname": "food_cost_alert_percent",
+   "fieldtype": "Percent",
+   "label": "Food Cost Alert %"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-11-21 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Stock Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Stock User"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
