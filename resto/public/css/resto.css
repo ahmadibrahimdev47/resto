@@ -4,3 +4,29 @@
 @font-face{font-family:'Almarai';src:local('Almarai Bold'),url('/assets/resto/fonts/Almarai-Bold.ttf') format('truetype');font-weight:700;font-display:swap}
 @font-face{font-family:'Almarai';src:local('Almarai ExtraBold'),url('/assets/resto/fonts/Almarai-ExtraBold.ttf') format('truetype');font-weight:800;font-display:swap}
 html[lang="ar"] body{font-family:'Almarai',Tahoma,'Segoe UI','Noto Sans Arabic',Arial,sans-serif !important}
+
+/* Narrow screens (phones and tablets, under 992px): Frappe hides every page/form button
+   (".custom-actions.hidden-md") and lists it only under the "..." menu, so cashiers and kitchen
+   staff on tablets could not find them. Show the buttons as a second, scrollable header row. */
+@media (max-width: 991.98px) {
+	.page-head .page-head-content { flex-wrap: wrap !important; height: auto; min-height: var(--page-head-height); row-gap: 4px; }
+	.page-head .page-head-content > .page-title { flex: 1 1 0; }
+	.page-head .standard-items-section, .page-head .page-actions { display: contents; }
+	.page-head .page-actions > .custom-actions:not(.hide):not(:empty) {
+		display: flex !important; order: 10; flex: 0 0 100%; gap: 8px;
+		overflow-x: auto; scrollbar-width: none; padding: 0 15px 8px;
+	}
+	.page-head .page-actions > .custom-actions::-webkit-scrollbar { display: none; }
+	.page-head .page-actions > .custom-actions > * { flex-shrink: 0; margin: 0 !important; }
+	.page-head .page-actions > .standard-actions { padding-inline-end: 15px; }
+}
+
+/* Phones: the app menu opens by tapping the page title, which nothing hinted at. Add a menu icon. */
+@media (max-width: 767.98px) {
+	body.mobile-nav-title .page-head .es-breadcrumbs li:last-child > button.es-breadcrumbs__item::before {
+		content: ""; display: inline-block; flex-shrink: 0; width: 18px; height: 18px; margin-inline-end: 8px; vertical-align: middle;
+		background: currentColor;
+		-webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 6h16M4 12h16M4 18h16'/%3E%3C/svg%3E") center / contain no-repeat;
+		mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 6h16M4 12h16M4 18h16'/%3E%3C/svg%3E") center / contain no-repeat;
+	}
+}
