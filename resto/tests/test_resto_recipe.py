@@ -57,6 +57,12 @@ class TestRestoRecipe(IntegrationTestCase):
 		make_item("RT-Napkin-Service", is_stock=0, uom="Nos")
 		make_item("RT-Combo", is_stock=0, uom="Nos")
 
+	def setUp(self):
+		# Earlier runs may have committed recipes or bundles; each test starts without them.
+		for doctype in ("Resto Recipe", "Product Bundle"):
+			for name in frappe.get_all(doctype, filters={"name": ["like", "RT-%"]}, pluck="name"):
+				frappe.delete_doc(doctype, name, force=1, ignore_permissions=True)
+
 	def test_prepared_recipe_creates_default_bom_once(self):
 		recipe = make_recipe("RT-Kofta", PREPARED, [("RT-Meat", 0.9), ("RT-Onion", 0.1)])
 		self.assertTrue(recipe.bom)
