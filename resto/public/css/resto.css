@@ -1,0 +1,6 @@
+/* Almarai served from this app, so Arabic screens look right without internet (no Google Fonts). */
+@font-face{font-family:'Almarai';src:local('Almarai Light'),url('/assets/resto/fonts/Almarai-Light.ttf') format('truetype');font-weight:300;font-display:swap}
+@font-face{font-family:'Almarai';src:local('Almarai Regular'),url('/assets/resto/fonts/Almarai-Regular.ttf') format('truetype');font-weight:400;font-display:swap}
+@font-face{font-family:'Almarai';src:local('Almarai Bold'),url('/assets/resto/fonts/Almarai-Bold.ttf') format('truetype');font-weight:700;font-display:swap}
+@font-face{font-family:'Almarai';src:local('Almarai ExtraBold'),url('/assets/resto/fonts/Almarai-ExtraBold.ttf') format('truetype');font-weight:800;font-display:swap}
+html[lang="ar"] body{font-family:'Almarai',Tahoma,'Segoe UI','Noto Sans Arabic',Arial,sans-serif !important}

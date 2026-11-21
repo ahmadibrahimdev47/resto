@@ -10,6 +10,9 @@ app_license = "Proprietary"
 
 required_apps = ["erpnext"]
 
+# Arabic font served locally (restaurants often work offline).
+app_include_css = "/assets/resto/css/resto.css"
+
 add_to_apps_screen = [
 	{
 		"name": app_name,

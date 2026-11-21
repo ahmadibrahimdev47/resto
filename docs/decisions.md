@@ -80,3 +80,4 @@ alone and report later); they can be revisited.
 | D-160 | The floor shows Pay only to cashiers and managers, and voiding a sent item only to managers (the server checks too). | Fewer dead buttons for waiters. |
 | D-161 | Two merges of the same orders lock them in name order. | No deadlock at a busy cashier. |
 | D-162 | The kitchen screen polls on a fixed timer from the start and uses one sound context, unlocked on the first touch. | Browsers block sound until the screen is touched; the beep must not go silent. |
+| D-163 | Resto ships the Almarai font and serves it locally for Arabic users, and carries the few Arabic label fixes the restaurant asked for (Default Warehouse, Clear, Inventory, Connections) in its translation file instead of site records. | A clean reinstall must not lose them; the restaurant machine may be offline. |
