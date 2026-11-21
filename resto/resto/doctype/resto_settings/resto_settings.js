@@ -10,6 +10,14 @@ frappe.ui.form.on("Resto Settings", {
 	},
 
 	refresh(frm) {
+		frm.add_custom_button(__("Setup Check"), () =>
+			frappe.call({
+				method: "resto.resto.setup_check.run",
+				freeze: true,
+				callback: (r) => show_setup_check(r.message),
+			})
+		);
+
 		frm.add_custom_button(__("Import Existing BOMs and Bundles"), () => {
 			frappe.confirm(
 				__("Create a recipe for every default BOM and every Product Bundle that has no recipe yet?"),
@@ -36,6 +44,26 @@ frappe.ui.form.on("Resto Settings", {
 		);
 	},
 });
+
+function show_setup_check(rows) {
+	const icon = { error: "red", warning: "orange", ok: "green" };
+	const label = { error: __("Error"), warning: __("Warning"), ok: __("OK") };
+	const errors = rows.filter((r) => r.level === "error").length;
+	const warnings = rows.filter((r) => r.level === "warning").length;
+	const body = rows
+		.map(
+			(r) => `<tr><td><span class="indicator-pill ${icon[r.level]}">${label[r.level]}</span></td>
+			<td>${frappe.utils.escape_html(r.area)}</td><td>${frappe.utils.escape_html(r.message)}</td></tr>`
+		)
+		.join("");
+	frappe.msgprint({
+		title: __("Setup Check"),
+		indicator: errors ? "red" : warnings ? "orange" : "green",
+		message: `<p>${__("Errors")}: <b>${errors}</b> &nbsp; ${__("Warnings")}: <b>${warnings}</b></p>
+			<table class="table table-bordered table-sm"><tbody>${body}</tbody></table>`,
+		wide: true,
+	});
+}
 
 function show_import_result(res) {
 	const list = (rows) => rows.map((r) => `<li>${frappe.utils.escape_html(r)}</li>`).join("");

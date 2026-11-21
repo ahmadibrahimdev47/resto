@@ -1,0 +1,80 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-11-21 13:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "sales_invoice",
+  "grand_total",
+  "paid_by",
+  "cancelled",
+  "lines",
+  "request_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "options": "Sales Invoice",
+   "read_only": 1,
+   "in_list_view": 1,
+   "label": "Sales Invoice"
+  },
+  {
+   "fieldname": "grand_total",
+   "fieldtype": "Currency",
+   "read_only": 1,
+   "in_list_view": 1,
+   "label": "Grand Total"
+  },
+  {
+   "fieldname": "paid_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "read_only": 1,
+   "in_list_view": 1,
+   "label": "Settled By"
+  },
+  {
+   "fieldname": "cancelled",
+   "fieldtype": "Check",
+   "read_only": 1,
+   "in_list_view": 1,
+   "label": "Cancelled"
+  },
+  {
+   "fieldname": "lines",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "hidden": 1,
+   "read_only": 1,
+   "label": "Billed Lines"
+  },
+  {
+   "fieldname": "request_id",
+   "fieldtype": "Data",
+   "label": "Request ID",
+   "read_only": 1,
+   "hidden": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-21 12:03:06.202000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Order Invoice",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 0,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

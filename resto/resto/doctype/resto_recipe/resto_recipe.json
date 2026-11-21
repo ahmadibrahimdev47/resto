@@ -14,6 +14,7 @@
   "company",
   "quantity",
   "uom",
+  "par_qty",
   "ingredients_section",
   "items",
   "sides",
@@ -99,6 +100,14 @@
    "label": "UOM",
    "options": "UOM",
    "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Prepared Ingredient'",
+   "description": "How much of this should be ready in the kitchen at the start of the day. Used by Daily Prep.",
+   "fieldname": "par_qty",
+   "fieldtype": "Float",
+   "label": "Daily Par Level",
+   "non_negative": 1
   },
   {
    "fieldname": "ingredients_section",
@@ -216,7 +225,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-21 12:10:00.000000",
+ "modified": "2026-11-21 13:04:25.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Recipe",
@@ -260,6 +269,16 @@
    "read": 1,
    "report": 1,
    "role": "Stock User"
+  },
+  {
+   "read": 1,
+   "role": "Resto Manager",
+   "write": 1,
+   "create": 1
+  },
+  {
+   "read": 1,
+   "role": "Resto Kitchen"
   }
  ],
  "search_fields": "item_name,recipe_type",

@@ -4,7 +4,7 @@ from frappe import _
 from resto.resto.doctype.resto_recipe.resto_recipe import MENU, PREPARED
 from resto.resto.doctype.resto_settings.resto_settings import get_settings
 
-MANAGER_ROLES = ("System Manager", "Manufacturing Manager", "Stock Manager")
+MANAGER_ROLES = ("System Manager", "Resto Manager", "Manufacturing Manager", "Stock Manager")
 
 
 @frappe.whitelist(methods=["POST"])
@@ -75,6 +75,11 @@ def update_all_recipe_costs():
 	"""Recalculate stored costs of all active recipes. Costs are computed live and recursively,
 	so the order does not matter."""
 	frappe.only_for(MANAGER_ROLES)
+	return refresh_recipe_costs()
+
+
+def refresh_recipe_costs():
+	"""Daily job and button: store current costs on every active recipe."""
 	names = frappe.get_all("Resto Recipe", filters={"is_active": 1}, pluck="name")
 	for name in names:
 		frappe.get_doc("Resto Recipe", name).update_cost_fields()

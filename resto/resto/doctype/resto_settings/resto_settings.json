@@ -17,7 +17,29 @@
   "prepared_allow_negative",
   "waste_account",
   "column_break_stock",
-  "food_cost_alert_percent"
+  "food_cost_alert_percent",
+  "pos_section",
+  "pos_profile",
+  "require_pos_shift",
+  "column_break_pos",
+  "screen_refresh_seconds",
+  "reservation_hold_minutes",
+  "service_section",
+  "service_charge_percent",
+  "service_charge_account",
+  "vat_on_service",
+  "column_break_service",
+  "service_on_dine_in",
+  "service_on_takeaway",
+  "service_on_delivery",
+  "delivery_section",
+  "delivery_fee_item",
+  "column_break_delivery",
+  "delivery_fee",
+  "discount_section",
+  "waiter_discount_limit",
+  "column_break_discount",
+  "cashier_discount_limit"
  ],
  "fields": [
   {
@@ -100,12 +122,140 @@
    "fieldname": "food_cost_alert_percent",
    "fieldtype": "Percent",
    "label": "Food Cost Alert %"
+  },
+  {
+   "fieldname": "pos_section",
+   "fieldtype": "Section Break",
+   "label": "Restaurant Bills"
+  },
+  {
+   "fieldname": "pos_profile",
+   "fieldtype": "Link",
+   "label": "POS Profile",
+   "options": "POS Profile",
+   "description": "Bills from the floor screen are made with this POS Profile: payment methods, taxes, warehouse and default customer."
+  },
+  {
+   "default": "1",
+   "fieldname": "require_pos_shift",
+   "fieldtype": "Check",
+   "label": "Require an Open POSNext Shift",
+   "description": "The cashier must open a shift in POSNext before settling a bill, so the shift closing counts it."
+  },
+  {
+   "fieldname": "column_break_pos",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "15",
+   "fieldname": "screen_refresh_seconds",
+   "fieldtype": "Int",
+   "label": "Screen Refresh (Seconds)",
+   "description": "Floor and kitchen screens also reload on this interval, in case live updates are off."
+  },
+  {
+   "default": "30",
+   "fieldname": "reservation_hold_minutes",
+   "fieldtype": "Int",
+   "label": "Show Reservation Before (Minutes)",
+   "description": "A table shows as reserved this many minutes before the reservation time."
+  },
+  {
+   "fieldname": "service_section",
+   "fieldtype": "Section Break",
+   "label": "Service Charge"
+  },
+  {
+   "default": "0",
+   "fieldname": "service_charge_percent",
+   "fieldtype": "Percent",
+   "label": "Service Charge %"
+  },
+  {
+   "fieldname": "service_charge_account",
+   "fieldtype": "Link",
+   "label": "Service Charge Account",
+   "options": "Account",
+   "mandatory_depends_on": "eval:doc.service_charge_percent>0"
+  },
+  {
+   "fieldname": "vat_on_service",
+   "fieldtype": "Check",
+   "label": "Charge VAT on Service",
+   "default": "1",
+   "description": "Taxes of the POS Profile template are charged on the items plus the service charge."
+  },
+  {
+   "fieldname": "column_break_service",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "service_on_dine_in",
+   "fieldtype": "Check",
+   "label": "Charge on Dine In"
+  },
+  {
+   "default": "0",
+   "fieldname": "service_on_takeaway",
+   "fieldtype": "Check",
+   "label": "Charge on Takeaway"
+  },
+  {
+   "default": "0",
+   "fieldname": "service_on_delivery",
+   "fieldtype": "Check",
+   "label": "Charge on Delivery"
+  },
+  {
+   "fieldname": "delivery_section",
+   "fieldtype": "Section Break",
+   "label": "Delivery"
+  },
+  {
+   "fieldname": "delivery_fee_item",
+   "fieldtype": "Link",
+   "label": "Delivery Fee Item",
+   "options": "Item",
+   "description": "A non-stock service item. The delivery fee is billed as this item."
+  },
+  {
+   "fieldname": "column_break_delivery",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "delivery_fee",
+   "fieldtype": "Currency",
+   "label": "Default Delivery Fee"
+  },
+  {
+   "fieldname": "discount_section",
+   "fieldtype": "Section Break",
+   "label": "Discount Limits"
+  },
+  {
+   "default": "0",
+   "fieldname": "waiter_discount_limit",
+   "fieldtype": "Percent",
+   "label": "Waiter Discount Limit %"
+  },
+  {
+   "fieldname": "column_break_discount",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "10",
+   "fieldname": "cashier_discount_limit",
+   "fieldtype": "Percent",
+   "label": "Cashier Discount Limit %",
+   "description": "Bigger discounts need the Resto Manager role."
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-21 12:00:00.000000",
+ "modified": "2026-11-21 12:03:06.202000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",
@@ -130,6 +280,28 @@
   {
    "read": 1,
    "role": "Stock User"
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Resto Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Resto Waiter"
+  },
+  {
+   "read": 1,
+   "role": "Resto Cashier"
+  },
+  {
+   "read": 1,
+   "role": "Resto Kitchen"
+  },
+  {
+   "read": 1,
+   "role": "Resto Host"
   }
  ],
  "sort_field": "creation",

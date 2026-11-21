@@ -1,0 +1,113 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:hall_name",
+ "creation": "2026-11-21 13:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "hall_name",
+  "sequence",
+  "column_break_1",
+  "grid_columns",
+  "is_active"
+ ],
+ "fields": [
+  {
+   "fieldname": "hall_name",
+   "fieldtype": "Data",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "label": "Hall Name"
+  },
+  {
+   "fieldname": "sequence",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "default": "0",
+   "description": "Halls are shown in this order on the floor screen.",
+   "label": "Sequence"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "grid_columns",
+   "fieldtype": "Int",
+   "default": "6",
+   "label": "Columns on Floor Screen",
+   "description": "How many tables fit in one row of the floor screen."
+  },
+  {
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "default": "1",
+   "in_list_view": 1,
+   "label": "Active"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-11-21 13:31:36.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Hall",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "export": 1,
+   "report": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Resto Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "export": 1,
+   "report": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Resto Waiter",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Cashier",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Host",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Kitchen",
+   "read": 1,
+   "print": 1
+  }
+ ],
+ "quick_entry": 1,
+ "sort_field": "sequence",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

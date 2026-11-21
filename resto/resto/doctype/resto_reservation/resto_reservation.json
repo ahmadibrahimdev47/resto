@@ -1,0 +1,201 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "naming_series:",
+ "creation": "2026-11-21 13:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "customer_name",
+  "phone",
+  "customer",
+  "column_break_1",
+  "reservation_date",
+  "reservation_time",
+  "guests",
+  "table_section",
+  "hall",
+  "resto_table",
+  "column_break_2",
+  "status",
+  "resto_order",
+  "notes_section",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "options": "RSV-.YY.-.####",
+   "reqd": 1,
+   "no_copy": 1,
+   "print_hide": 1,
+   "default": "RSV-.YY.-.####",
+   "label": "Series"
+  },
+  {
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "reqd": 1,
+   "in_list_view": 1,
+   "bold": 1,
+   "label": "Guest Name"
+  },
+  {
+   "fieldname": "phone",
+   "fieldtype": "Data",
+   "options": "Phone",
+   "reqd": 1,
+   "in_list_view": 1,
+   "label": "Phone"
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "options": "Customer",
+   "label": "Customer"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reservation_date",
+   "fieldtype": "Date",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "default": "Today",
+   "label": "Date"
+  },
+  {
+   "fieldname": "reservation_time",
+   "fieldtype": "Time",
+   "reqd": 1,
+   "in_list_view": 1,
+   "label": "Time"
+  },
+  {
+   "fieldname": "guests",
+   "fieldtype": "Int",
+   "reqd": 1,
+   "in_list_view": 1,
+   "default": "2",
+   "label": "Guests"
+  },
+  {
+   "fieldname": "table_section",
+   "fieldtype": "Section Break",
+   "label": "Table"
+  },
+  {
+   "fieldname": "hall",
+   "fieldtype": "Link",
+   "options": "Resto Hall",
+   "in_standard_filter": 1,
+   "label": "Hall"
+  },
+  {
+   "fieldname": "resto_table",
+   "fieldtype": "Link",
+   "options": "Resto Table",
+   "in_list_view": 1,
+   "label": "Table"
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "options": "Booked\nSeated\nCancelled\nNo Show",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "no_copy": 1,
+   "default": "Booked",
+   "label": "Status"
+  },
+  {
+   "fieldname": "resto_order",
+   "fieldtype": "Link",
+   "options": "Resto Order",
+   "read_only": 1,
+   "no_copy": 1,
+   "label": "Order"
+  },
+  {
+   "fieldname": "notes_section",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-11-21 13:31:36.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Reservation",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "export": 1,
+   "report": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Resto Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "export": 1,
+   "report": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Resto Host",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Waiter",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Cashier",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "print": 1
+  }
+ ],
+ "quick_entry": 0,
+ "sort_field": "reservation_date",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "customer_name",
+ "search_fields": "customer_name,phone,reservation_date"
+}

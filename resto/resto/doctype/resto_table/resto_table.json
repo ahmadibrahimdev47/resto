@@ -1,0 +1,137 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:table_name",
+ "creation": "2026-11-21 13:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "table_name",
+  "hall",
+  "seats",
+  "column_break_1",
+  "shape",
+  "grid_row",
+  "grid_col",
+  "is_active"
+ ],
+ "fields": [
+  {
+   "fieldname": "table_name",
+   "fieldtype": "Data",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "label": "Table Name"
+  },
+  {
+   "fieldname": "hall",
+   "fieldtype": "Link",
+   "options": "Resto Hall",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Hall"
+  },
+  {
+   "fieldname": "seats",
+   "fieldtype": "Int",
+   "default": "4",
+   "in_list_view": 1,
+   "label": "Seats"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "shape",
+   "fieldtype": "Select",
+   "options": "Square\nRound\nRectangle",
+   "default": "Square",
+   "label": "Shape"
+  },
+  {
+   "fieldname": "grid_row",
+   "fieldtype": "Int",
+   "default": "0",
+   "label": "Row",
+   "description": "Position on the floor screen. Leave 0 to place tables automatically."
+  },
+  {
+   "fieldname": "grid_col",
+   "fieldtype": "Int",
+   "default": "0",
+   "label": "Column"
+  },
+  {
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "default": "1",
+   "in_list_view": 1,
+   "label": "Active"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-11-21 13:31:36.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Table",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "export": 1,
+   "report": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Resto Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "export": 1,
+   "report": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Resto Waiter",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Cashier",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Host",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Kitchen",
+   "read": 1,
+   "print": 1
+  }
+ ],
+ "quick_entry": 1,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

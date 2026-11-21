@@ -1,0 +1,35 @@
+{
+ "content": null,
+ "creation": "2026-11-21 13:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "modified": "2026-11-21 13:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "resto-kitchen",
+ "owner": "Administrator",
+ "page_name": "resto-kitchen",
+ "roles": [
+  {
+   "role": "Resto Kitchen"
+  },
+  {
+   "role": "Resto Waiter"
+  },
+  {
+   "role": "Resto Cashier"
+  },
+  {
+   "role": "Resto Manager"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Kitchen Display"
+}

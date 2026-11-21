@@ -80,14 +80,8 @@ def get_stock_rate(item_code):
 
 
 def get_selling_rate(item_code):
+	"""The price the floor charges today, the same lookup as orders use."""
+	from resto.resto.doctype.resto_order.resto_order import get_item_rate
+
 	price_list = get_settings().selling_price_list
-	if not price_list:
-		return 0
-	prices = frappe.get_all(
-		"Item Price",
-		filters={"item_code": item_code, "price_list": price_list, "selling": 1},
-		fields=["price_list_rate"],
-		order_by="valid_from desc, modified desc",
-		limit=1,
-	)
-	return flt(prices[0].price_list_rate) if prices else 0
+	return get_item_rate(item_code, price_list, throw=False) if price_list else 0

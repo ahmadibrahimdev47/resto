@@ -1,0 +1,100 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-11-21 13:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "recipe",
+  "item_code",
+  "uom",
+  "par_qty",
+  "current_qty",
+  "suggested_qty",
+  "qty",
+  "stock_entry"
+ ],
+ "fields": [
+  {
+   "fieldname": "recipe",
+   "fieldtype": "Link",
+   "options": "Resto Recipe",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2,
+   "label": "Recipe"
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "options": "Item",
+   "read_only": 1,
+   "in_list_view": 1,
+   "label": "Item",
+   "fetch_from": "recipe.item"
+  },
+  {
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "options": "UOM",
+   "read_only": 1,
+   "label": "UOM",
+   "fetch_from": "recipe.uom"
+  },
+  {
+   "fieldname": "par_qty",
+   "fieldtype": "Float",
+   "read_only": 1,
+   "in_list_view": 1,
+   "label": "Par Level"
+  },
+  {
+   "fieldname": "current_qty",
+   "fieldtype": "Float",
+   "read_only": 1,
+   "in_list_view": 1,
+   "label": "In Kitchen"
+  },
+  {
+   "fieldname": "suggested_qty",
+   "fieldtype": "Float",
+   "read_only": 1,
+   "in_list_view": 1,
+   "label": "Suggested"
+  },
+  {
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "reqd": 1,
+   "in_list_view": 1,
+   "label": "Qty to Prepare"
+  },
+  {
+   "fieldname": "stock_entry",
+   "fieldtype": "Link",
+   "options": "Stock Entry",
+   "read_only": 1,
+   "no_copy": 1,
+   "in_list_view": 1,
+   "label": "Stock Entry"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-21 13:31:36.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Prep Item",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 0,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}
