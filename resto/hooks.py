@@ -17,16 +17,10 @@ add_to_apps_screen = [
 		"title": app_title,
 		"route": "/desk/resto-recipe",
 		"has_permission": "resto.check_app_permission",
-	},
-	# POSNext ships without an apps-screen entry, so the cashier screen gets one here.
-	{
-		"name": app_name,
-		"logo": "/assets/resto/images/pos-logo.svg",
-		"title": "Point of Sale",
-		"route": "/pos",
-		"has_permission": "resto.check_pos_permission",
-	},
+	}
 ]
+# Frappe v16 shows only the first add_to_apps_screen entry of each app, so the POSNext
+# cashier screen (/pos) cannot get its own icon from here.
 
 # Design rules (see README):
 # - No override_doctype_class, no override_whitelisted_methods, no monkey patches.
