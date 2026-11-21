@@ -102,8 +102,7 @@
   },
   {
    "fieldname": "ingredients_section",
-   "fieldtype": "Section Break",
-   "label": "Ingredients"
+   "fieldtype": "Section Break"
   },
   {
    "fieldname": "items",
@@ -217,7 +216,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-21 12:00:00.000000",
+ "modified": "2026-11-21 12:10:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Recipe",

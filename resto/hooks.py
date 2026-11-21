@@ -10,6 +10,16 @@ app_license = "Proprietary"
 
 required_apps = ["erpnext"]
 
+add_to_apps_screen = [
+	{
+		"name": app_name,
+		"logo": "/assets/resto/images/resto-logo.svg",
+		"title": app_title,
+		"route": "/desk/resto-recipe",
+		"has_permission": "resto.check_app_permission",
+	}
+]
+
 # Design rules (see README):
 # - No override_doctype_class, no override_whitelisted_methods, no monkey patches.
 #   POSNext already overrides Sales Invoice and packed-item code; we must not collide.
