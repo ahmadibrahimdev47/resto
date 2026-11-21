@@ -1,12 +1,13 @@
 """Run on a TEST site only (it creates items, BOMs and bundles):
 
-bench --site test.local run-tests --app resto
+bench --site test.resto run-tests --module resto.tests.test_resto_recipe
 """
 
 import frappe
 from frappe.tests import IntegrationTestCase
 
 from resto.resto.doctype.resto_recipe.resto_recipe import MENU, PREPARED
+from resto.tests import fixtures as fx
 
 
 def make_item(code, is_stock=1, uom="Kg", valuation_rate=0):
@@ -40,9 +41,9 @@ class TestRestoRecipe(IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
-		company = frappe.db.get_value("Company", {}, "name")
+		fx.ensure_setup()
 		settings = frappe.get_doc("Resto Settings")
-		settings.company = company
+		settings.company = fx.COMPANY
 		settings.prepared_allow_negative = 1
 		settings.save()
 
