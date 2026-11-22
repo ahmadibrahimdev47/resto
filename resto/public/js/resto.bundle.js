@@ -149,12 +149,15 @@ resto.food_cost_html = function (value, target) {
 		level.over ? __("The recipe costs more than the selling price") : "",
 		__("Target: {0}%", [format_number(level.target, null, 1)]),
 	].filter(Boolean).join(" · ");
-	return `<span style="display:inline-flex;align-items:center;gap:6px;width:100%" title="${frappe.utils.escape_html(title)}">
-		<span style="flex:1;min-width:40px;height:6px;border-radius:3px;background:var(--gray-200);overflow:hidden">
-			<span style="display:block;height:100%;width:${Math.min(v, 100)}%;background:${css}"></span>
-		</span>
+	// Frappe's own Percent bar (.progress / .progress-bar), in the level color.
+	const width = Math.min(Math.max(v, 0), 100);
+	return `<div style="display:flex;align-items:center;gap:8px;width:100%" title="${frappe.utils.escape_html(title)}">
+		<div class="progress" style="margin:0;flex:1;min-width:50px">
+			<div class="progress-bar" role="progressbar" aria-valuenow="${width}" aria-valuemin="0" aria-valuemax="100"
+				style="width:${width}%;background-color:${css}"></div>
+		</div>
 		<span style="color:${css};font-weight:${level.color === "green" ? 400 : 600};white-space:nowrap">${text}</span>
-	</span>`;
+	</div>`;
 };
 
 // Under the food cost % field of a form (recipe form, Item Recipe tab): the level bar, and on
