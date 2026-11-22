@@ -110,22 +110,23 @@ resto.update_all_recipe_costs = function (after) {
 	});
 };
 
-// Food cost % with levels: green up to the alert level (Resto Settings), orange up to 10 points
-// above it, red beyond; 100% or more is a full red bar marked as over.
+// Food cost % with the levels of Resto Settings (resto/resto/food_cost.py, sent through boot):
+// green, yellow, orange, red; 100% or more is a full red bar marked as over.
 resto.food_cost_level = function (value) {
-	const alert = flt((frappe.boot.resto || {}).food_cost_alert) || 35;
+	const levels = (frappe.boot.resto || {}).food_cost_levels || { green: 50, yellow: 65, orange: 80 };
 	const v = flt(value);
 	if (v >= 100) return { color: "red", over: true };
-	if (v > alert + 10) return { color: "red" };
-	if (v > alert) return { color: "orange" };
-	return { color: "green" };
+	for (const color of ["green", "yellow", "orange"]) {
+		if (v <= flt(levels[color])) return { color };
+	}
+	return { color: "red" };
 };
 
 resto.food_cost_html = function (value) {
 	if (value == null || value === "") return "";
 	const v = flt(value);
 	const level = resto.food_cost_level(v);
-	const css = { green: "var(--green-500)", orange: "var(--orange-500)", red: "var(--red-500)" }[level.color];
+	const css = { green: "var(--green-500)", yellow: "var(--yellow-500)", orange: "var(--orange-500)", red: "var(--red-500)" }[level.color];
 	const text = `${format_number(v, null, 1)}%${level.over ? " ⚠" : ""}`;
 	const title = level.over ? __("The recipe costs more than the selling price") : "";
 	return `<span style="display:inline-flex;align-items:center;gap:6px;width:100%" title="${frappe.utils.escape_html(title)}">
@@ -140,4 +141,21 @@ resto.food_cost_html = function (value) {
 resto.show_food_cost = function (frm, fieldname) {
 	const v = frm.doc[fieldname];
 	frm.set_df_property(fieldname, "description", v ? resto.food_cost_html(v) : "");
+};
+
+// A line at the top of the recipe form when a dish is above green.
+resto.food_cost_headline = function (frm) {
+	const v = flt(frm.doc.food_cost_percent);
+	const level = resto.food_cost_level(v);
+	if (frm.doc.recipe_type !== "Menu Dish" || !frm.doc.selling_rate || level.color === "green") {
+		frm.set_intro("");
+		return;
+	}
+	const n = format_number(v, null, 1);
+	frm.set_intro(
+		level.over
+			? `⚠ ${__("The dish costs more than its selling price ({0}%).", [n])}`
+			: __("Food cost is {0}% of the selling price.", [n]),
+		level.color
+	);
 };

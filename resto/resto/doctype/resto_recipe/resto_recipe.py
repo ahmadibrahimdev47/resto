@@ -23,6 +23,10 @@ class RestoRecipe(Document):
 			# Raises on a cycle (a dish that ends up containing itself).
 			get_flat_components(self)
 		self.calculate_cost()
+		if self.recipe_type == MENU and self.selling_rate:
+			from resto.resto.food_cost import warn
+
+			warn(self.food_cost_percent)
 
 	def on_update(self):
 		self.flag_item()

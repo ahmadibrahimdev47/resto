@@ -18,6 +18,11 @@
   "waste_account",
   "column_break_stock",
   "food_cost_alert_percent",
+  "food_cost_levels_section",
+  "food_cost_green_upto",
+  "food_cost_yellow_upto",
+  "column_break_food_cost_levels",
+  "food_cost_orange_upto",
   "pos_section",
   "pos_profile",
   "require_pos_shift",
@@ -125,10 +130,39 @@
   },
   {
    "default": "35",
-   "description": "Dishes whose recipe cost is above this percentage of the selling price are flagged.",
+   "description": "Target food cost % of the restaurant as a whole (cost of food sold / sales), used in Resto Analytics and the Food Cost report.",
    "fieldname": "food_cost_alert_percent",
    "fieldtype": "Percent",
    "label": "Food Cost Alert %"
+  },
+  {
+   "collapsible": 1,
+   "description": "Colors of a dish's food cost % (recipe cost / selling price) in the recipe list, the recipe and item forms and Recipe Status. Above Orange it is red; 100% or more is marked with ⚠. Saving a dish above Green shows a warning; the save is not stopped.",
+   "fieldname": "food_cost_levels_section",
+   "fieldtype": "Section Break",
+   "label": "Dish Food Cost Levels"
+  },
+  {
+   "default": "50",
+   "fieldname": "food_cost_green_upto",
+   "fieldtype": "Percent",
+   "label": "Green up to %"
+  },
+  {
+   "default": "65",
+   "fieldname": "food_cost_yellow_upto",
+   "fieldtype": "Percent",
+   "label": "Yellow up to %"
+  },
+  {
+   "fieldname": "column_break_food_cost_levels",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "80",
+   "fieldname": "food_cost_orange_upto",
+   "fieldtype": "Percent",
+   "label": "Orange up to %"
   },
   {
    "fieldname": "pos_section",
@@ -308,7 +342,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-21 23:00:00.000000",
+ "modified": "2026-11-22 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

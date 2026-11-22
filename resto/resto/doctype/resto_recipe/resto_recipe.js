@@ -37,6 +37,7 @@ function apply_cost(frm, cost) {
 	frm.refresh_field("sides");
 	frm.refresh_fields(COST_FIELDS);
 	resto.show_food_cost(frm, "food_cost_percent");
+	resto.food_cost_headline(frm);
 }
 
 frappe.ui.form.on("Resto Recipe", {
@@ -59,6 +60,7 @@ frappe.ui.form.on("Resto Recipe", {
 	refresh(frm) {
 		frm.trigger("set_labels");
 		resto.show_food_cost(frm, "food_cost_percent");
+		resto.food_cost_headline(frm);
 		frm.add_custom_button(__("Recipe Status"), () => resto.recipe_status());
 
 		if (!frm.is_new()) {

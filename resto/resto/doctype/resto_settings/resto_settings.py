@@ -1,6 +1,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import flt
 
 
 class RestoSettings(Document):
@@ -26,6 +27,18 @@ class RestoSettings(Document):
 				)
 			if is_group:
 				frappe.throw(_("Account {0} is a group account").format(frappe.bold(self.waste_account)))
+
+		self.validate_food_cost_levels()
+
+	def validate_food_cost_levels(self):
+		from resto.resto.food_cost import DEFAULTS, FIELDS
+
+		for key, field in FIELDS.items():
+			if not flt(self.get(field)):
+				self.set(field, DEFAULTS[key])
+		green, yellow, orange = (flt(self.get(FIELDS[k])) for k in ("green", "yellow", "orange"))
+		if not green < yellow < orange < 100:
+			frappe.throw(_("Food cost levels must go up: Green, then Yellow, then Orange, all below 100%."))
 
 
 def get_settings():
