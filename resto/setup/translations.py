@@ -75,7 +75,7 @@ def sync():
 			wanted[k] = (source, context, text)
 
 	written = frappe.parse_json(frappe.db.get_global(WRITTEN) or "{}") or {}
-	changed = False
+	changed, removed = False, 0
 	for k, (source, context, text) in wanted.items():
 		row = find(source, context)
 		ours = written.get(k)
@@ -100,9 +100,13 @@ def sync():
 		row = find(source, context)
 		if row and row.translated_text == text:
 			frappe.delete_doc("Translation", row.name, ignore_permissions=True, force=True)
+			removed += 1
 		changed = True
 
 	frappe.db.set_global(WRITTEN, frappe.as_json(written))
+	frappe.db.commit()
+	# Shown in the migrate output, so a deploy can see what happened.
+	print(f"Resto translation overrides: {len(written)} kept ({', '.join(sorted(written)) or 'none'}), {removed} removed")
 	if changed:
 		from frappe.translate import clear_cache
 
