@@ -1,9 +1,9 @@
 frappe.listview_settings["Resto Recipe"] = {
-	add_fields: ["recipe_type"],
+	add_fields: ["recipe_type", "target_food_cost_percent"],
 	formatters: {
 		// Level colors and the number next to the bar (see resto.food_cost_html).
 		food_cost_percent(value, df, doc) {
-			return doc.recipe_type === "Menu Dish" ? resto.food_cost_html(value) : "";
+			return doc.recipe_type === "Menu Dish" ? resto.food_cost_html(value, doc.target_food_cost_percent) : "";
 		},
 	},
 	onload(listview) {

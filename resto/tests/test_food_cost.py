@@ -49,9 +49,9 @@ class TestFoodCost(IntegrationTestCase):
 		settings.validate_food_cost_levels()  # empty steps take the defaults
 		self.assertEqual((settings.food_cost_yellow_step, settings.food_cost_orange_step), (15, 30))
 
-	def warnings(self, percent):
+	def warnings(self, percent, target=None):
 		frappe.clear_messages()
-		food_cost.warn(percent)
+		food_cost.warn(percent, target)
 		return [frappe.parse_json(m) for m in frappe.local.message_log]
 
 	def test_warning_only_above_target_and_never_blocks(self):
@@ -61,3 +61,12 @@ class TestFoodCost(IntegrationTestCase):
 		self.assertEqual(len(over), 1)
 		self.assertIn("234", over[0]["message"])
 		self.assertEqual(over[0]["indicator"], "red")
+
+	def test_recipe_target_overrides_settings(self):
+		self.assertEqual(food_cost.get_levels(30), {"green": 30, "yellow": 45, "orange": 60})
+		self.assertEqual(food_cost.get_level(40, food_cost.get_levels(30)), "yellow")
+		self.assertEqual(food_cost.get_levels(0), {"green": 50, "yellow": 65, "orange": 80})  # empty: settings
+		self.assertEqual(self.warnings(45), [])  # settings target 50: green
+		own = self.warnings(45, target=30)
+		self.assertEqual(len(own), 1)
+		self.assertIn("30", own[0]["message"])

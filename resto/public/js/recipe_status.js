@@ -49,13 +49,21 @@ resto.recipe_status = function () {
 			.map((r, i) => {
 				const [color, label] = STATUS[r.status];
 				const cost = r.cost == null ? "" : format_currency(r.cost) + (r.recipe_type === "Prepared Ingredient" ? ` / ${esc(__(r.uom))}` : "");
-				const pct = r.food_cost_percent == null ? "" : resto.food_cost_html(r.food_cost_percent);
+				const pct = r.food_cost_percent == null ? "" : resto.food_cost_html(r.food_cost_percent, r.target_food_cost_percent);
+				// The dish's own target in bold; the Resto Settings one muted.
+				const target =
+					r.food_cost_percent == null
+						? ""
+						: flt(r.target_food_cost_percent)
+						? `<b>${format_number(r.target_food_cost_percent, null, 1)}%</b>`
+						: `<span class="text-muted">${format_number(resto.food_cost_target(), null, 1)}%</span>`;
 				return `<tr class="resto-rs-row" data-i="${i}" style="cursor:pointer">
 					<td><span class="indicator-pill ${color}">${label}</span></td>
 					<td><b>${esc(r.item_name)}</b><br><small class="text-muted">${esc(r.item)} · ${esc(r.item_group)}</small></td>
 					<td>${esc(__(r.recipe_type || r.expected_type))}</td>
 					<td class="text-end">${cost}</td>
 					<td class="text-end">${pct}</td>
+					<td class="text-end">${target}</td>
 				</tr>`;
 			})
 			.join("");
@@ -63,7 +71,8 @@ resto.recipe_status = function () {
 			head +
 				`<div style="max-height:60vh;overflow:auto"><table class="table table-hover table-sm">
 				<thead><tr><th>${__("Status")}</th><th>${__("Item")}</th><th>${__("Recipe Type")}</th>
-				<th class="text-end">${__("Cost")}</th><th class="text-end">${__("Food Cost %")}</th></tr></thead>
+				<th class="text-end">${__("Cost")}</th><th class="text-end">${__("Food Cost %")}</th>
+				<th class="text-end">${__("Target Food Cost %")}</th></tr></thead>
 				<tbody>${body}</tbody></table></div>`
 		);
 		d.fields_dict.list.$wrapper.find(".resto-rs-row").on("click", (e) => {
@@ -110,26 +119,36 @@ resto.update_all_recipe_costs = function (after) {
 	});
 };
 
-// Food cost % with the levels of Resto Settings: the target, then target + the yellow and orange
-// steps (resto/resto/food_cost.py, sent through boot):
-// green, yellow, orange, red; 100% or more is a full red bar marked as over.
-resto.food_cost_level = function (value) {
-	const levels = (frappe.boot.resto || {}).food_cost_levels || { green: 35, yellow: 50, orange: 65 };
+
+// Food cost % levels (resto/resto/food_cost.py): green up to the target, yellow and orange up to
+// the target plus the Resto Settings steps, red above; 100% or more is a full red bar marked as
+// over. The target is the recipe's own, or the Resto Settings one (sent through boot).
+resto.food_cost_settings = () => (frappe.boot.resto || {}).food_cost || { target: 35, yellow: 15, orange: 30 };
+
+resto.food_cost_target = (target) => flt(target) || flt(resto.food_cost_settings().target);
+
+resto.food_cost_level = function (value, target) {
+	const s = resto.food_cost_settings();
+	const t = resto.food_cost_target(target);
+	const levels = { green: t, yellow: t + flt(s.yellow), orange: t + flt(s.orange) };
 	const v = flt(value);
-	if (v >= 100) return { color: "red", over: true };
+	if (v >= 100) return { color: "red", over: true, target: t };
 	for (const color of ["green", "yellow", "orange"]) {
-		if (v <= flt(levels[color])) return { color };
+		if (v <= levels[color]) return { color, target: t };
 	}
-	return { color: "red" };
+	return { color: "red", target: t };
 };
 
-resto.food_cost_html = function (value) {
+resto.food_cost_html = function (value, target) {
 	if (value == null || value === "") return "";
 	const v = flt(value);
-	const level = resto.food_cost_level(v);
+	const level = resto.food_cost_level(v, target);
 	const css = { green: "var(--green-500)", yellow: "var(--yellow-500)", orange: "var(--orange-500)", red: "var(--red-500)" }[level.color];
 	const text = `${format_number(v, null, 1)}%${level.over ? " ⚠" : ""}`;
-	const title = level.over ? __("The recipe costs more than the selling price") : "";
+	const title = [
+		level.over ? __("The recipe costs more than the selling price") : "",
+		__("Target: {0}%", [format_number(level.target, null, 1)]),
+	].filter(Boolean).join(" · ");
 	return `<span style="display:inline-flex;align-items:center;gap:6px;width:100%" title="${frappe.utils.escape_html(title)}">
 		<span style="flex:1;min-width:40px;height:6px;border-radius:3px;background:var(--gray-200);overflow:hidden">
 			<span style="display:block;height:100%;width:${Math.min(v, 100)}%;background:${css}"></span>
@@ -138,16 +157,25 @@ resto.food_cost_html = function (value) {
 	</span>`;
 };
 
-// Show the level bar under a food cost % field of a form (recipe form, Item Recipe tab).
-resto.show_food_cost = function (frm, fieldname) {
+// Under the food cost % field of a form (recipe form, Item Recipe tab): the level bar, and on
+// the target field which target is in use.
+resto.show_food_cost = function (frm, fieldname, target_field) {
 	const v = frm.doc[fieldname];
-	frm.set_df_property(fieldname, "description", v ? resto.food_cost_html(v) : "");
+	const target = frm.doc[target_field];
+	frm.set_df_property(fieldname, "description", v ? resto.food_cost_html(v, target) : "");
+	frm.set_df_property(
+		target_field,
+		"description",
+		flt(target)
+			? __("This dish's own target. Empty: the target in Resto Settings is used ({0}%).", [format_number(resto.food_cost_settings().target, null, 1)])
+			: __("Empty: the target in Resto Settings is used ({0}%).", [format_number(resto.food_cost_settings().target, null, 1)])
+	);
 };
 
-// A line at the top of the recipe form when a dish is above green.
+// A line at the top of the recipe form when a dish is above its target.
 resto.food_cost_headline = function (frm) {
 	const v = flt(frm.doc.food_cost_percent);
-	const level = resto.food_cost_level(v);
+	const level = resto.food_cost_level(v, frm.doc.target_food_cost_percent);
 	if (frm.doc.recipe_type !== "Menu Dish" || !frm.doc.selling_rate || level.color === "green") {
 		frm.set_intro("");
 		return;
@@ -156,7 +184,7 @@ resto.food_cost_headline = function (frm) {
 	frm.set_intro(
 		level.over
 			? `⚠ ${__("The dish costs more than its selling price ({0}%).", [n])}`
-			: __("Food cost is {0}% of the selling price.", [n]),
+			: __("Food cost is {0}% of the selling price, above the {1}% target.", [n, format_number(level.target, null, 1)]),
 		level.color
 	);
 };

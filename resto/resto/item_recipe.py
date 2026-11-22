@@ -25,6 +25,7 @@ TYPE, QTY, PAR, ROWS, SIDES, PREP, STAMP, CHANGED = (
 	P + "modified",
 	P + "changed",
 )
+TARGET = P + "target_food_cost_percent"
 COSTS = {
 	P + "total_cost": "total_cost",
 	P + "cost_per_unit": "cost_per_unit",
@@ -73,6 +74,8 @@ def _fields():
 	add(P + "cost_column", "Column Break")
 	add(P + "selling_rate", "Currency", label="Selling Price", options=CURRENCY, read_only=1, depends_on=IS_MENU)
 	add(P + "food_cost_percent", "Percent", label="Food Cost %", read_only=1, depends_on=IS_MENU)
+	add(TARGET, "Percent", label="Target Food Cost %", depends_on=IS_MENU,
+		description="This dish's own target. Empty: the target in Resto Settings is used.")
 	add(P + "preparation_section", "Section Break", label="Preparation", depends_on=HAS_TYPE)
 	add(PREP, "Text Editor", label="Preparation Method")
 	add(STAMP, "Data", label="Recipe Modified", hidden=1, read_only=1, no_copy=1)
@@ -145,6 +148,7 @@ def on_update(doc, method=None):
 			"quantity": data["quantity"],
 			"par_qty": data["par_qty"],
 			"preparation": data["preparation"],
+			"target_food_cost_percent": data["target_food_cost_percent"] if data["recipe_type"] == MENU else 0,
 		}
 	)
 	recipe.set("items", data["items"])
@@ -178,6 +182,7 @@ def _signature(recipe_or_data):
 		flt(g("quantity"), 6) if g("recipe_type") == PREPARED else 1,
 		flt(g("par_qty"), 6),
 		(g("preparation") or "").strip(),
+		flt(g("target_food_cost_percent"), 6) if g("recipe_type") == MENU else 0,
 		tuple((r["item_code"], flt(r["qty"], 6), r["uom"] or "", r["note"] or "") for r in _rows(g("items"))),
 		tuple((r["item_code"], flt(r["qty"], 6), r["uom"] or "", r["note"] or "") for r in _rows(g("sides"))),
 	)
@@ -193,6 +198,7 @@ def _take(doc):
 			"quantity": flt(doc.get(QTY)) or 1,
 			"par_qty": flt(doc.get(PAR)),
 			"preparation": doc.get(PREP),
+			"target_food_cost_percent": flt(doc.get(TARGET)),
 			"items": _rows(doc.get(ROWS)),
 			"sides": _rows(doc.get(SIDES)),
 			"stamp": doc.get(STAMP),
@@ -200,7 +206,7 @@ def _take(doc):
 		data["signature"] = _signature(data)
 	for field in (TYPE, PREP, STAMP):
 		doc.set(field, None)
-	for field in (QTY, PAR, CHANGED, *COSTS):
+	for field in (QTY, PAR, CHANGED, TARGET, *COSTS):
 		doc.set(field, 0)
 	doc.set(ROWS, [])
 	doc.set(SIDES, [])
@@ -215,6 +221,7 @@ def _fill(doc, recipe):
 	doc.set(QTY, recipe.quantity)
 	doc.set(PAR, recipe.par_qty)
 	doc.set(PREP, recipe.preparation)
+	doc.set(TARGET, recipe.target_food_cost_percent)
 	doc.set(STAMP, str(recipe.modified))
 	for field, source in COSTS.items():
 		doc.set(field, recipe.get(source))

@@ -44,14 +44,14 @@
 					for (const [src, field] of Object.entries(COSTS)) frm.doc[field] = r.message[src];
 					TABLES.forEach((t) => frm.refresh_field(t));
 					frm.refresh_fields(Object.values(COSTS));
-					resto.show_food_cost(frm, P + "food_cost_percent");
+					resto.show_food_cost(frm, P + "food_cost_percent", P + "target_food_cost_percent");
 				},
 			});
 		}, 400);
 	}
 
 	function render(frm) {
-		resto.show_food_cost(frm, P + "food_cost_percent");
+		resto.show_food_cost(frm, P + "food_cost_percent", P + "target_food_cost_percent");
 		const note = frm.get_field(P + "note");
 		const link = frm.get_field(P + "link");
 		if (note) {
@@ -101,6 +101,10 @@
 			preview(frm);
 		},
 		[P + "par_qty"]: mark_changed,
+		[P + "target_food_cost_percent"](frm) {
+			mark_changed(frm);
+			resto.show_food_cost(frm, P + "food_cost_percent", P + "target_food_cost_percent");
+		},
 		[P + "preparation"](frm) {
 			// The editor fires on load too; only a real edit counts.
 			if (frm._resto_loaded) mark_changed(frm);

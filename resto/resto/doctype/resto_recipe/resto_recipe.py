@@ -26,7 +26,7 @@ class RestoRecipe(Document):
 		if self.recipe_type == MENU and self.selling_rate:
 			from resto.resto.food_cost import warn
 
-			warn(self.food_cost_percent)
+			warn(self.food_cost_percent, self.target_food_cost_percent)
 
 	def on_update(self):
 		self.flag_item()
@@ -445,7 +445,7 @@ def recipe_status():
 		for r in frappe.get_all(
 			"Resto Recipe",
 			filters={"item": ["in", [i.name for i in items] or [""]]},
-			fields=["name", "item", "is_active", "recipe_type", "total_cost", "cost_per_unit", "food_cost_percent"],
+			fields=["name", "item", "is_active", "recipe_type", "total_cost", "cost_per_unit", "food_cost_percent", "target_food_cost_percent"],
 		)
 	}
 	rows = []
@@ -463,6 +463,7 @@ def recipe_status():
 				"recipe_type": r.recipe_type if r else None,
 				"cost": (r.cost_per_unit if r.recipe_type == PREPARED else r.total_cost) if r else None,
 				"food_cost_percent": r.food_cost_percent if r and r.recipe_type == MENU else None,
+				"target_food_cost_percent": r.target_food_cost_percent if r and r.recipe_type == MENU else None,
 			}
 		)
 	return {"rows": rows, "missing": sum(1 for r in rows if r["status"] == "Missing")}

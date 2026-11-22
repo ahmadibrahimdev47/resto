@@ -25,6 +25,7 @@
   "column_break_cost",
   "selling_rate",
   "food_cost_percent",
+  "target_food_cost_percent",
   "cost_updated_on",
   "links_section",
   "bom",
@@ -178,6 +179,13 @@
    "read_only": 1
   },
   {
+   "depends_on": "eval:doc.recipe_type=='Menu Dish'",
+   "description": "This dish's own target. Empty: the target in Resto Settings is used.",
+   "fieldname": "target_food_cost_percent",
+   "fieldtype": "Percent",
+   "label": "Target Food Cost %"
+  },
+  {
    "fieldname": "cost_updated_on",
    "fieldtype": "Datetime",
    "label": "Cost Updated On",
@@ -225,7 +233,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-21 13:04:25.000000",
+ "modified": "2026-11-22 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Recipe",

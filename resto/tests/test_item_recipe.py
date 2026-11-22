@@ -118,3 +118,24 @@ class TestItemRecipe(IntegrationTestCase):
 		bare_name = bare.name if hasattr(bare, "name") else bare
 		self.assertEqual(rows[bare_name]["status"], "Missing")
 		self.assertEqual(rows[bare_name]["expected_type"], "Menu Dish")
+
+	def test_dish_target_goes_through_the_tab(self):
+		from resto.resto.doctype.resto_recipe.resto_recipe import MENU
+
+		self.new_item(**{
+			"stock_uom": "Nos",
+			"is_stock_item": 0,
+			P + "type": MENU,
+			P + "quantity": 1,
+			P + "items": [{"item_code": "RTI-Meat", "qty": 0.25}],
+			P + "target_food_cost_percent": 40,
+		})
+		self.assertEqual(frappe.db.get_value("Resto Recipe", self.code, "target_food_cost_percent"), 40)
+		item = frappe.get_doc("Item", self.code)
+		item.run_method("onload")
+		self.assertEqual(item.get(P + "target_food_cost_percent"), 40)
+		item.set(P + "target_food_cost_percent", 55)
+		item.set(P + "changed", 1)
+		item.save()
+		self.assertEqual(frappe.db.get_value("Resto Recipe", self.code, "target_food_cost_percent"), 55)
+		self.assertFalse(frappe.db.get_value("Item", self.code, P + "target_food_cost_percent"))

@@ -764,3 +764,7 @@
 "Orange up to the target plus this many points; red above that.","برتقالي لحد المستهدف + عدد النقاط دي، وبعدها أحمر.",""
 "Food cost is {0}% of the selling price, above the {1}% target.","تكلفة الطبق {0}% من سعر البيع، أعلى من المستهدف {1}%.",""
 "Orange points above target must be more than Yellow points above target.","نقاط البرتقالي فوق المستهدف لازم تكون أكبر من نقاط الأصفر.",""
+"This dish's own target. Empty: the target in Resto Settings is used.","المستهدف الخاص بالطبق ده. لو فاضي يُستخدم المستهدف اللي في إعدادات ريستو.",""
+"This dish's own target. Empty: the target in Resto Settings is used ({0}%).","المستهدف الخاص بالطبق ده. لو فاضي يُستخدم المستهدف اللي في إعدادات ريستو ({0}%).",""
+"Empty: the target in Resto Settings is used ({0}%).","فاضي: يُستخدم المستهدف اللي في إعدادات ريستو ({0}%).",""
+"Target: {0}%","المستهدف: {0}%",""

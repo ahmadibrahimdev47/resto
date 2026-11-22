@@ -36,7 +36,7 @@ function apply_cost(frm, cost) {
 	frm.refresh_field("items");
 	frm.refresh_field("sides");
 	frm.refresh_fields(COST_FIELDS);
-	resto.show_food_cost(frm, "food_cost_percent");
+	resto.show_food_cost(frm, "food_cost_percent", "target_food_cost_percent");
 	resto.food_cost_headline(frm);
 }
 
@@ -59,7 +59,7 @@ frappe.ui.form.on("Resto Recipe", {
 
 	refresh(frm) {
 		frm.trigger("set_labels");
-		resto.show_food_cost(frm, "food_cost_percent");
+		resto.show_food_cost(frm, "food_cost_percent", "target_food_cost_percent");
 		resto.food_cost_headline(frm);
 		frm.add_custom_button(__("Recipe Status"), () => resto.recipe_status());
 
@@ -68,6 +68,12 @@ frappe.ui.form.on("Resto Recipe", {
 				frm.call("update_cost").then(() => frm.reload_doc())
 			);
 		}
+	},
+
+	target_food_cost_percent(frm) {
+		// Only the colors depend on the target: no server call.
+		resto.show_food_cost(frm, "food_cost_percent", "target_food_cost_percent");
+		resto.food_cost_headline(frm);
 	},
 
 	recipe_type(frm) {
