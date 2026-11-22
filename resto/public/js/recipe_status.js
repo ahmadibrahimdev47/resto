@@ -74,15 +74,38 @@ resto.recipe_status = function () {
 		});
 	}
 
-	d.fields_dict.list.$wrapper.html(`<p class="text-muted">${__("Loading...")}</p>`);
+	function load(first) {
+		d.fields_dict.list.$wrapper.html(`<p class="text-muted">${__("Loading...")}</p>`);
+		frappe.call({
+			method: "resto.resto.doctype.resto_recipe.resto_recipe.recipe_status",
+			callback: (r) => {
+				data = r.message || data;
+				// Missing first: that is the work still to do.
+				if (first && data.missing) d.set_value("show", "Missing");
+				else draw();
+			},
+		});
+	}
+
+	if (resto.can_update_costs()) {
+		d.set_primary_action(__("Update All Recipe Costs"), () => resto.update_all_recipe_costs(() => load(false)));
+	}
 	d.show();
+	load(true);
+};
+
+resto.can_update_costs = () =>
+	frappe.user.has_role(["System Manager", "Resto Manager", "Manufacturing Manager", "Stock Manager"]);
+
+// Same method as the Resto Settings button and the nightly job.
+resto.update_all_recipe_costs = function (after) {
 	frappe.call({
-		method: "resto.resto.doctype.resto_recipe.resto_recipe.recipe_status",
+		method: "resto.api.update_all_recipe_costs",
+		freeze: true,
+		freeze_message: __("Updating recipe costs..."),
 		callback: (r) => {
-			data = r.message || data;
-			// Missing first: that is the work still to do.
-			if (data.missing) d.set_value("show", "Missing");
-			else draw();
+			frappe.show_alert({ message: __("{0} recipes updated", [r.message]), indicator: "green" });
+			if (after) after();
 		},
 	});
 };
