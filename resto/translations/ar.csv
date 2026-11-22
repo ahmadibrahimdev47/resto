@@ -749,3 +749,5 @@
 "Missing","ناقصة","Resto"
 "{0} items need a recipe; {1} have none yet.","{0} صنف محتاج وصفة، منهم {1} لسه ملهمش وصفة.",""
 "Nothing to show. Tick Needs a Recipe on items to list them here.","مفيش حاجة تظهر. علّم «له وصفة» على الأصناف عشان تظهر هنا.",""
+"Cost","التكلفة","Item"
+"Selling Price","سعر البيع","Item"
