@@ -25,6 +25,7 @@ class RestoRecipe(Document):
 		self.calculate_cost()
 
 	def on_update(self):
+		self.flag_item()
 		if self.flags.skip_sync or not self.is_active:
 			return
 
@@ -312,6 +313,13 @@ class RestoRecipe(Document):
 
 	# ------------------------------------------------------------------ helpers
 
+	def flag_item(self):
+		"""An item with a recipe is an item that needs one (Recipe Status lists it)."""
+		if frappe.get_meta("Item").has_field("resto_needs_recipe") and not frappe.db.get_value(
+			"Item", self.item, "resto_needs_recipe"
+		):
+			frappe.db.set_value("Item", self.item, "resto_needs_recipe", 1, update_modified=False)
+
 	def all_rows(self):
 		return list(self.get("items") or []) + list(self.get("sides") or [])
 
@@ -414,3 +422,43 @@ def bom_matches(bom_name, item, quantity, components):
 		order_by="idx asc",
 	)
 	return aggregate([frappe._dict(r) for r in rows]) == components
+
+
+@frappe.whitelist()
+def recipe_status():
+	"""Items ticked "Needs a Recipe", each with its recipe state (Active / Inactive / Missing)."""
+	frappe.has_permission("Resto Recipe", "read", throw=True)
+	if not frappe.get_meta("Item").has_field("resto_needs_recipe"):
+		return {"rows": [], "missing": 0}
+	items = frappe.get_all(
+		"Item",
+		filters={"resto_needs_recipe": 1, "disabled": 0, "has_variants": 0},
+		fields=["name", "item_name", "item_group", "is_stock_item", "stock_uom"],
+		order_by="item_group, item_name",
+	)
+	recipes = {
+		r.item: r
+		for r in frappe.get_all(
+			"Resto Recipe",
+			filters={"item": ["in", [i.name for i in items] or [""]]},
+			fields=["name", "item", "is_active", "recipe_type", "total_cost", "cost_per_unit", "food_cost_percent"],
+		)
+	}
+	rows = []
+	for i in items:
+		r = recipes.get(i.name)
+		rows.append(
+			{
+				"item": i.name,
+				"item_name": i.item_name,
+				"item_group": i.item_group,
+				"uom": i.stock_uom,
+				"expected_type": PREPARED if i.is_stock_item else MENU,
+				"recipe": r.name if r else None,
+				"status": "Missing" if not r else ("Active" if r.is_active else "Inactive"),
+				"recipe_type": r.recipe_type if r else None,
+				"cost": (r.cost_per_unit if r.recipe_type == PREPARED else r.total_cost) if r else None,
+				"food_cost_percent": r.food_cost_percent if r and r.recipe_type == MENU else None,
+			}
+		)
+	return {"rows": rows, "missing": sum(1 for r in rows if r["status"] == "Missing")}

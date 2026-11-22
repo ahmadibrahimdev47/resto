@@ -57,6 +57,7 @@ frappe.ui.form.on("Resto Recipe", {
 
 	refresh(frm) {
 		frm.trigger("set_labels");
+		frm.add_custom_button(__("Recipe Status"), () => resto.recipe_status());
 
 		if (!frm.is_new()) {
 			frm.add_custom_button(__("Update Cost"), () =>

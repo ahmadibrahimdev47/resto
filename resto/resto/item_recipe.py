@@ -36,6 +36,7 @@ IS_PREP = f"eval:!doc.has_variants && doc.{TYPE}=='{PREPARED}'"
 IS_MENU = f"eval:!doc.has_variants && doc.{TYPE}=='{MENU}'"
 HAS_TYPE = f"eval:!doc.has_variants && doc.{TYPE}"
 CURRENCY = "Company:company:default_currency"
+NEEDS = "resto_needs_recipe"
 
 
 def _fields():
@@ -47,6 +48,9 @@ def _fields():
 		f.append({"fieldname": fieldname, "fieldtype": fieldtype, **kw})
 
 	add(P + "tab", "Tab Break", label="Recipe")
+	# Stored on Item (not part of the recipe view): which items should have a recipe.
+	add(NEEDS, "Check", label="Needs a Recipe", in_standard_filter=1,
+		description="Ticked items are listed in Recipe Status on the recipe screen. Saving a recipe ticks it.")
 	add(P + "note", "HTML", label="Recipe Note")
 	add(TYPE, "Select", label="Recipe Type", options=f"\n{PREPARED}\n{MENU}", depends_on="eval:!doc.has_variants",
 		description="Prepared ingredient: a stock item made in the kitchen. Menu dish: a non-stock item sold at the POS.")
@@ -100,6 +104,7 @@ def validate(doc, method=None):
 	if not (frappe.has_permission("Resto Recipe", "write") or frappe.has_permission("Resto Recipe", "create")):
 		frappe.throw(_("You are not allowed to change recipes"), frappe.PermissionError)
 	doc.flags.resto_recipe = data
+	doc.set(NEEDS, 1)
 
 
 def on_update(doc, method=None):

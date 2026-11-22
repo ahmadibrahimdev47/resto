@@ -12,6 +12,8 @@ required_apps = ["erpnext"]
 
 # Arabic font served locally (restaurants often work offline).
 app_include_css = "/assets/resto/css/resto.css"
+# Recipe Status dialog, opened from the Resto Recipe list and form.
+app_include_js = "/assets/resto/js/recipe_status.js"
 
 doctype_js = {"Item": "public/js/item_recipe.js"}
 

@@ -105,3 +105,16 @@ class TestItemRecipe(IntegrationTestCase):
 		for f in (P + "type", P + "items", P + "sides", P + "changed", P + "modified"):
 			self.assertIn(f, names)
 		self.assertTrue(frappe.get_meta("Item").has_field(P + "items"))
+
+	def test_recipe_status_and_flag(self):
+		from resto.resto.doctype.resto_recipe.resto_recipe import recipe_status
+
+		self.new_item()
+		self.assertEqual(frappe.db.get_value("Item", self.code, "resto_needs_recipe"), 1)
+		bare = fx.item("RTI-Bare-" + frappe.generate_hash(length=6), stock=0)
+		frappe.db.set_value("Item", bare.name if hasattr(bare, "name") else bare, "resto_needs_recipe", 1)
+		rows = {r["item"]: r for r in recipe_status()["rows"]}
+		self.assertEqual(rows[self.code]["status"], "Active")
+		bare_name = bare.name if hasattr(bare, "name") else bare
+		self.assertEqual(rows[bare_name]["status"], "Missing")
+		self.assertEqual(rows[bare_name]["expected_type"], "Menu Dish")

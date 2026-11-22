@@ -156,6 +156,22 @@
    "indent": 0,
    "is_default_module": 0,
    "keep_closed": 0,
+   "open_in_new_tab": 1,
+   "show_arrow": 0,
+   "type": "Link",
+   "label": "Items",
+   "link_type": "URL",
+   "icon": "",
+   "url": "/app/item"
+  },
+  {
+   "added": 0,
+   "child": 1,
+   "collapsible": 1,
+   "hidden": 0,
+   "indent": 0,
+   "is_default_module": 0,
+   "keep_closed": 0,
    "open_in_new_tab": 0,
    "show_arrow": 0,
    "type": "Link",
@@ -467,7 +483,7 @@
    "icon": ""
   }
  ],
- "modified": "2026-11-21 13:26:00.000000",
+ "modified": "2026-11-22 03:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto",
