@@ -123,6 +123,7 @@ def _make_ticket(order, station, ticket_type, rows, now):
 				"item_name": d.item_name,
 				"qty": d.qty,
 				"modifiers_text": d.modifiers_text,
+				"sides_text": d.get("sides_text"),
 				"notes": d.notes,
 				"course": d.course,
 			},
@@ -244,7 +245,7 @@ def get_tickets(station=None, include_done_minutes=15):
 		for d in frappe.get_all(
 			"Resto Kitchen Ticket Item",
 			filters={"parent": ("in", [t.name for t in tickets]), "parenttype": "Resto Kitchen Ticket"},
-			fields=["parent", "item_name", "qty", "modifiers_text", "notes", "course", "voided"],
+			fields=["parent", "item_name", "qty", "modifiers_text", "sides_text", "notes", "course", "voided"],
 			order_by="idx asc",
 		):
 			items.setdefault(d.parent, []).append(d)
@@ -271,6 +272,7 @@ def get_tickets(station=None, include_done_minutes=15):
 						"item_name": d.item_name,
 						"qty": d.qty,
 						"modifiers_text": d.modifiers_text,
+						"sides_text": d.sides_text,
 						"notes": d.notes,
 						"course": d.course,
 						"voided": d.voided,

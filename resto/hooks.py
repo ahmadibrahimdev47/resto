@@ -52,6 +52,7 @@ doc_events = {
 	},
 	"Sales Invoice": {
 		"validate": "resto.resto.billing.validate_sales_invoice",
+		"before_submit": "resto.resto.billing.before_sales_invoice_submit",
 		"before_cancel": "resto.resto.billing.before_sales_invoice_cancel",
 		"on_cancel": "resto.resto.billing.on_sales_invoice_cancel",
 	},

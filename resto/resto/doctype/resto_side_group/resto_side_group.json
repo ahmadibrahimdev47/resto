@@ -1,0 +1,114 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:group_name",
+ "creation": "2026-11-22 18:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "group_name",
+  "column_break_1",
+  "max_portions",
+  "options_section",
+  "options"
+ ],
+ "fields": [
+  {
+   "fieldname": "group_name",
+   "fieldtype": "Data",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "label": "Group Name",
+   "description": "For example: Sauces, Bread. Link it to a side in a dish recipe (Served With) so staff can swap that side for another option or change how many portions are served. Changed sides are not charged; a paid extra is an option of a Modifier Group."
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "max_portions",
+   "fieldtype": "Int",
+   "default": "1",
+   "reqd": 1,
+   "in_list_view": 1,
+   "label": "Maximum Portions per Dish",
+   "description": "The most portions of this group one dish can be served with."
+  },
+  {
+   "fieldname": "options_section",
+   "fieldtype": "Section Break",
+   "label": "Options"
+  },
+  {
+   "fieldname": "options",
+   "fieldtype": "Table",
+   "options": "Resto Side Option",
+   "reqd": 1,
+   "label": "Options",
+   "description": "What one portion of each option is. The recipe's own side is always an option too, with its recipe quantity as one portion."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-11-22 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Side Group",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "export": 1,
+   "report": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Resto Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "print": 1,
+   "export": 1,
+   "report": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Resto Waiter",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Cashier",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Host",
+   "read": 1,
+   "print": 1
+  },
+  {
+   "role": "Resto Kitchen",
+   "read": 1,
+   "print": 1
+  }
+ ],
+ "quick_entry": 0,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

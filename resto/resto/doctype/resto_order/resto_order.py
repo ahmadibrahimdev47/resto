@@ -5,6 +5,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import cint, flt, get_datetime, now_datetime
 
+from resto.resto import sides
 from resto.resto.utils import CASHIER, MANAGER, WAITER, get_settings, has_role
 
 ACTIVE = ("Open", "Bill Requested")
@@ -12,7 +13,7 @@ CLOSED = ("Paid", "Cancelled", "Merged")
 NOT_SENT = "Not Sent"
 VOID = "Void"
 # Fields of a line that cannot change once it went to the kitchen (void and re-add instead).
-LOCKED_LINE_FIELDS = ("item_code", "qty", "rate", "modifiers_amount", "modifiers")
+LOCKED_LINE_FIELDS = ("item_code", "qty", "rate", "modifiers_amount", "modifiers", "sides")
 SERVER_HEADER_FIELDS = (
 	"status",
 	"opened_at",
@@ -32,7 +33,7 @@ SERVER_HEADER_FIELDS = (
 # Changes that make a printed bill wrong.
 BILL_FIELDS = ("discount_amount", "service_charge_percent", "delivery_fee", "customer", "net_total")
 BILL_LINE_FIELDS = ("qty", "rate", "modifiers_amount", "kitchen_status", "billed_qty")
-SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by")
+SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides_text", "sides_qty")
 
 
 class RestoOrder(Document):
@@ -237,8 +238,11 @@ class RestoOrder(Document):
 				# Same line: keep the price it got (a form or REST edit cannot change it).
 				row.rate = old.rate
 			set_line_modifiers(row)
+			sides.set_line_sides(row, old)
 			if not row.kitchen_status:
 				row.kitchen_status = NOT_SENT
+		sides.check_shared(self)
+		sides.set_order_texts(self)
 
 	def calculate_totals(self):
 		total_qty = net_total = 0

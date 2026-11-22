@@ -81,7 +81,21 @@ SALES_INVOICE_FIELDS = {
 			"read_only": 1,
 			"no_copy": 1,
 		},
-	]
+	],
+	# The sides a dish was served with when they differ from its recipe (resto/resto/sides.py).
+	# Copied to a return, which takes back what was served.
+	"Sales Invoice Item": [
+		{
+			"fieldname": "resto_sides",
+			"fieldtype": "Code",
+			"label": "Sides Served",
+			"insert_after": "description",
+			"read_only": 1,
+			"hidden": 1,
+			"print_hide": 1,
+			"report_hide": 1,
+		},
+	],
 }
 
 

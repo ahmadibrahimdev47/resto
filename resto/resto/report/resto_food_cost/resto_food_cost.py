@@ -6,6 +6,7 @@ from frappe import _
 from frappe.utils import flt
 
 from resto.resto.report_utils import (
+	changed_sides_costs,
 	cost_by_invoice_row,
 	excluded_items,
 	other_food_costs,
@@ -22,6 +23,8 @@ def execute(filters=None):
 	rows = sold_rows(filters, filters.get("item_group"))
 	actual = cost_by_invoice_row(filters)
 	recipe = recipe_costs()
+	# A dish served with other sides is expected to cost its main ingredients plus those sides.
+	changed = changed_sides_costs([r.name for r in rows])
 	skip = excluded_items()
 
 	groups = {}
@@ -37,7 +40,9 @@ def execute(filters=None):
 		g["qty"] += flt(r.qty)
 		g["net_sales"] += flt(r.net_amount)
 		g["actual_cost"] += actual.get(r.name, 0)
-		if r.item_code in recipe:
+		if r.name in changed:
+			g["theoretical_cost"] += flt(r.qty) * changed[r.name]
+		elif r.item_code in recipe:
 			g["theoretical_cost"] += flt(r.qty) * recipe[r.item_code]
 		else:
 			# Items sold without a recipe (bottled drinks...) count at their actual cost.

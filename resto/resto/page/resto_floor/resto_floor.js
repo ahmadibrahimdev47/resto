@@ -393,6 +393,7 @@ class RestoFloor {
 				<div class="rf-lmain">
 					<b>${esc(d.item_name)}</b>
 					${d.modifiers_text ? `<div class="rf-mod">${esc(d.modifiers_text)}</div>` : ""}
+					${d.sides_text ? `<div class="rf-mod"><b>${esc(d.sides_text)}</b></div>` : ""}
 					${d.notes ? `<div class="rf-mod">✎ ${esc(d.notes)}</div>` : ""}
 					<div class="rf-lmeta">
 						<span class="rf-status s-${(d.kitchen_status || "").replace(/ /g, "")}">${__(d.kitchen_status, null, "Resto")}</span>
@@ -446,7 +447,8 @@ class RestoFloor {
 			fields.push(
 				{ fieldname: "notes", fieldtype: "Small Text", label: __("Kitchen Note"), default: line.notes },
 				{ fieldname: "course", fieldtype: "Select", options: COURSES.map((c) => ({ value: c, label: __(c) })), label: __("Course", null, "Resto"), default: line.course || "" },
-				{ fieldname: "hold", fieldtype: "Check", label: __("Hold Until Fired"), default: line.hold }
+				{ fieldname: "hold", fieldtype: "Check", label: __("Hold Until Fired"), default: line.hold },
+				{ fieldname: "sides_btn", fieldtype: "HTML" }
 			);
 		} else {
 			fields.push(
@@ -469,6 +471,17 @@ class RestoFloor {
 				else await this.line_call("update_line", { line: line.name, notes: v.notes || "", course: v.course || "", hold: v.hold ? 1 : 0 });
 			},
 		});
+		if (!sent && this.order.sides_enabled && line.has_sides) {
+			// Sides can be changed (Restaurant Settings) and this dish has some. What was typed in
+			// this dialog is saved first, so a kitchen note is not lost.
+			d.fields_dict.sides_btn.$wrapper.html(`<button class="btn btn-default btn-sm">${__("Change Sides")}</button>`);
+			d.fields_dict.sides_btn.$wrapper.find("button").on("click", async () => {
+				const v = d.get_values(true) || {};
+				d.hide();
+				await call("update_line", { order: this.order.name, line: line.name, notes: v.notes || "", course: v.course || "", hold: v.hold ? 1 : 0 });
+				this.sides_dialog([line.name]);
+			});
+		}
 		if (!sent) d.set_secondary_action_label(__("Remove", null, "Resto"));
 		if (!sent) d.set_secondary_action(() => { d.hide(); this.line_call("remove_line", { line: line.name }); });
 		d.show();
@@ -512,6 +525,21 @@ class RestoFloor {
 			[__("Discount"), () => this.discount()],
 			[__("Guests and Customer"), () => this.edit_info()],
 		];
+		const with_sides = o.sides_enabled ? o.items.filter((d) => d.kitchen_status === "Not Sent" && d.has_sides) : [];
+		if (with_sides.length > 1 || (with_sides.length === 1 && flt(with_sides[0].qty) > 1)) {
+			acts.push([__("Sides for Several Dishes"), () => this.pick_side_lines(with_sides)]);
+		}
+		if (o.print_sides || o.items.some((d) => d.sides_text && d.kitchen_status !== "Void")) {
+			// One entry that shows its state: ☑ printed, ☐ not printed.
+			acts.push([
+				`${o.print_sides ? "☑" : "☐"} ${__("Print Sides on the Receipt")}`,
+				async () => {
+					await call("set_print_sides", { order: o.name, print_sides: o.print_sides ? 0 : 1 }, true);
+					frappe.show_alert({ message: o.print_sides ? __("Sides will not be printed on the receipt") : __("Sides will be printed on the receipt"), indicator: "green" });
+					this.load_order(o.name);
+				},
+			]);
+		}
 		if (o.order_type === "Dine In") {
 			acts.push([__("Move to Table"), () => this.move()], [__("Merge Table Into This"), () => this.merge()]);
 		}
@@ -522,6 +550,81 @@ class RestoFloor {
 		d.fields_dict.html.$wrapper.html(acts.map((a, i) => `<button class="btn btn-default btn-block" data-i="${i}">${a[0]}</button>`).join(""));
 		d.fields_dict.html.$wrapper.find("button").on("click", (e) => { d.hide(); acts[$(e.currentTarget).attr("data-i")][1](); });
 		d.show();
+	}
+
+	pick_side_lines(lines) {
+		const d = new frappe.ui.Dialog({
+			title: __("Sides for Several Dishes"),
+			fields: [
+				{
+					fieldname: "lines",
+					fieldtype: "MultiCheck",
+					label: __("Dishes"),
+					sort_options: false,
+					columns: 1,
+					options: lines.map((l) => ({
+						label: `${esc(l.item_name)} × ${l.qty}${l.modifiers_text ? " (" + esc(l.modifiers_text) + ")" : ""}`,
+						value: l.name,
+						checked: 1,
+					})),
+				},
+			],
+			primary_action_label: __("Next"),
+			primary_action: (v) => {
+				if (!v.lines || !v.lines.length) return frappe.show_alert({ message: __("Choose at least one dish"), indicator: "orange" });
+				d.hide();
+				this.sides_dialog(v.lines, true);
+			},
+		});
+		d.show();
+	}
+
+	async sides_dialog(lines, together = false) {
+		const o = this.order;
+		const r = await call("get_sides", { order: o.name, lines: JSON.stringify(lines), together: together ? 1 : 0 });
+		const fields = [
+			{
+				fieldtype: "HTML",
+				options: `<p class="text-muted">${r.per_dish ? __("Portions for each dish.") : __("Enter the total for the chosen dishes together.")}</p>`,
+			},
+		];
+		r.slots.forEach((s, si) => {
+			fields.push({ fieldtype: "Section Break", label: `${esc(s.label)} · ${__("max {0}", [s.max])}${s.shared ? " · " + __("shared", null, "Resto") : ""}` });
+			s.options.forEach((opt, oi) => {
+				if (s.single && s.options.length === 1) {
+					// A side without a group: served or not.
+					fields.push({ fieldname: `s_${si}_${oi}`, fieldtype: "Check", label: esc(opt.item_name), default: opt.total > 0 ? 1 : 0 });
+				} else {
+					fields.push({ fieldname: `s_${si}_${oi}`, fieldtype: "Float", label: esc(opt.item_name), default: opt.total, non_negative: 1 });
+				}
+			});
+		});
+		const d = new frappe.ui.Dialog({
+			title: esc(r.title || __("Change Sides")),
+			fields,
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				// Only the slots that changed: the others keep their choice (a shared one too).
+				const choice = {};
+				r.slots.forEach((s, si) => {
+					const items = {};
+					let changed = false;
+					s.options.forEach((opt, oi) => {
+						const n = flt(v[`s_${si}_${oi}`]);
+						if (Math.abs(n - flt(opt.total)) > 0.0005) changed = true; // a shown 0.333 is the stored 1/3
+						if (n > 0) items[opt.item] = n;
+					});
+					if (changed) choice[s.key] = items;
+				});
+				if (!Object.keys(choice).length) return d.hide();
+				await call("set_sides", { order: o.name, lines: JSON.stringify(lines), sides_choice: JSON.stringify(choice), together: together ? 1 : 0 }, true);
+				d.hide();
+				this.load_order(o.name);
+			},
+		});
+		d.show();
+		// One tap selects the number, so typing replaces it.
+		d.$wrapper.find("input").on("focus", function () { this.select && this.select(); });
 	}
 
 	discount() {

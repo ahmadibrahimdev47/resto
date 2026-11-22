@@ -47,6 +47,7 @@ class SetupCheck:
 			self.check_kitchen_stock,
 			self.check_recipe_precision,
 			self.check_modifiers,
+			self.check_sides,
 			self.check_stale_bundles,
 		):
 			check()
@@ -311,6 +312,51 @@ class SetupCheck:
 			self.warn(area, _("Paid options billed as non-stock items without a recipe bundle (no stock or cost is deducted): {0}").format(short(no_recipe)))
 		if loose:
 			self.warn(area, _("Paid options billed as stock items: each option deducts one whole stock unit; give them a recipe instead: {0}").format(short(loose)))
+
+	def check_sides(self):
+		"""Changed sides are packed on the dish's invoice row (resto/resto/sides.py)."""
+		area = _("Sides")
+		# Not needed by sides (they are packed on the dish, never billed at 0), but a 0-rate stock
+		# line anywhere on a floor bill would fail with it.
+		if cint(frappe.db.get_single_value("Selling Settings", "validate_selling_price")):
+			self.warn(
+				_("POS Profile"),
+				_("Selling Settings stops a sale below the valuation rate: a free or heavily discounted stock item blocks the bill at the cashier."),
+			)
+		if not cint(self.s.get("allow_side_changes")):
+			return
+		from resto.resto import sides
+
+		odd = []
+		for recipe in frappe.get_all("Resto Recipe", {"is_active": 1, "recipe_type": "Menu Dish"}, pluck="item"):
+			if not sides.slots(recipe):
+				continue
+			try:
+				sides.dish_components(recipe, {})
+			except frappe.ValidationError:
+				frappe.clear_last_message()
+				odd.append(recipe)
+		if odd:
+			self.error(area, _("Dishes whose recipe bundle differs from the recipe; their sides cannot be changed until the recipe is saved again: {0}").format(short(odd)))
+		serial = frappe.db.sql(
+			"""select distinct o.item from `tabResto Side Option` o join `tabItem` i on i.name = o.item
+			where i.has_serial_no = 1 or i.has_batch_no = 1""",
+			pluck=True,
+		)
+		if serial:
+			self.warn(area, _("Side options with serial or batch numbers cannot be served as changed sides: {0}").format(short(serial)))
+		precision = frappe.get_precision("Packed Item", "qty") or 3
+		odd_portion = []
+		for o in frappe.db.sql(
+			"""select o.parent, o.item, o.portion_qty, ifnull(u.must_be_whole_number, 0) as whole
+			from `tabResto Side Option` o join `tabItem` i on i.name = o.item left join `tabUOM` u on u.name = i.stock_uom""",
+			as_dict=True,
+		):
+			q = flt(o.portion_qty)
+			if (o.whole and abs(q - round(q)) > 1e-9) or abs(q - flt(q, precision)) > 1e-9:
+				odd_portion.append(f"{o.parent}: {o.item} ({q:g})")
+		if odd_portion:
+			self.warn(area, _("Side options whose portion cannot be deducted exactly (a fraction of a whole unit, or more decimals than stock quantities keep): {0}").format(short(odd_portion)))
 
 	def check_stale_bundles(self):
 		"""A bundle whose recipe was deactivated or deleted still deducts stock on every sale."""

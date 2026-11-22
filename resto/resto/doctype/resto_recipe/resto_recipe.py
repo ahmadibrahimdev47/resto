@@ -53,6 +53,9 @@ class RestoRecipe(Document):
 			self.set("sides", [])
 			self.product_bundle = None
 		self.uom = frappe.db.get_value("Item", self.item, "stock_uom")
+		# A side group belongs to a side (Served With), not to a main ingredient.
+		for row in self.items:
+			row.side_group = None
 
 	def validate_item(self):
 		item = frappe.db.get_value(

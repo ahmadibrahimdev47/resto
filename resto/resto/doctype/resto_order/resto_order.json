@@ -56,6 +56,7 @@
   "rebill",
   "column_break_7",
   "notes",
+  "print_sides",
   "cancel_reason"
  ],
  "fields": [
@@ -382,6 +383,13 @@
    "label": "Notes"
   },
   {
+   "default": "0",
+   "fieldname": "print_sides",
+   "fieldtype": "Check",
+   "label": "Print Sides on the Receipt",
+   "description": "The receipt lists each dish's sides. They are always kept on the invoice."
+  },
+  {
    "fieldname": "cancel_reason",
    "fieldtype": "Small Text",
    "read_only": 1,
@@ -393,7 +401,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-21 12:23:55.136000",
+ "modified": "2026-11-22 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",

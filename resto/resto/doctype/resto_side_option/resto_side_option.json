@@ -1,0 +1,72 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-11-22 18:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item",
+  "item_name",
+  "column_break_1",
+  "portion_qty",
+  "uom"
+ ],
+ "fields": [
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "options": "Item",
+   "reqd": 1,
+   "in_list_view": 1,
+   "label": "Item",
+   "description": "A stock item, a prepared ingredient, or a menu dish (its main ingredients are deducted)."
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "fetch_from": "item.item_name",
+   "in_list_view": 1,
+   "label": "Item Name"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "portion_qty",
+   "fieldtype": "Float",
+   "reqd": 1,
+   "in_list_view": 1,
+   "label": "Quantity of One Portion",
+   "description": "In the item's stock unit."
+  },
+  {
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "options": "UOM",
+   "read_only": 1,
+   "fetch_from": "item.stock_uom",
+   "in_list_view": 1,
+   "label": "Stock UOM"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-22 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Side Option",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 0,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

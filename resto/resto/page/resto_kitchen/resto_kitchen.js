@@ -100,6 +100,7 @@ class RestoKitchen {
 							(d) => `<li class="${d.voided ? "rk-voided" : ""}"><b>${d.qty} × ${esc(d.item_name)}</b>${d.voided ? ` <span class="rk-vtag">${__("VOID")}</span>` : ""}
 							${d.course ? `<span class="rk-course">${__(d.course)}</span>` : ""}
 							${d.modifiers_text ? `<div class="rk-mod">${esc(d.modifiers_text)}</div>` : ""}
+							${d.sides_text ? `<div class="rk-sides">${esc(d.sides_text)}</div>` : ""}
 							${d.notes ? `<div class="rk-note">✎ ${esc(d.notes)}</div>` : ""}</li>`
 						)
 						.join("");
@@ -183,6 +184,7 @@ class RestoKitchen {
 		.rk-vtag { background:#E24C4C; color:#fff; border-radius:4px; padding:0 4px; font-size:11px; text-decoration:none; }
 		.rk-mod { font-size:13px; color:var(--text-muted); }
 		.rk-note { font-size:13px; color:var(--red-600, #e53e3e); font-weight:600; }
+		.rk-sides { font-size:14px; font-weight:700; color:var(--orange-600, #c05621); }
 		.rk-course { font-size:11px; background:var(--gray-100); border-radius:6px; padding:0 6px; margin-inline-start:4px; }
 		.rk-actions { display:flex; gap:6px; }
 		.rk-actions .btn-primary, .rk-actions .btn-danger { flex:1; padding:8px; font-size:15px; }`;

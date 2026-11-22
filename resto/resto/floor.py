@@ -6,7 +6,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, getdate, now_datetime, nowdate
 
-from resto.resto import billing, kitchen, printing
+from resto.resto import billing, kitchen, printing, sides
 from resto.resto.doctype.resto_modifier_group.resto_modifier_group import groups_for_item
 from resto.resto.doctype.resto_order.resto_order import ACTIVE, default_service_percent
 from resto.resto.utils import (
@@ -226,6 +226,10 @@ def get_order(order):
 	data = doc.as_dict()
 	data["waiter_name"] = frappe.utils.get_fullname(doc.waiter) if doc.waiter else ""
 	data["invoiced_total"] = doc.invoiced_total()
+	# Which unsent lines can have their sides changed (Restaurant Settings and the dish's recipe).
+	data["sides_enabled"] = int(sides.enabled())
+	for d in data.get("items") or []:
+		d["has_sides"] = int(bool(data["sides_enabled"] and d.get("kitchen_status") == "Not Sent" and sides.slots(d.get("item_code"))))
 	return data
 
 
@@ -326,6 +330,64 @@ def update_line(order, line, qty=None, notes=None, course=None, hold=None):
 	return _save(doc).name
 
 
+@frappe.whitelist()
+def get_sides(order, lines, together=0):
+	"""Sides of unsent lines: per dish for one line, in total for several lines (or for one line
+	chosen as "several dishes": the total for its whole quantity)."""
+	require_role(WAITER, CASHIER)
+	if not sides.enabled():
+		frappe.throw(_("Changing the sides served is off in Restaurant Settings"))
+	doc = _get_order(order)
+	lines = _loads(lines, [])
+	if len(lines) == 1 and not cint(together):
+		(row,) = sides._unsent_rows(doc, lines)
+		choice = sides.line_choice(row)
+		result = []
+		for key, slot in sides.slots(row.item_code).items():
+			chosen = choice.get(key, {}).get("items") or {}
+			result.append(
+				{
+					"key": key,
+					"label": slot.label,
+					"max": slot.max,
+					"single": int(not slot.group and slot.max == 1),
+					"shared": bool(choice.get(key, {}).get("set")),
+					"options": [{"item": i, "item_name": slot.names.get(i, i), "total": flt(chosen.get(i), 6)} for i in slot.portion],
+				}
+			)
+		return {"per_dish": 1, "title": f"{row.item_name} × {sides._num(row.qty)}", "slots": result}
+	rows = sides._unsent_rows(doc, lines)
+	return {"per_dish": 0, "title": "، ".join(f"{d.item_name} × {sides._num(d.qty)}" for d in rows), "slots": sides.combined(doc, lines)}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_sides(order, lines, sides_choice, together=0):
+	"""sides_choice: {slot key: {item: portions}} of the slots changed, per dish for one line, in
+	total for several lines (or together)."""
+	require_role(WAITER, CASHIER)
+	doc = _get_order(order)
+	lines = _loads(lines, [])
+	choice = _loads(sides_choice, {})
+	if not isinstance(lines, list) or not isinstance(choice, dict):
+		frappe.throw(_("The sides could not be read"))
+	if not choice:
+		return doc.name
+	if len(lines) == 1 and not cint(together):
+		sides.set_for_line(doc, lines[0], choice)
+	else:
+		sides.set_for_lines(doc, lines, choice)
+	_reopen_if_billed(doc)
+	return _save(doc).name
+
+
+@frappe.whitelist(methods=["POST"])
+def set_print_sides(order, print_sides):
+	require_role(WAITER, CASHIER)
+	doc = _get_order(order)
+	doc.print_sides = cint(print_sides)
+	return _save(doc).name
+
+
 @frappe.whitelist(methods=["POST"])
 def remove_line(order, line):
 	require_role(WAITER, CASHIER)
@@ -366,6 +428,9 @@ def void_line(order, line, reason, cooked=0):
 	doc = _get_order(order)
 	row = _line(doc, line)
 	was_sent = row.kitchen_status not in ("Not Sent", "Void")
+	if cint(cooked) and was_sent:
+		# Its share of a shared side is booked as waste with it: the other dishes keep theirs.
+		doc.flags.resto_keep_sets = {e["set"] for e in json.loads(row.sides or "{}").values() if e.get("set")}
 	kitchen.void_line(doc, row, reason.strip())
 	_reopen_if_billed(doc)
 	_save(doc)
@@ -376,12 +441,17 @@ def void_line(order, line, reason, cooked=0):
 
 
 def _waste_for_void(order, row, reason):
-	items = [{"item_code": row.item_code, "qty": flt(row.qty), "reason": "Other", "note": reason}]
-	for mod in json.loads(row.modifiers or "[]"):
-		if flt(mod.get("price")) and mod.get("item"):
-			items.append({"item_code": mod["item"], "qty": flt(row.qty), "reason": "Other", "note": reason})
 	frappe.db.savepoint("resto_void_waste")
 	try:
+		items = [{"item_code": row.item_code, "qty": flt(row.qty), "reason": "Other", "note": reason}]
+		if row.get("sides"):
+			# Changed sides: the dish's main ingredients and the sides it was made with.
+			served = json.loads(row.sides_qty) if row.get("sides_qty") else sides.qty_per_dish(row.item_code, json.loads(row.sides))
+			per_dish = sides.dish_components(row.item_code, served)
+			items = [{"item_code": k, "qty": v * flt(row.qty), "reason": "Other", "note": reason} for k, v in per_dish.items()]
+		for mod in json.loads(row.modifiers or "[]"):
+			if flt(mod.get("price")) and mod.get("item"):
+				items.append({"item_code": mod["item"], "qty": flt(row.qty), "reason": "Other", "note": reason})
 		waste = frappe.get_doc(
 			{
 				"doctype": "Resto Waste",
@@ -471,6 +541,8 @@ def merge_orders(target, source):
 
 	tgt.reload()
 	tgt.guests = cint(tgt.guests) + cint(src.guests)
+	if cint(src.print_sides):
+		tgt.print_sides = 1
 	_reopen_if_billed(tgt)
 	_save(tgt)
 	tgt.add_comment("Info", _("Merged order {0} into this order").format(src.name))

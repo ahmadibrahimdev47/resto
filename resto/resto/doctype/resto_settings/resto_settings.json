@@ -25,6 +25,7 @@
   "pos_section",
   "pos_profile",
   "require_pos_shift",
+  "allow_side_changes",
   "column_break_pos",
   "screen_refresh_seconds",
   "reservation_hold_minutes",
@@ -177,6 +178,13 @@
    "fieldtype": "Check",
    "label": "Require an Open POSNext Shift",
    "description": "The cashier must open a shift in POSNext before settling a bill, so the shift closing counts it."
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_side_changes",
+   "fieldtype": "Check",
+   "label": "Let Staff Change the Sides Served",
+   "description": "On the floor screen the waiter or cashier can change a dish's sides (Served With) for one dish or for several dishes together: swap a side for another option of its side group, or change its portions. What is served is deducted from stock and costed on the dish. Off: every dish is served with its recipe's sides."
   },
   {
    "fieldname": "column_break_pos",
@@ -344,7 +352,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-22 16:00:00.000000",
+ "modified": "2026-11-22 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

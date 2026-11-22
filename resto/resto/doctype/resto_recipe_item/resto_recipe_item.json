@@ -9,6 +9,7 @@
   "item_name",
   "qty",
   "uom",
+  "side_group",
   "column_break_qty",
   "stock_uom",
   "conversion_factor",
@@ -125,12 +126,20 @@
    "fieldname": "note",
    "fieldtype": "Data",
    "label": "Note"
+  },
+  {
+   "fieldname": "side_group",
+   "fieldtype": "Link",
+   "options": "Resto Side Group",
+   "label": "Side Group",
+   "depends_on": "eval:in_list(['sides', 'resto_recipe_sides'], doc.parentfield)",
+   "description": "Lets staff swap this side for another option of the group, or change its portions, when Restaurant Settings allows it."
   }
  ],
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-21 12:00:00.000000",
+ "modified": "2026-11-22 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Recipe Item",

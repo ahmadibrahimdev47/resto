@@ -11,6 +11,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
+from resto.resto import sides
 from resto.resto.utils import CASHIER, get_settings, has_role, posnext_installed, publish, require_role
 
 EPS = 0.0000001
@@ -92,7 +93,14 @@ def build_invoice(order, lines=None):
 			description += f" ({row.modifiers_text})"
 		if row.notes:
 			description += f" - {row.notes}"
+		if cint(order.get("print_sides")) and row.sides_text:
+			description += f" - {row.sides_text}"
 		_append_item(si, row.item_code, qty, flt(row.rate), description)
+		if row.get("sides"):
+			# Changed sides, as frozen when the line went to the kitchen: the invoice's validate
+			# hook packs them instead of the recipe's (sides.py).
+			served = row.get("sides_qty") or json.dumps(sides.qty_per_dish(row.item_code, json.loads(row.sides)), sort_keys=True)
+			si.items[-1].resto_sides = served
 		prices.append(flt(row.rate))
 		food_total += qty * flt(row.rate)
 		for mod in json.loads(row.modifiers or "[]"):
@@ -167,6 +175,7 @@ def build_invoice(order, lines=None):
 	)
 	si.calculate_taxes_and_totals()
 	si.flags.resto_lines = {row.name: qty for row, qty in to_bill}
+	si.flags.resto_billing = True  # may carry Sides Served (sides.py)
 	return si
 
 
@@ -473,6 +482,12 @@ def validate_sales_invoice(doc, method=None):
 	"""An amended copy of a floor bill would be paid twice: the order does not know it."""
 	if doc.get("resto_order") and doc.get("amended_from") and doc.docstatus == 0:
 		frappe.throw(_("A restaurant bill cannot be amended; bill the order again from the floor screen"))
+	# After ERPNext packed the bundles: the sides actually served (and their returns).
+	sides.apply_to_invoice(doc)
+
+
+def before_sales_invoice_submit(doc, method=None):
+	sides.check_invoice(doc)
 
 
 def validate_closing_shift(doc, method=None):

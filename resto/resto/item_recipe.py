@@ -32,7 +32,7 @@ COSTS = {
 	P + "selling_rate": "selling_rate",
 	P + "food_cost_percent": "food_cost_percent",
 }
-ROW_FIELDS = ("item_code", "qty", "uom", "note")
+ROW_FIELDS = ("item_code", "qty", "uom", "note", "side_group")
 # The recipe part of the tab shows only on items ticked "Needs a Recipe".
 ON = "!doc.has_variants && doc.resto_needs_recipe"
 IS_PREP = f"eval:{ON} && doc.{TYPE}=='{PREPARED}'"
@@ -184,7 +184,7 @@ def _signature(recipe_or_data):
 		(g("preparation") or "").strip(),
 		flt(g("target_food_cost_percent"), 6) if g("recipe_type") == MENU else 0,
 		tuple((r["item_code"], flt(r["qty"], 6), r["uom"] or "", r["note"] or "") for r in _rows(g("items"))),
-		tuple((r["item_code"], flt(r["qty"], 6), r["uom"] or "", r["note"] or "") for r in _rows(g("sides"))),
+		tuple((r["item_code"], flt(r["qty"], 6), r["uom"] or "", r["note"] or "", r["side_group"] or "") for r in _rows(g("sides"))),
 	)
 
 

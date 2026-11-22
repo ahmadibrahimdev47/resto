@@ -84,6 +84,32 @@ def recipe_costs():
 	}
 
 
+def changed_sides_costs(row_names):
+	"""Recipe cost per dish of invoice rows served with changed sides (resto/resto/sides.py): the
+	dish's main ingredients plus the sides actually served, at today's costs like recipe_costs."""
+	import json
+
+	from resto.resto.costing import get_unit_cost
+
+	if not row_names:
+		return {}
+	out, memo = {}, {}
+	for r in frappe.get_all(
+		"Sales Invoice Item",
+		filters={"name": ("in", list(row_names)), "resto_sides": ("is", "set")},
+		fields=["name", "item_code", "resto_sides"],
+	):
+		main = frappe.db.get_value("Resto Recipe", {"item": r.item_code, "is_active": 1}, "main_cost")
+		if main is None:
+			continue
+		try:
+			served = json.loads(r.resto_sides or "{}")
+		except ValueError:
+			continue
+		out[r.name] = flt(main) + sum(flt(q) * flt(get_unit_cost(item, memo)) for item, q in served.items())
+	return out
+
+
 def excluded_items():
 	"""Items that are not food: the delivery fee item."""
 	fee = get_settings().delivery_fee_item
