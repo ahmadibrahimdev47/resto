@@ -12,8 +12,9 @@ required_apps = ["erpnext"]
 
 # Arabic font served locally (restaurants often work offline).
 app_include_css = "/assets/resto/css/resto.css"
-# Recipe Status dialog, opened from the Resto Recipe list and form.
-app_include_js = "/assets/resto/js/recipe_status.js"
+# Shared desk JS (Recipe Status dialog, food cost colors) as a bundle: every build gets a new
+# hashed URL, so browsers never keep running an old copy.
+app_include_js = "resto.bundle.js"
 
 boot_session = "resto.boot.boot_session"
 

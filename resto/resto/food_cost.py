@@ -4,7 +4,7 @@ Green up to the target, yellow up to target + the yellow step, orange up to targ
 step, red above that, and "over" at 100% or more (the dish costs more than it sells for).
 The target is the recipe's own Target Food Cost %, or the one in Resto Settings when the recipe
 has none; the steps are in Resto Settings. The same levels color the screens
-(recipe_status.js, through boot) and the warning shown when a recipe is saved.
+(resto.bundle.js, through boot) and the warning shown when a recipe is saved.
 """
 
 import frappe
