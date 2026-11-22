@@ -44,12 +44,14 @@
 					for (const [src, field] of Object.entries(COSTS)) frm.doc[field] = r.message[src];
 					TABLES.forEach((t) => frm.refresh_field(t));
 					frm.refresh_fields(Object.values(COSTS));
+					resto.show_food_cost(frm, P + "food_cost_percent");
 				},
 			});
 		}, 400);
 	}
 
 	function render(frm) {
+		resto.show_food_cost(frm, P + "food_cost_percent");
 		const note = frm.get_field(P + "note");
 		const link = frm.get_field(P + "link");
 		if (note) {

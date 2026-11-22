@@ -15,6 +15,8 @@ app_include_css = "/assets/resto/css/resto.css"
 # Recipe Status dialog, opened from the Resto Recipe list and form.
 app_include_js = "/assets/resto/js/recipe_status.js"
 
+boot_session = "resto.boot.boot_session"
+
 doctype_js = {"Item": "public/js/item_recipe.js"}
 
 add_to_apps_screen = [

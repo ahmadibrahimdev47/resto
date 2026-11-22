@@ -49,7 +49,7 @@ resto.recipe_status = function () {
 			.map((r, i) => {
 				const [color, label] = STATUS[r.status];
 				const cost = r.cost == null ? "" : format_currency(r.cost) + (r.recipe_type === "Prepared Ingredient" ? ` / ${esc(__(r.uom))}` : "");
-				const pct = r.food_cost_percent == null ? "" : `${flt(r.food_cost_percent, 1)}%`;
+				const pct = r.food_cost_percent == null ? "" : resto.food_cost_html(r.food_cost_percent);
 				return `<tr class="resto-rs-row" data-i="${i}" style="cursor:pointer">
 					<td><span class="indicator-pill ${color}">${label}</span></td>
 					<td><b>${esc(r.item_name)}</b><br><small class="text-muted">${esc(r.item)} · ${esc(r.item_group)}</small></td>
@@ -108,4 +108,36 @@ resto.update_all_recipe_costs = function (after) {
 			if (after) after();
 		},
 	});
+};
+
+// Food cost % with levels: green up to the alert level (Resto Settings), orange up to 10 points
+// above it, red beyond; 100% or more is a full red bar marked as over.
+resto.food_cost_level = function (value) {
+	const alert = flt((frappe.boot.resto || {}).food_cost_alert) || 35;
+	const v = flt(value);
+	if (v >= 100) return { color: "red", over: true };
+	if (v > alert + 10) return { color: "red" };
+	if (v > alert) return { color: "orange" };
+	return { color: "green" };
+};
+
+resto.food_cost_html = function (value) {
+	if (value == null || value === "") return "";
+	const v = flt(value);
+	const level = resto.food_cost_level(v);
+	const css = { green: "var(--green-500)", orange: "var(--orange-500)", red: "var(--red-500)" }[level.color];
+	const text = `${format_number(v, null, 1)}%${level.over ? " ⚠" : ""}`;
+	const title = level.over ? __("The recipe costs more than the selling price") : "";
+	return `<span style="display:inline-flex;align-items:center;gap:6px;width:100%" title="${frappe.utils.escape_html(title)}">
+		<span style="flex:1;min-width:40px;height:6px;border-radius:3px;background:var(--gray-200);overflow:hidden">
+			<span style="display:block;height:100%;width:${Math.min(v, 100)}%;background:${css}"></span>
+		</span>
+		<span style="color:${css};font-weight:${level.color === "green" ? 400 : 600};white-space:nowrap">${text}</span>
+	</span>`;
+};
+
+// Show the level bar under a food cost % field of a form (recipe form, Item Recipe tab).
+resto.show_food_cost = function (frm, fieldname) {
+	const v = frm.doc[fieldname];
+	frm.set_df_property(fieldname, "description", v ? resto.food_cost_html(v) : "");
 };
