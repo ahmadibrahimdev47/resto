@@ -80,6 +80,12 @@
 		},
 		refresh: render,
 		has_variants: render,
+		resto_needs_recipe(frm) {
+			// Ticking it opens the recipe part of the tab; start with the type that fits the item.
+			if (frm.doc.resto_needs_recipe && !frm.doc[P + "type"] && !frm.doc.has_variants) {
+				frm.set_value(P + "type", frm.doc.is_stock_item ? PREPARED : MENU);
+			}
+		},
 		[P + "type"](frm) {
 			mark_changed(frm);
 			if (frm.doc[P + "type"] !== MENU && (frm.doc[P + "sides"] || []).length) {

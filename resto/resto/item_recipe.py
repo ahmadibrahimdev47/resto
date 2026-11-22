@@ -32,9 +32,11 @@ COSTS = {
 	P + "food_cost_percent": "food_cost_percent",
 }
 ROW_FIELDS = ("item_code", "qty", "uom", "note")
-IS_PREP = f"eval:!doc.has_variants && doc.{TYPE}=='{PREPARED}'"
-IS_MENU = f"eval:!doc.has_variants && doc.{TYPE}=='{MENU}'"
-HAS_TYPE = f"eval:!doc.has_variants && doc.{TYPE}"
+# The recipe part of the tab shows only on items ticked "Needs a Recipe".
+ON = "!doc.has_variants && doc.resto_needs_recipe"
+IS_PREP = f"eval:{ON} && doc.{TYPE}=='{PREPARED}'"
+IS_MENU = f"eval:{ON} && doc.{TYPE}=='{MENU}'"
+HAS_TYPE = f"eval:{ON} && doc.{TYPE}"
 CURRENCY = "Company:company:default_currency"
 NEEDS = "resto_needs_recipe"
 
@@ -52,7 +54,7 @@ def _fields():
 	add(NEEDS, "Check", label="Needs a Recipe", in_standard_filter=1,
 		description="Ticked items are listed in Recipe Status on the recipe screen. Saving a recipe ticks it.")
 	add(P + "note", "HTML", label="Recipe Note")
-	add(TYPE, "Select", label="Recipe Type", options=f"\n{PREPARED}\n{MENU}", depends_on="eval:!doc.has_variants",
+	add(TYPE, "Select", label="Recipe Type", options=f"\n{PREPARED}\n{MENU}", depends_on=f"eval:{ON}",
 		description="Prepared ingredient: a stock item made in the kitchen. Menu dish: a non-stock item sold at the POS.")
 	add(QTY, "Float", label="Yield Quantity", depends_on=IS_PREP,
 		description="How much this recipe produces, in the item's stock unit.")
@@ -81,6 +83,16 @@ def _fields():
 
 
 ITEM_FIELDS = {"Item": _fields()}
+
+
+def item_fields():
+	"""ITEM_FIELDS with the tab placed after the last standard Item field (the end of the form)."""
+	fields = [dict(f) for f in ITEM_FIELDS["Item"]]
+	ours = {f["fieldname"] for f in fields}
+	last = [df.fieldname for df in frappe.get_meta("Item").fields if df.fieldname not in ours]
+	if last:
+		fields[0]["insert_after"] = last[-1]
+	return {"Item": fields}
 
 
 # --------------------------------------------------------------------------- Item hooks
@@ -197,6 +209,7 @@ def _take(doc):
 def _fill(doc, recipe):
 	"""Copy the recipe into the tab, in memory only. Rows get throw-away names that never reach
 	the database: validate always clears the tables before Item rows are written."""
+	doc.set(NEEDS, 1)  # an item with a recipe needs one; also shows the tab for older recipes
 	doc.set(TYPE, recipe.recipe_type)
 	doc.set(QTY, recipe.quantity)
 	doc.set(PAR, recipe.par_qty)
