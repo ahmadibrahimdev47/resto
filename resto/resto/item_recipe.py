@@ -49,7 +49,8 @@ def _fields():
 			kw.setdefault("insert_after", f[-1]["fieldname"])
 		f.append({"fieldname": fieldname, "fieldtype": fieldtype, **kw})
 
-	add(P + "tab", "Tab Break", label="Recipe")
+	# Hidden on a new item: name and details come first, the recipe after the first save.
+	add(P + "tab", "Tab Break", label="Recipe", depends_on="eval:!doc.__islocal")
 	# Stored on Item (not part of the recipe view): which items should have a recipe.
 	add(NEEDS, "Check", label="Needs a Recipe", in_standard_filter=1,
 		description="Ticked items are listed in Recipe Status on the recipe screen. Saving a recipe ticks it.")
