@@ -113,7 +113,7 @@ class RestoFloor {
 		this.$body.html(
 			`<div class="rf-grid" dir="ltr" style="grid-template-columns: repeat(${hall.grid_columns}, minmax(120px, 1fr))">${cards.join("")}</div>
 			<div class="rf-legend">
-				<span class="rf-dot free"></span>${__("Free")}
+				<span class="rf-dot free"></span>${__("Free", null, "Resto")}
 				<span class="rf-dot occupied"></span>${__("Occupied")}
 				<span class="rf-dot bill"></span>${__("Bill Requested")}
 				<span class="rf-dot reserved"></span>${__("Reserved")}

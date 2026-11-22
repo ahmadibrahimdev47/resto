@@ -2,8 +2,11 @@
 
 Frappe merges app translation files in installed-app order, so an app installed after Resto
 (POSNext) overrides Resto's wording of the same text ("Submit": «ترحيل»). Translation records
-beat every app file, so for each text where a later app disagrees, Resto keeps a Translation
-record with its own wording. Run on migrate and whenever another app is installed.
+beat every app file, so for the few texts in OVERRIDE where a later app disagrees, Resto keeps a
+Translation record with its own wording. Run on migrate and whenever another app is installed.
+
+Only an allowlist: elsewhere a later app's wording fits its own screens (POSNext's "OK" button,
+its "Free" gift item), and Resto's own screens use the "Resto" context instead.
 
 Resto remembers what it wrote (a global default: key -> [source, context, text]) and only changes
 or removes records that still hold its own wording: a record the user wrote or edited is left alone.
@@ -16,6 +19,8 @@ import frappe
 
 LANG = "ar"
 WRITTEN = "resto_translation_overrides"
+# Texts whose Resto wording must hold on every screen (D-180: a document is posted, not sent).
+OVERRIDE = ("Submit", "Submitted")
 
 
 def resto_rows():
@@ -66,7 +71,7 @@ def sync():
 	wanted = {}
 	for source, context, text in resto_rows():
 		k = key(source, context)
-		if k in theirs and theirs[k] != text:
+		if k in OVERRIDE and k in theirs and theirs[k] != text:
 			wanted[k] = (source, context, text)
 
 	written = frappe.parse_json(frappe.db.get_global(WRITTEN) or "{}") or {}

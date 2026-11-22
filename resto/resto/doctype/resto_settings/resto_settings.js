@@ -47,7 +47,7 @@ frappe.ui.form.on("Resto Settings", {
 
 function show_setup_check(rows) {
 	const icon = { error: "red", warning: "orange", ok: "green" };
-	const label = { error: __("Error"), warning: __("Warning"), ok: __("OK") };
+	const label = { error: __("Error"), warning: __("Warning"), ok: __("OK", null, "Resto") };
 	const errors = rows.filter((r) => r.level === "error").length;
 	const warnings = rows.filter((r) => r.level === "warning").length;
 	const body = rows
