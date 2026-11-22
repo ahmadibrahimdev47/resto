@@ -16,7 +16,7 @@ resto.recipe_status = function () {
 			{
 				fieldname: "show",
 				fieldtype: "Select",
-				label: __("Show"),
+				label: __("Show", null, "Resto"),
 				options: [
 					{ value: "", label: __("All") },
 					{ value: "Missing", label: __("Missing", null, "Resto") },
