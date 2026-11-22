@@ -91,6 +91,9 @@ def after_migrate():
 def setup():
 	make_roles()
 	create_custom_fields(SALES_INVOICE_FIELDS, update=True)
+	from resto.resto.item_recipe import ITEM_FIELDS
+
+	create_custom_fields(ITEM_FIELDS, update=True)
 	set_new_setting_defaults()
 	grant_standard_permissions()
 

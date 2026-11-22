@@ -13,6 +13,8 @@ required_apps = ["erpnext"]
 # Arabic font served locally (restaurants often work offline).
 app_include_css = "/assets/resto/css/resto.css"
 
+doctype_js = {"Item": "public/js/item_recipe.js"}
+
 add_to_apps_screen = [
 	{
 		"name": app_name,
@@ -34,6 +36,13 @@ after_install = "resto.setup.install.after_install"
 after_migrate = "resto.setup.install.after_migrate"
 
 doc_events = {
+	# The Recipe tab on Item edits the item's Resto Recipe (see resto/resto/item_recipe.py).
+	"Item": {
+		"onload": "resto.resto.item_recipe.onload",
+		"validate": "resto.resto.item_recipe.validate",
+		"on_update": "resto.resto.item_recipe.on_update",
+		"on_change": "resto.resto.item_recipe.on_change",
+	},
 	"Sales Invoice": {
 		"validate": "resto.resto.billing.validate_sales_invoice",
 		"before_cancel": "resto.resto.billing.before_sales_invoice_cancel",

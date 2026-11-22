@@ -3,6 +3,8 @@
 const COST_FIELDS = ["main_cost", "total_cost", "cost_per_unit", "selling_rate", "food_cost_percent"];
 
 function preview_cost(frm) {
+	// "Resto Recipe Item" events also fire on the Item form's Recipe tab (item_recipe.js).
+	if (frm.doctype !== "Resto Recipe") return;
 	clearTimeout(frm._resto_cost_timer);
 	frm._resto_cost_timer = setTimeout(() => {
 		const rows = [...(frm.doc.items || []), ...(frm.doc.sides || [])];
