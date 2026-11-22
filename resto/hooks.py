@@ -39,6 +39,7 @@ add_to_apps_screen = [
 
 after_install = "resto.setup.install.after_install"
 after_migrate = "resto.setup.install.after_migrate"
+after_app_install = "resto.setup.install.after_app_install"
 
 doc_events = {
 	# The Recipe tab on Item edits the item's Resto Recipe (see resto/resto/item_recipe.py).

@@ -28,6 +28,7 @@
   "column_break_pos",
   "screen_refresh_seconds",
   "reservation_hold_minutes",
+  "business_day_start_hour",
   "service_section",
   "service_charge_percent",
   "service_charge_account",
@@ -196,6 +197,13 @@
    "description": "A table shows as reserved this many minutes before the reservation time."
   },
   {
+   "default": "0",
+   "description": "Sales before this hour count for the day before, for a restaurant open past midnight (for example 4: a bill at 01:30 on Friday counts for Thursday). 0: the calendar day. Used by the demand reports.",
+   "fieldname": "business_day_start_hour",
+   "fieldtype": "Int",
+   "label": "Business Day Starts At (Hour)"
+  },
+  {
    "fieldname": "service_section",
    "fieldtype": "Section Break",
    "label": "Service Charge"
@@ -336,7 +344,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-22 12:00:00.000000",
+ "modified": "2026-11-22 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

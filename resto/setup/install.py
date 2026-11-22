@@ -3,13 +3,18 @@
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
-from resto.resto.utils import ALL_ROLES, CASHIER, HOST, MANAGER, WAITER
+from resto.resto.utils import ALL_ROLES, CASHIER, HOST, KITCHEN, MANAGER, WAITER
 
 # What the Resto roles need on standard doctypes: ERPNext reads Item and Customer while it builds
 # a bill, the cashier prints the receipt, the manager runs the reports on invoices and stock.
 # Employee is "select" only (the delivery driver link), so no HR data is readable.
 STANDARD_PERMISSIONS = {
-	"Item": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"]},
+	"Item": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"], KITCHEN: ["read"]},
+	# The kitchen runs the Prep Forecast: its Company and Item Group filters. A report checks
+	# read on the doctype of every Link column it shows (Item Group, UOM).
+	"Company": {KITCHEN: ["select"]},
+	"Item Group": {KITCHEN: ["read"], MANAGER: ["read"]},
+	"UOM": {KITCHEN: ["read"], MANAGER: ["read"]},
 	"Customer": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"]},
 	"Employee": {CASHIER: ["select"], MANAGER: ["select"]},
 	"Sales Invoice": {CASHIER: ["read", "print"], MANAGER: ["read", "print", "report"]},
@@ -96,6 +101,19 @@ def setup():
 	create_custom_fields(item_fields(), update=True)
 	set_new_setting_defaults()
 	grant_standard_permissions()
+	sync_translations()
+
+
+def after_app_install(app_name):
+	# An app installed after Resto may override its wording (POSNext's "Submit").
+	if app_name != "resto":
+		sync_translations()
+
+
+def sync_translations():
+	from resto.setup.translations import sync
+
+	sync()
 
 
 def grant_standard_permissions():

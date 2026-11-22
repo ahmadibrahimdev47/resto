@@ -132,6 +132,8 @@ class RestoAnalytics {
 	render_reports($el) {
 		const reports = [
 			"Resto Sales Analysis",
+			"Resto Demand Patterns",
+			"Resto Prep Forecast",
 			"Resto Menu Engineering",
 			"Resto Food Cost",
 			"Resto Kitchen Times",

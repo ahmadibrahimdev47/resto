@@ -40,10 +40,24 @@ def ensure_setup():
 		)
 		frappe.db.commit()
 	frappe.set_user("Administrator")
+	make_users()  # also on a site set up before a user was added
 	if frappe.db.exists("Resto Hall", "Main Hall"):
+		frappe.db.commit()
 		return
 	make_masters()
 	frappe.db.commit()
+
+
+def make_users():
+	for user, role in (
+		("waiter@resto.test", "Resto Waiter"),
+		("cashier@resto.test", "Resto Cashier"),
+		("kitchen@resto.test", "Resto Kitchen"),
+	):
+		if not frappe.db.exists("User", user):
+			u = frappe.get_doc({"doctype": "User", "email": user, "first_name": role, "send_welcome_email": 0})
+			u.insert(ignore_permissions=True)
+			u.add_roles(role)
 
 
 def doc(doctype, name=None, **values):
@@ -253,11 +267,6 @@ def make_masters():
 		applies_to=[{"item_code": "DISH-BURGER"}],
 	)
 
-	for user, role in (("waiter@resto.test", "Resto Waiter"), ("cashier@resto.test", "Resto Cashier")):
-		if not frappe.db.exists("User", user):
-			u = frappe.get_doc({"doctype": "User", "email": user, "first_name": role, "send_welcome_email": 0})
-			u.insert(ignore_permissions=True)
-			u.add_roles(role)
 
 
 def recipe(recipe_type, code, rows, par_qty=0):
