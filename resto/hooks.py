@@ -40,6 +40,7 @@ after_migrate = "resto.setup.install.after_migrate"
 doc_events = {
 	# The Recipe tab on Item edits the item's Resto Recipe (see resto/resto/item_recipe.py).
 	"Item": {
+		"before_insert": "resto.resto.item_variant.space_variant_code",
 		"onload": "resto.resto.item_recipe.onload",
 		"validate": "resto.resto.item_recipe.validate",
 		"on_update": "resto.resto.item_recipe.on_update",
