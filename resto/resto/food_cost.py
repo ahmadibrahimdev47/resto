@@ -1,32 +1,31 @@
 """Food cost % levels of a dish (recipe cost / selling price), set in Resto Settings.
 
-green up to `green`, yellow up to `yellow`, orange up to `orange`, red above that, and "over"
-at 100% or more (the dish costs more than it sells for). The same levels color the screens
-(recipe_status.js, through boot) and the warning shown when a recipe is saved.
+Green up to the target (Target Food Cost %), yellow up to target + the yellow step, orange up to
+target + the orange step, red above that, and "over" at 100% or more (the dish costs more than
+it sells for). The same levels color the screens (recipe_status.js, through boot) and the
+warning shown when a recipe is saved.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import flt
 
-DEFAULTS = {"green": 50, "yellow": 65, "orange": 80}
-FIELDS = {
-	"green": "food_cost_green_upto",
-	"yellow": "food_cost_yellow_upto",
-	"orange": "food_cost_orange_upto",
-}
+TARGET_FIELD = "food_cost_alert_percent"
+DEFAULT_TARGET = 35
+STEPS = {"yellow": 15, "orange": 30}
+STEP_FIELDS = {"yellow": "food_cost_yellow_step", "orange": "food_cost_orange_step"}
 
 
 def get_levels():
 	values = {}
 	if frappe.db.exists("DocType", "Resto Settings"):
-		for key, field in FIELDS.items():
-			values[key] = flt(frappe.db.get_single_value("Resto Settings", field))
-	levels = {key: values.get(key) or default for key, default in DEFAULTS.items()}
-	# A level left lower than the one before it falls back to the defaults as a whole.
-	if not levels["green"] < levels["yellow"] < levels["orange"] < 100:
-		levels = dict(DEFAULTS)
-	return levels
+		for field in (TARGET_FIELD, *STEP_FIELDS.values()):
+			values[field] = flt(frappe.db.get_single_value("Resto Settings", field))
+	target = values.get(TARGET_FIELD) or DEFAULT_TARGET
+	steps = {key: values.get(field) or STEPS[key] for key, field in STEP_FIELDS.items()}
+	if not 0 < steps["yellow"] < steps["orange"]:
+		steps = dict(STEPS)
+	return {"green": target, "yellow": target + steps["yellow"], "orange": target + steps["orange"]}
 
 
 def get_level(percent, levels=None):
@@ -41,7 +40,7 @@ def get_level(percent, levels=None):
 
 
 def warn(percent):
-	"""Non-blocking message when a dish's food cost is above the green level."""
+	"""Non-blocking message when a dish's food cost is above the target."""
 	if frappe.flags.in_import or frappe.flags.in_patch or frappe.flags.in_install:
 		return
 	levels = get_levels()
@@ -56,10 +55,8 @@ def warn(percent):
 			indicator="red",
 		)
 		return
-	# The level just below this one is the line it crossed.
-	crossed = {"yellow": "green", "orange": "yellow", "red": "orange"}[level]
-	message = _("Food cost is {0}% of the selling price, above {1}%.").format(
-		shown, "%g" % flt(levels[crossed], 1)
+	message = _("Food cost is {0}% of the selling price, above the {1}% target.").format(
+		shown, "%g" % flt(levels["green"], 1)
 	)
 	if level == "red":
 		frappe.msgprint(message, title=_("Food Cost"), indicator="red")

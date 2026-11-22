@@ -15,14 +15,13 @@
   "menu_item_group",
   "stock_section",
   "prepared_allow_negative",
-  "waste_account",
   "column_break_stock",
-  "food_cost_alert_percent",
+  "waste_account",
   "food_cost_levels_section",
-  "food_cost_green_upto",
-  "food_cost_yellow_upto",
+  "food_cost_alert_percent",
   "column_break_food_cost_levels",
-  "food_cost_orange_upto",
+  "food_cost_yellow_step",
+  "food_cost_orange_step",
   "pos_section",
   "pos_profile",
   "require_pos_shift",
@@ -130,39 +129,34 @@
   },
   {
    "default": "35",
-   "description": "Target food cost % of the restaurant as a whole (cost of food sold / sales), used in Resto Analytics and the Food Cost report.",
+   "description": "A dish whose recipe cost is at or below this percentage of its selling price is green. Also the target of the restaurant as a whole in Resto Analytics and the Food Cost report.",
    "fieldname": "food_cost_alert_percent",
    "fieldtype": "Percent",
-   "label": "Food Cost Alert %"
+   "label": "Target Food Cost %"
   },
   {
-   "collapsible": 1,
-   "description": "Colors of a dish's food cost % (recipe cost / selling price) in the recipe list, the recipe and item forms and Recipe Status. Above Orange it is red; 100% or more is marked with ⚠. Saving a dish above Green shows a warning; the save is not stopped.",
+   "description": "Colors of a dish's food cost % (recipe cost / selling price) in the recipe list, the recipe and item forms and Recipe Status: green up to the target, then yellow, then orange, then red; 100% or more is a full red bar marked with ⚠. Saving a dish above the target shows a warning; the save is not stopped.",
    "fieldname": "food_cost_levels_section",
    "fieldtype": "Section Break",
-   "label": "Dish Food Cost Levels"
-  },
-  {
-   "default": "50",
-   "fieldname": "food_cost_green_upto",
-   "fieldtype": "Percent",
-   "label": "Green up to %"
-  },
-  {
-   "default": "65",
-   "fieldname": "food_cost_yellow_upto",
-   "fieldtype": "Percent",
-   "label": "Yellow up to %"
+   "label": "Food Cost"
   },
   {
    "fieldname": "column_break_food_cost_levels",
    "fieldtype": "Column Break"
   },
   {
-   "default": "80",
-   "fieldname": "food_cost_orange_upto",
-   "fieldtype": "Percent",
-   "label": "Orange up to %"
+   "default": "15",
+   "description": "Yellow up to the target plus this many points.",
+   "fieldname": "food_cost_yellow_step",
+   "fieldtype": "Float",
+   "label": "Yellow: Points Above Target"
+  },
+  {
+   "default": "30",
+   "description": "Orange up to the target plus this many points; red above that.",
+   "fieldname": "food_cost_orange_step",
+   "fieldtype": "Float",
+   "label": "Orange: Points Above Target"
   },
   {
    "fieldname": "pos_section",

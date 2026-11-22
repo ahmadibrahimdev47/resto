@@ -110,10 +110,11 @@ resto.update_all_recipe_costs = function (after) {
 	});
 };
 
-// Food cost % with the levels of Resto Settings (resto/resto/food_cost.py, sent through boot):
+// Food cost % with the levels of Resto Settings: the target, then target + the yellow and orange
+// steps (resto/resto/food_cost.py, sent through boot):
 // green, yellow, orange, red; 100% or more is a full red bar marked as over.
 resto.food_cost_level = function (value) {
-	const levels = (frappe.boot.resto || {}).food_cost_levels || { green: 50, yellow: 65, orange: 80 };
+	const levels = (frappe.boot.resto || {}).food_cost_levels || { green: 35, yellow: 50, orange: 65 };
 	const v = flt(value);
 	if (v >= 100) return { color: "red", over: true };
 	for (const color of ["green", "yellow", "orange"]) {

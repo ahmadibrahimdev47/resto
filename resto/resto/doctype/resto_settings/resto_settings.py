@@ -31,14 +31,13 @@ class RestoSettings(Document):
 		self.validate_food_cost_levels()
 
 	def validate_food_cost_levels(self):
-		from resto.resto.food_cost import DEFAULTS, FIELDS
+		from resto.resto.food_cost import STEP_FIELDS, STEPS
 
-		for key, field in FIELDS.items():
+		for key, field in STEP_FIELDS.items():
 			if not flt(self.get(field)):
-				self.set(field, DEFAULTS[key])
-		green, yellow, orange = (flt(self.get(FIELDS[k])) for k in ("green", "yellow", "orange"))
-		if not green < yellow < orange < 100:
-			frappe.throw(_("Food cost levels must go up: Green, then Yellow, then Orange, all below 100%."))
+				self.set(field, STEPS[key])
+		if not flt(self.food_cost_yellow_step) < flt(self.food_cost_orange_step):
+			frappe.throw(_("Orange points above target must be more than Yellow points above target."))
 
 
 def get_settings():
