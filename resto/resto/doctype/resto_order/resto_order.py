@@ -13,7 +13,7 @@ CLOSED = ("Paid", "Cancelled", "Merged")
 NOT_SENT = "Not Sent"
 VOID = "Void"
 # Fields of a line that cannot change once it went to the kitchen (void and re-add instead).
-LOCKED_LINE_FIELDS = ("item_code", "qty", "rate", "modifiers_amount", "modifiers", "sides")
+LOCKED_LINE_FIELDS = ("item_code", "qty", "rate", "modifiers_amount", "modifiers", "sides", "sides_amount")
 SERVER_HEADER_FIELDS = (
 	"status",
 	"opened_at",
@@ -32,8 +32,8 @@ SERVER_HEADER_FIELDS = (
 )
 # Changes that make a printed bill wrong.
 BILL_FIELDS = ("discount_amount", "service_charge_percent", "delivery_fee", "customer", "net_total")
-BILL_LINE_FIELDS = ("qty", "rate", "modifiers_amount", "kitchen_status", "billed_qty")
-SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides_text", "sides_qty")
+BILL_LINE_FIELDS = ("qty", "rate", "modifiers_amount", "sides_amount", "kitchen_status", "billed_qty")
+SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides", "sides_text", "sides_qty", "sides_extras", "sides_amount")
 
 
 class RestoOrder(Document):
@@ -188,6 +188,7 @@ class RestoOrder(Document):
 			)
 
 	def validate_lines(self):
+		sides.clear_cache()
 		old_rows = {d.name: d for d in self.before_doc.items} if self.before_doc else {}
 		current = {d.name for d in self.items if d.name}
 
@@ -247,7 +248,7 @@ class RestoOrder(Document):
 	def calculate_totals(self):
 		total_qty = net_total = 0
 		for row in self.items:
-			row.amount = flt(flt(row.qty) * (flt(row.rate) + flt(row.modifiers_amount)), row.precision("amount"))
+			row.amount = flt(flt(row.qty) * (flt(row.rate) + flt(row.modifiers_amount) + flt(row.sides_amount)), row.precision("amount"))
 			if row.kitchen_status == VOID:
 				continue
 			total_qty += flt(row.qty)
@@ -357,7 +358,7 @@ def discount_base(doc):
 		frappe.db.sql("select sum(discount_amount) from `tabSales Invoice` where name in %s and docstatus = 1", (active,))[0][0]
 	)
 	unbilled = sum(
-		(flt(d.qty) - flt(d.billed_qty)) * (flt(d.rate) + flt(d.modifiers_amount)) for d in doc.unbilled_lines()
+		(flt(d.qty) - flt(d.billed_qty)) * (flt(d.rate) + flt(d.modifiers_amount) + flt(d.sides_amount)) for d in doc.unbilled_lines()
 	)
 	return unbilled, max(flt(doc.discount_amount) - given, 0)
 

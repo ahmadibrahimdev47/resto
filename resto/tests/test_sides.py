@@ -35,6 +35,12 @@ def setup_sides():
 		max_portions=2,
 		options=[{"item": "SAUCE-GARLIC", "portion_qty": 1}, {"item": "SAUCE-TAHINI", "portion_qty": 1}],
 	)
+	# Extra portions (charged only when Resto Settings says so) are billed as the sauce itself.
+	group = frappe.get_doc("Resto Side Group", GROUP)
+	for o in group.options:
+		o.extra_price = {"SAUCE-GARLIC": 4, "SAUCE-TAHINI": 5}[o.item]
+		o.billing_item = o.item
+	group.save(ignore_permissions=True)
 	dish("DISH-PLATE", [("RAW-BUN", 1)], [("SIDE-RICE", 0.2, None), ("SAUCE-GARLIC", 1, GROUP)])
 	dish("DISH-GRILL", [("RAW-BEEF", 0.2)], [("SAUCE-GARLIC", 1, GROUP)])
 	fx.receive(
@@ -123,6 +129,7 @@ class TestSides(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 0)
 		frappe.db.set_single_value("Resto Settings", "allow_side_changes", 1)
+		frappe.db.set_single_value("Resto Settings", "charge_extra_sides", 0)
 		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 		for name in frappe.get_all("Resto Order", filters={"status": ("in", ("Open", "Bill Requested"))}, pluck="name"):
 			frappe.db.set_value("Resto Order", name, "status", "Cancelled")
@@ -130,6 +137,11 @@ class TestSides(IntegrationTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		frappe.db.set_single_value("Resto Settings", "allow_side_changes", 0)
+		frappe.db.set_single_value("Resto Settings", "charge_extra_sides", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+
+	def charge(self):
+		frappe.db.set_single_value("Resto Settings", "charge_extra_sides", 1)
 		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 
 	# ------------------------------------------------------------------ helpers
@@ -278,9 +290,13 @@ class TestSides(IntegrationTestCase):
 		frappe.db.set_single_value("Resto Settings", "allow_side_changes", 0)
 		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 		self.assertRaises(frappe.ValidationError, self.change, order, [line], {GROUP: {"SAUCE-TAHINI": 1}})
+		# Sides typed on the form or over REST are not taken: only the floor screen sets them.
+		frappe.db.set_single_value("Resto Settings", "allow_side_changes", 1)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 		doc = frappe.get_doc("Resto Order", order)
 		doc.items[0].sides = json.dumps({GROUP: {"items": {"SAUCE-TAHINI": 1}}})
-		self.assertRaises(frappe.ValidationError, doc.save)
+		doc.save()
+		self.assertFalse(lines(order)[0].sides)
 
 	def test_sent_line_cannot_change(self):
 		order = self.order_with(("DISH-PLATE", 1))
@@ -473,3 +489,244 @@ class TestSides(IntegrationTestCase):
 		before = bins()
 		floor.void_line(order, line, "Dropped", cooked=1)
 		self.assertEqual(moved(before), {"RAW-BUN": 1, "SAUCE-TAHINI": 2})
+
+	# ------------------------------------------------------------------ paid extra portions
+
+	def test_extra_portions_are_their_own_priced_line(self):
+		self.charge()
+		order = self.order_with(("DISH-PLATE", 2))
+		line = lines(order)[0].name
+		# The recipe serves one garlic sauce; two tahini is one free swap and one extra per dish.
+		self.change(order, [line], {GROUP: {"SAUCE-TAHINI": 2}})
+		row = lines(order)[0]
+		self.assertEqual(flt(row.sides_amount), 5)
+		self.assertAlmostEqual(flt(row.amount), 2 * (120 + 5), 2)
+		floor.send_to_kitchen(order)
+		before = bins()
+		si = self.pay(order)
+		dish_row = next(r for r in si.items if r.item_code == "DISH-PLATE")
+		extra = [r for r in si.items if r.item_code == "SAUCE-TAHINI"]
+		self.assertEqual(len(extra), 1)
+		self.assertEqual((flt(extra[0].qty), flt(extra[0].rate)), (2, 5))
+		self.assertIn("Dish Plate", extra[0].description)
+		# The dish packs its free sauce only; the extra line deducts its own two.
+		self.assertEqual(packed(si, dish_row), {"RAW-BUN": 2, "SIDE-RICE": 0.4, "SAUCE-TAHINI": 2})
+		self.assertEqual(moved(before), {"RAW-BUN": 2, "SIDE-RICE": 0.4, "SAUCE-TAHINI": 4})
+		self.assertAlmostEqual(flt(si.net_total), 250, 2)
+		self.assert_accounts_match_stock(si)
+		costs = cost_by_invoice_row({"company": fx.COMPANY, "from_date": si.posting_date, "to_date": si.posting_date})
+		self.assertGreater(costs.get(extra[0].name, 0), 0)
+
+		# A full return takes the extra line back like any line.
+		ret = make_sales_return(si.name)
+		ret.insert(ignore_permissions=True)
+		ret.submit()
+		self.assertEqual(moved(before), {})
+		self.assertAlmostEqual(sle_value(ret.name), -sle_value(si.name), 2)
+
+	def test_swap_of_the_same_count_is_free(self):
+		self.charge()
+		order = self.order_with(("DISH-PLATE", 1))
+		line = lines(order)[0].name
+		self.change(order, [line], {GROUP: {"SAUCE-TAHINI": 1}})
+		self.assertEqual(flt(lines(order)[0].sides_amount), 0)
+		floor.send_to_kitchen(order)
+		si = self.pay(order)
+		self.assertEqual([r.item_code for r in si.items], ["DISH-PLATE"])
+
+	def test_extra_portions_are_free_when_not_charged(self):
+		order = self.order_with(("DISH-PLATE", 1))
+		line = lines(order)[0].name
+		self.change(order, [line], {GROUP: {"SAUCE-TAHINI": 2}})
+		self.assertEqual(flt(lines(order)[0].sides_amount), 0)
+		floor.send_to_kitchen(order)
+		si = self.pay(order)
+		self.assertEqual([r.item_code for r in si.items], ["DISH-PLATE"])
+		self.assertEqual(packed(si, si.items[0]).get("SAUCE-TAHINI"), 2)
+
+	def test_shared_extras_are_one_line(self):
+		self.charge()
+		order, plate, grill = self.shared_pair(3)  # the two recipes serve 2 sauces: 1 is extra
+		floor.send_to_kitchen(order)
+		before = bins()
+		si = self.pay(order)
+		extra = [r for r in si.items if r.item_code == "SAUCE-TAHINI"]
+		self.assertEqual(len(extra), 1)
+		self.assertAlmostEqual(flt(extra[0].qty), 1, 6)
+		self.assertAlmostEqual(flt(extra[0].amount), 5, 2)
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+		self.assertAlmostEqual(flt(si.net_total), 120 + 160 + 5, 2)
+		self.assert_accounts_match_stock(si)
+
+	def test_extra_price_needs_an_item_that_deducts_one_portion(self):
+		group = frappe.get_doc("Resto Side Group", GROUP)
+		row = next(o for o in group.options if o.item == "SAUCE-TAHINI")
+		row.portion_qty = 2  # one portion is two stock units: the stock item would deduct one
+		self.assertRaises(frappe.ValidationError, group.save)
+		group.reload()
+		row = next(o for o in group.options if o.item == "SAUCE-TAHINI")
+		row.billing_item = None
+		self.assertRaises(frappe.ValidationError, group.save)
+
+	def whole_nos(self):
+		frappe.db.set_value("UOM", "Nos", "must_be_whole_number", 1)
+		frappe.clear_document_cache("UOM", "Nos")
+		self.addCleanup(frappe.clear_document_cache, "UOM", "Nos")
+		self.addCleanup(frappe.db.set_value, "UOM", "Nos", "must_be_whole_number", 0)
+
+	def test_shared_swap_of_the_same_count_is_free_in_whole_units(self):
+		self.charge()
+		self.whole_nos()
+		order = self.order_with(("DISH-PLATE", 1), ("DISH-GRILL", 1))
+		plate, grill = (d.name for d in lines(order))
+		# The two recipes serve 2 sauces together: 1 garlic + 1 tahini is a swap, not an extra.
+		self.change(order, [plate, grill], {GROUP: {"SAUCE-GARLIC": 1, "SAUCE-TAHINI": 1}})
+		rows = lines(order)
+		self.assertEqual([flt(d.sides_amount) for d in rows], [0, 0])
+		# Each dish gets one sauce, not both on the first.
+		per_line = [sum((json.loads(d.sides)[GROUP]["items"]).values()) for d in rows]
+		self.assertEqual(per_line, [1, 1])
+		floor.send_to_kitchen(order)
+		si = self.pay(order)
+		self.assertEqual(sorted(r.item_code for r in si.items), ["DISH-GRILL", "DISH-PLATE"])
+
+	def test_shared_extras_in_whole_units_can_be_billed_line_by_line(self):
+		self.charge()
+		self.whole_nos()
+		order, plate, grill = self.shared_pair(3)  # 1 extra tahini for the two dishes
+		rows = {d.name: d for d in lines(order)}
+		self.assertEqual(sum(flt(d.sides_amount) for d in rows.values()), 5)
+		floor.send_to_kitchen(order)
+		before = bins()
+		# Bill each dish on its own invoice: every extra part is whole, so neither bill is stuck.
+		first = self.pay(order, {plate: 1})
+		second = self.pay(order, {grill: 1})
+		extra = [r for si in (first, second) for r in si.items if r.item_code == "SAUCE-TAHINI"]
+		self.assertEqual([flt(r.qty) for r in extra], [1])
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+		self.assertAlmostEqual(flt(first.net_total) + flt(second.net_total), 120 + 160 + 5, 2)
+
+	def test_billed_line_of_a_set_keeps_what_it_billed(self):
+		self.charge()
+		order, plate, grill = self.shared_pair(3)
+		floor.send_to_kitchen(order)
+		before_amount = {d.name: flt(d.sides_amount) for d in lines(order)}
+		si = self.pay(order, {plate: 1})
+		floor.void_line(order, grill, "Changed mind", cooked=0)
+		row = next(d for d in lines(order) if d.name == plate)
+		self.assertEqual(flt(row.sides_amount), before_amount[plate])
+		self.assertEqual(flt(row.billed_qty), 1)
+		self.assertTrue(si.docstatus == 1)
+
+	def test_void_after_cooking_wastes_the_extra_portions(self):
+		self.charge()
+		order = self.order_with(("DISH-PLATE", 1))
+		line = lines(order)[0].name
+		self.change(order, [line], {GROUP: {"SAUCE-TAHINI": 2}, RICE: {}})
+		self.assertEqual(flt(lines(order)[0].sides_amount), 5)
+		floor.send_to_kitchen(order)
+		before = bins()
+		floor.void_line(order, line, "Dropped", cooked=1)
+		self.assertEqual(moved(before), {"RAW-BUN": 1, "SAUCE-TAHINI": 2})
+
+	def test_part_bill_of_a_line_with_extras(self):
+		self.charge()
+		order = self.order_with(("DISH-PLATE", 2))
+		line = lines(order)[0].name
+		self.change(order, [line], {GROUP: {"SAUCE-TAHINI": 2}})
+		floor.send_to_kitchen(order)
+		before = bins()
+		first = self.pay(order, {line: 1})
+		extra = [r for r in first.items if r.item_code == "SAUCE-TAHINI"]
+		self.assertEqual([(flt(r.qty), flt(r.rate)) for r in extra], [(1, 5)])
+		self.assertAlmostEqual(flt(first.net_total), 125, 2)
+		second = self.pay(order)
+		self.assertAlmostEqual(flt(second.net_total), 125, 2)
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 4)
+
+	def test_sent_line_keeps_its_extra_price(self):
+		self.charge()
+		order = self.order_with(("DISH-PLATE", 1))
+		line = lines(order)[0].name
+		self.change(order, [line], {GROUP: {"SAUCE-TAHINI": 2}})
+		floor.send_to_kitchen(order)
+		row = frappe.get_all("Resto Side Option", filters={"parent": GROUP, "item": "SAUCE-TAHINI"}, fields=["name", "extra_price"])[0]
+		frappe.db.set_value("Resto Side Option", row.name, "extra_price", 9)
+		frappe.clear_document_cache("Resto Side Group", GROUP)
+		frappe.db.set_single_value("Resto Settings", "charge_extra_sides", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		try:
+			si = self.pay(order)
+			extra = [r for r in si.items if r.item_code == "SAUCE-TAHINI"]
+			self.assertEqual([(flt(r.qty), flt(r.rate)) for r in extra], [(1, 5)])
+		finally:
+			frappe.db.set_value("Resto Side Option", row.name, "extra_price", row.extra_price)
+			frappe.clear_document_cache("Resto Side Group", GROUP)
+
+	def test_recipe_side_in_another_portion_is_not_charged(self):
+		self.charge()
+		fx.item("DISH-DOUBLE", stock=0, group="Resto Food")
+		fx.price("DISH-DOUBLE", 150)
+		dish("DISH-DOUBLE", [("RAW-BUN", 1)], [("SAUCE-GARLIC", 2, GROUP)])  # two cups, the group's portion is one
+		slot = sides.slots("DISH-DOUBLE")[GROUP]
+		self.assertFalse(slot.price)
+		order = self.order_with(("DISH-DOUBLE", 1))
+		line = lines(order)[0].name
+		self.change(order, [line], {GROUP: {"SAUCE-GARLIC": 2}})  # four cups, all on the dish
+		self.assertEqual(flt(lines(order)[0].sides_amount), 0)
+		self.assertEqual(json.loads(lines(order)[0].sides_qty), {"SAUCE-GARLIC": 4})
+
+	def test_billing_item_must_be_the_option_itself(self):
+		group = frappe.get_doc("Resto Side Group", GROUP)
+		row = next(o for o in group.options if o.item == "SAUCE-TAHINI")
+		row.billing_item = "SAUCE-GARLIC"  # would deduct garlic for tahini served
+		self.assertRaises(frappe.ValidationError, group.save)
+		self.assertIsNone(sides.extra_billing_error("SAUCE-TAHINI", 1, "SAUCE-TAHINI"))
+		self.assertTrue(sides.extra_billing_error("SAUCE-TAHINI", 1, "SAUCE-GARLIC"))
+
+	def test_line_whose_shared_sides_are_all_extras_packs_none_on_the_dish(self):
+		self.charge()
+		order = self.order_with(("DISH-PLATE", 1))
+		row = lines(order)[0]
+		row.kitchen_status = "Not Sent"
+		# Its share of a set is one tahini, all of it above what the set serves free.
+		choice = {
+			GROUP: {"items": {"SAUCE-TAHINI": 1}, "x": {"SAUCE-TAHINI": 1}, "set": "t1", "n": 2, "q": 1, "t": {"SAUCE-TAHINI": 3}, "c": 1},
+			RICE: {"items": {"SIDE-RICE": 1}},
+		}
+		sides._apply(row, sides.clean_choice(row.item_code, choice, row.item_name, strict=False))
+		self.assertEqual(json.loads(row.sides_qty), {"SIDE-RICE": 0.2})
+		self.assertEqual({k: flt(v["portions"]) for k, v in json.loads(row.sides_extras).items()}, {"SAUCE-TAHINI": 1})
+		choice[RICE] = {"items": {}}
+		sides._apply(row, sides.clean_choice(row.item_code, choice, row.item_name, strict=False))
+		self.assertEqual(row.sides_qty, "{}")  # stored: the dish packs no side, the extra line has the tahini
+
+	def test_quantity_change_after_a_shared_dish_was_billed(self):
+		self.charge()
+		self.whole_nos()
+		order = self.order_with(("DISH-PLATE", 1), ("DISH-GRILL", 2))
+		plate, grill = (d.name for d in lines(order))
+		self.change(order, [plate, grill], {GROUP: {"SAUCE-TAHINI": 4}})
+		floor.update_line(order, grill, hold=1)
+		floor.send_to_kitchen(order)
+		self.pay(order, {plate: 1})
+		floor.update_line(order, grill, qty=1)
+		row = next(d for d in lines(order) if d.name == grill)
+		self.assertFalse(row.sides)  # back to its recipe: no fraction of a cup is left on it
+		floor.update_line(order, grill, hold=0)
+		floor.send_to_kitchen(order)
+		si = self.pay(order)
+		self.assertEqual(packed(si, si.items[0]).get("SAUCE-GARLIC"), 1)
+
+	def test_extra_portions_round_down_to_whole_units(self):
+		self.charge()
+		self.whole_nos()
+		order = self.order_with(("DISH-PLATE", 2))
+		row = lines(order)[0]
+		row.kitchen_status = "Not Sent"
+		# 1.5 tahini per dish on two dishes: 1 free each, 1 extra cup for the line, whole.
+		sides._apply(row, sides.clean_choice(row.item_code, {GROUP: {"items": {"SAUCE-TAHINI": 1.5}}}, row.item_name, strict=False))
+		self.assertAlmostEqual(flt(json.loads(row.sides_extras)["SAUCE-TAHINI"]["portions"]) * 2, 1, 6)
+		row.qty = 3
+		sides._apply(row, sides.clean_choice(row.item_code, {GROUP: {"items": {"SAUCE-TAHINI": 1.5}}}, row.item_name, strict=False))
+		self.assertAlmostEqual(flt(json.loads(row.sides_extras)["SAUCE-TAHINI"]["portions"]) * 3, 1, 6)  # 1.5 → 1 cup billed, the half free

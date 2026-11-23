@@ -324,20 +324,44 @@ class SetupCheck:
 				_("Selling Settings stops a sale below the valuation rate: a free or heavily discounted stock item blocks the bill at the cashier."),
 			)
 		if not cint(self.s.get("allow_side_changes")):
+			if cint(self.s.get("charge_extra_sides")):
+				self.warn(area, _("Extra portions are charged only when staff may change the sides served; that setting is off."))
 			return
 		from resto.resto import sides
 
-		odd = []
+		sides.clear_cache()
+		charge = cint(self.s.get("charge_extra_sides"))
+		priced_groups = set(frappe.get_all("Resto Side Option", filters={"extra_price": (">", 0)}, pluck="parent")) if charge else set()
+		odd, free_portion = [], []
 		for recipe in frappe.get_all("Resto Recipe", {"is_active": 1, "recipe_type": "Menu Dish"}, pluck="item"):
-			if not sides.slots(recipe):
+			dish_slots = sides.slots(recipe)
+			if not dish_slots:
 				continue
 			try:
 				sides.dish_components(recipe, {})
 			except frappe.ValidationError:
 				frappe.clear_last_message()
 				odd.append(recipe)
+			for slot in dish_slots.values():
+				if slot.group in priced_groups and not sides._priced_slot_ok(slot):
+					free_portion.append(f"{recipe}: {slot.label}")
 		if odd:
 			self.error(area, _("Dishes whose recipe bundle differs from the recipe; their sides cannot be changed until the recipe is saved again: {0}").format(short(odd)))
+		if free_portion:
+			self.warn(
+				area,
+				_("Dishes whose recipe serves a side in another quantity than one portion of its side group, so their extra portions are not charged: {0}").format(short(free_portion)),
+			)
+		if charge:
+			bad_billing = []
+			for o in frappe.get_all("Resto Side Option", filters={"extra_price": (">", 0)}, fields=["parent", "item", "portion_qty", "billing_item"]):
+				if not o.billing_item or sides.extra_billing_error(o.item, o.portion_qty, o.billing_item):
+					bad_billing.append(f"{o.parent}: {o.item}")
+			if bad_billing:
+				self.error(
+					area,
+					_("Priced side options whose billing item cannot be sold or does not deduct exactly one portion, so their extra portions are not charged: {0}").format(short(bad_billing)),
+				)
 		serial = frappe.db.sql(
 			"""select distinct o.item from `tabResto Side Option` o join `tabItem` i on i.name = o.item
 			where i.has_serial_no = 1 or i.has_batch_no = 1""",

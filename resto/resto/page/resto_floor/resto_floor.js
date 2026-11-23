@@ -394,6 +394,7 @@ class RestoFloor {
 					<b>${esc(d.item_name)}</b>
 					${d.modifiers_text ? `<div class="rf-mod">${esc(d.modifiers_text)}</div>` : ""}
 					${d.sides_text ? `<div class="rf-mod"><b>${esc(d.sides_text)}</b></div>` : ""}
+					${d.extras_text ? `<div class="rf-mod">${esc(d.extras_text)}</div>` : ""}
 					${d.notes ? `<div class="rf-mod">✎ ${esc(d.notes)}</div>` : ""}
 					<div class="rf-lmeta">
 						<span class="rf-status s-${(d.kitchen_status || "").replace(/ /g, "")}">${__(d.kitchen_status, null, "Resto")}</span>
@@ -589,17 +590,53 @@ class RestoFloor {
 			},
 		];
 		r.slots.forEach((s, si) => {
-			fields.push({ fieldtype: "Section Break", label: `${esc(s.label)} · ${__("max {0}", [s.max])}${s.shared ? " · " + __("shared", null, "Resto") : ""}` });
+			const free = s.free ? " · " + __("{0} free", [s.free]) : "";
+			fields.push({ fieldtype: "Section Break", label: `${esc(s.label)} · ${__("max {0}", [s.max])}${free}${s.shared ? " · " + __("shared", null, "Resto") : ""}` });
 			s.options.forEach((opt, oi) => {
 				if (s.single && s.options.length === 1) {
 					// A side without a group: served or not.
 					fields.push({ fieldname: `s_${si}_${oi}`, fieldtype: "Check", label: esc(opt.item_name), default: opt.total > 0 ? 1 : 0 });
 				} else {
-					fields.push({ fieldname: `s_${si}_${oi}`, fieldtype: "Float", label: esc(opt.item_name), default: opt.total, non_negative: 1 });
+					// An extra portion's price, when portions above the recipe's are charged.
+					const price = opt.price ? ` (+${money(opt.price)} ${__("per extra portion")})` : "";
+					fields.push({
+						fieldname: `s_${si}_${oi}`,
+						fieldtype: "Float",
+						label: esc(opt.item_name) + price,
+						default: opt.total,
+						non_negative: 1,
+						onchange: () => show_extras(),
+					});
 				}
 			});
 		});
-		const d = new frappe.ui.Dialog({
+		const priced = r.slots.some((s) => s.free && s.options.some((opt) => opt.price));
+		if (priced) fields.push({ fieldtype: "HTML", fieldname: "extras_preview" });
+		// What the extra portions will add, worked out as the server does: the recipe's own sides
+		// are free first, then the dearest options (sides.py split_extras). For several dishes the
+		// set's total is shared out, so this is the amount for all of them together.
+		let d = null;
+		const show_extras = () => {
+			if (!priced || !d) return;
+			let total = 0;
+			r.slots.forEach((s, si) => {
+				if (!s.free) return;
+				let left = flt(s.free);
+				s.options
+					.map((opt, oi) => ({ ...opt, n: flt(d.get_value(`s_${si}_${oi}`)) }))
+					.sort((a, b) => (b.default || 0) - (a.default || 0) || flt(b.price) - flt(a.price) || (a.item < b.item ? -1 : a.item > b.item ? 1 : 0))
+					.forEach((opt) => {
+						const take = Math.min(opt.n, Math.max(left, 0));
+						left -= take;
+						if (opt.price) total += (opt.n - take) * flt(opt.price);
+					});
+			});
+			if (r.per_dish) total *= flt(r.qty) || 1;
+			d.fields_dict.extras_preview.$wrapper.html(
+				`<p><b>${__("Extra portions to charge: {0}", [money(total)])}</b>${r.per_dish && flt(r.qty) > 1 ? ` <span class="text-muted">(${__("for {0} dishes", [r.qty])})</span>` : ""}</p>`
+			);
+		};
+		d = new frappe.ui.Dialog({
 			title: esc(r.title || __("Change Sides")),
 			fields,
 			primary_action_label: __("Save"),
@@ -623,6 +660,7 @@ class RestoFloor {
 			},
 		});
 		d.show();
+		show_extras();
 		// One tap selects the number, so typing replaces it.
 		d.$wrapper.find("input").on("focus", function () { this.select && this.select(); });
 	}
@@ -814,7 +852,7 @@ class RestoFloor {
 		const fields = open.map((d, i) => ({
 			fieldname: `l_${i}`,
 			fieldtype: "Float",
-			label: `${esc(d.item_name)}${d.modifiers_text ? " (" + esc(d.modifiers_text) + ")" : ""} · ${money(d.rate + (d.modifiers_amount || 0))} · ${__("left")} ${d.qty - (d.billed_qty || 0)}`,
+			label: `${esc(d.item_name)}${d.modifiers_text ? " (" + esc(d.modifiers_text) + ")" : ""} · ${money(d.rate + (d.modifiers_amount || 0) + (d.sides_amount || 0))} · ${__("left")} ${d.qty - (d.billed_qty || 0)}`,
 			default: 0,
 		}));
 		const d = new frappe.ui.Dialog({

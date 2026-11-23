@@ -26,6 +26,7 @@
   "pos_profile",
   "require_pos_shift",
   "allow_side_changes",
+  "charge_extra_sides",
   "column_break_pos",
   "screen_refresh_seconds",
   "reservation_hold_minutes",
@@ -185,6 +186,14 @@
    "fieldtype": "Check",
    "label": "Let Staff Change the Sides Served",
    "description": "On the floor screen the waiter or cashier can change a dish's sides (Served With) for one dish or for several dishes together: swap a side for another option of its side group, or change its portions. What is served is deducted from stock and costed on the dish. Off: every dish is served with its recipe's sides."
+  },
+  {
+   "default": "0",
+   "fieldname": "charge_extra_sides",
+   "fieldtype": "Check",
+   "depends_on": "eval:doc.allow_side_changes",
+   "label": "Charge Portions Above the Recipe's Sides",
+   "description": "Portions of a side above what the dish's recipe serves become their own line on the customer's invoice, at the side option's extra price; their stock and cost belong to that line. A swap for another option of the same count is not an extra. Off: extra portions are free and costed on the dish."
   },
   {
    "fieldname": "column_break_pos",
@@ -352,7 +361,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-22 18:00:00.000000",
+ "modified": "2026-11-22 22:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

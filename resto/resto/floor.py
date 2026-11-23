@@ -230,6 +230,7 @@ def get_order(order):
 	data["sides_enabled"] = int(sides.enabled())
 	for d in data.get("items") or []:
 		d["has_sides"] = int(bool(data["sides_enabled"] and d.get("kitchen_status") == "Not Sent" and sides.slots(d.get("item_code"))))
+		d["extras_text"] = sides.extras_text(d)
 	return data
 
 
@@ -339,6 +340,8 @@ def get_sides(order, lines, together=0):
 		frappe.throw(_("Changing the sides served is off in Restaurant Settings"))
 	doc = _get_order(order)
 	lines = _loads(lines, [])
+	# Extra portions above the recipe's sides are charged: the screen shows their price.
+	charge = sides.charge_extras()
 	if len(lines) == 1 and not cint(together):
 		(row,) = sides._unsent_rows(doc, lines)
 		choice = sides.line_choice(row)
@@ -350,14 +353,37 @@ def get_sides(order, lines, together=0):
 					"key": key,
 					"label": slot.label,
 					"max": slot.max,
+					"free": sum(slot.default.values()) if charge and slot.price else 0,
 					"single": int(not slot.group and slot.max == 1),
 					"shared": bool(choice.get(key, {}).get("set")),
-					"options": [{"item": i, "item_name": slot.names.get(i, i), "total": flt(chosen.get(i), 6)} for i in slot.portion],
+					"options": [
+						{
+							"item": i,
+							"item_name": slot.names.get(i, i),
+							"total": flt(chosen.get(i), 6),
+							"price": slot.price.get(i, 0) if charge else 0,
+							"default": int(i in slot.default),
+						}
+						for i in slot.portion
+					],
 				}
 			)
-		return {"per_dish": 1, "title": f"{row.item_name} × {sides._num(row.qty)}", "slots": result}
+		return {"per_dish": 1, "qty": flt(row.qty), "title": f"{row.item_name} × {sides._num(row.qty)}", "slots": result}
 	rows = sides._unsent_rows(doc, lines)
-	return {"per_dish": 0, "title": "، ".join(f"{d.item_name} × {sides._num(d.qty)}" for d in rows), "slots": sides.combined(doc, lines)}
+	slots_ = sides.combined(doc, lines)
+	if charge:
+		for c in slots_:
+			having = [d for d in rows if c["key"] in sides.slots(d.item_code)]
+			prices, defaults = {}, set()
+			for d in having:
+				for i, p in sides.slots(d.item_code)[c["key"]].price.items():
+					prices.setdefault(i, p)
+				defaults.update(sides.slots(d.item_code)[c["key"]].default)
+			c["free"] = sum(sum(sides.slots(d.item_code)[c["key"]].default.values()) * flt(d.qty) for d in having) if prices else 0
+			for o in c["options"]:
+				o["price"] = prices.get(o["item"], 0)
+				o["default"] = int(o["item"] in defaults)
+	return {"per_dish": 0, "title": "، ".join(f"{d.item_name} × {sides._num(d.qty)}" for d in rows), "slots": slots_}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -452,6 +478,10 @@ def _waste_for_void(order, row, reason):
 		for mod in json.loads(row.modifiers or "[]"):
 			if flt(mod.get("price")) and mod.get("item"):
 				items.append({"item_code": mod["item"], "qty": flt(row.qty), "reason": "Other", "note": reason})
+		# Extra portions were plated with it: their own item, as they would have been billed.
+		for e in json.loads(row.get("sides_extras") or "{}").values():
+			if flt(e.get("portions")) > 0 and e.get("item"):
+				items.append({"item_code": e["item"], "qty": flt(e["portions"]) * flt(row.qty), "reason": "Other", "note": reason})
 		waste = frappe.get_doc(
 			{
 				"doctype": "Resto Waste",

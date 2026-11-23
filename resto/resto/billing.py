@@ -87,6 +87,7 @@ def build_invoice(order, lines=None):
 
 	prices = []  # (rate) per appended invoice row, to re-apply after ERPNext fills defaults
 	food_total = 0
+	extras = {}  # (item, price, set or line) -> extra portions billed apart (sides.py)
 	for row, qty in to_bill:
 		description = row.item_name
 		if row.modifiers_text:
@@ -108,6 +109,29 @@ def build_invoice(order, lines=None):
 				_append_item(si, mod["item"], qty, flt(mod["price"]), f"{mod['option']} - {row.item_name}")
 				prices.append(flt(mod["price"]))
 				food_total += qty * flt(mod["price"])
+		# Extra portions above the recipe's sides, as frozen when the line went to the kitchen: their
+		# own line at the option's extra price, deducting their own item (sides.py, D-191). Extras
+		# of a choice shared by several dishes are one line.
+		for e in json.loads(row.get("sides_extras") or "{}").values():
+			extra_qty = flt(e.get("portions")) * flt(qty)
+			if extra_qty <= EPS or not flt(e.get("price")):
+				continue
+			x = extras.setdefault((e["item"], flt(e["price"]), e.get("set") or row.name), {"qty": 0, "name": e.get("name") or e["item"], "dishes": []})
+			x["qty"] += extra_qty
+			if row.item_name not in x["dishes"]:
+				x["dishes"].append(row.item_name)
+	for (item_code, price, _key), x in extras.items():
+		qty = flt(x["qty"], 6)
+		sides.check_extra_item(item_code)
+		if sides._whole(item_code) and abs(qty - round(qty)) > 1e-6:
+			frappe.throw(
+				_("{0}: the extra {1} is counted in whole units, so bill all of these dishes together").format(
+					frappe.bold(sides._sep().join(x["dishes"])), frappe.bold(x["name"])
+				)
+			)
+		_append_item(si, item_code, qty, price, sides._t("{0} extra - {1}", x["name"], sides._sep().join(x["dishes"])))
+		prices.append(price)
+		food_total += qty * price
 
 	# The fee goes on one invoice: the first one that is not cancelled.
 	fee_billed = bool(

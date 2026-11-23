@@ -11,7 +11,11 @@
   "item_name",
   "column_break_1",
   "portion_qty",
-  "uom"
+  "uom",
+  "extra_section",
+  "extra_price",
+  "column_break_2",
+  "billing_item"
  ],
  "fields": [
   {
@@ -51,13 +55,38 @@
    "fetch_from": "item.stock_uom",
    "in_list_view": 1,
    "label": "Stock UOM"
+  },
+  {
+   "fieldname": "extra_section",
+   "fieldtype": "Section Break",
+   "label": "Extra Portions"
+  },
+  {
+   "fieldname": "extra_price",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Price of an Extra Portion",
+   "description": "Charged for each portion above the dish's recipe sides, when Restaurant Settings charges them. Empty: extra portions are free."
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "billing_item",
+   "fieldtype": "Link",
+   "options": "Item",
+   "label": "Billed As Item",
+   "depends_on": "eval:doc.extra_price",
+   "mandatory_depends_on": "eval:doc.extra_price",
+   "description": "The item on the customer's invoice for the extra portions; its own stock or recipe is deducted for them. The option's item itself when one portion is one stock unit, or a menu dish with a recipe of one portion."
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-22 18:00:00.000000",
+ "modified": "2026-11-22 22:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Side Option",
