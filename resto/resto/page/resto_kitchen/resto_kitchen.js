@@ -15,7 +15,13 @@ class RestoKitchen {
 		this.wrapper = wrapper;
 		this.station = localStorage.getItem("resto_kds_station") || "";
 		this.known = null;
+		this.print_methods = {};
+		// This screen prints new tickets by itself (stations set to print automatically from the
+		// browser): kept per browser, so only the computer with the kitchen printer turns it on.
+		this.autoprint = localStorage.getItem("resto_kds_autoprint") === "1";
 		this.page.add_inner_button(__("Refresh"), () => this.refresh());
+		this.$autoprint = this.page.add_inner_button("", () => this.toggle_autoprint());
+		this.show_autoprint();
 		this.page.add_inner_button(__("Full Screen"), () => document.documentElement.requestFullscreen && document.documentElement.requestFullscreen());
 		this.station_field = this.page.add_field({
 			fieldname: "station",
@@ -58,7 +64,9 @@ class RestoKitchen {
 				if (this.known && [...names].some((n) => !this.known.has(n))) this.beep();
 				this.known = names;
 				this.tickets = data.tickets;
+				this.print_methods = data.print_methods || {};
 				this.render();
+				if (this.autoprint && data.to_print) this.claim_prints();
 				const seconds = data.refresh_seconds || 15;
 				if (seconds !== this.poll_seconds) {
 					this.poll_seconds = seconds;
@@ -116,7 +124,7 @@ class RestoKitchen {
 						<div class="rk-sub">${isVoid ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${esc(t.waiter || "")} · ${__(t.status, null, "Resto")}</div>
 						<ul>${items}</ul>
 						<div class="rk-actions">${btn}
-							<button class="btn btn-default btn-sm" data-print="1">${__("Print", null, "Resto")}</button></div>
+							${this.print_methods[t.station] === "No Printing" ? "" : `<button class="btn btn-default btn-sm" data-print="1">${__("Print", null, "Resto")}</button>`}</div>
 					</div>`;
 				})
 				.join("")
@@ -134,10 +142,85 @@ class RestoKitchen {
 			frappe.call({
 				method: "resto.resto.kitchen.kds_print",
 				args: { ticket: name },
-				callback: () => frappe.show_alert({ message: __("Sent to printer"), indicator: "green" }),
-				error: () =>
-					window.open(frappe.urllib.get_full_url(`/printview?doctype=Resto%20Kitchen%20Ticket&name=${encodeURIComponent(name)}&format=Resto%20Kitchen%20Ticket&no_letterhead=1&trigger_print=1`)),
+				callback: (r) => {
+					const res = r.message || {};
+					if (res.server) frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
+					else this.print_pages(res.pages || []);
+				},
 			});
+		});
+	}
+
+	show_autoprint() {
+		this.$autoprint.html(`${this.autoprint ? "☑" : "☐"} ${__("This Screen Prints Tickets")}`);
+	}
+
+	toggle_autoprint() {
+		this.autoprint = !this.autoprint;
+		localStorage.setItem("resto_kds_autoprint", this.autoprint ? "1" : "0");
+		this.show_autoprint();
+		frappe.show_alert({
+			message: this.autoprint
+				? __("This screen now prints new tickets of the stations that print automatically from the browser")
+				: __("This screen no longer prints tickets by itself"),
+			indicator: this.autoprint ? "green" : "orange",
+		});
+		if (this.autoprint) this.refresh();
+	}
+
+	async claim_prints() {
+		// One claim at a time: each ticket is claimed once on the server, so a second screen never
+		// prints it again, and a ticket missed while this screen was closed prints when it opens.
+		if (this._claiming) return;
+		this._claiming = true;
+		try {
+			for (let round = 0; round < 5; round++) {
+				const r = await frappe.call({ method: "resto.resto.kitchen.kds_claim_prints", args: { station: this.station }, freeze: false });
+				const tickets = r.message || [];
+				for (const t of tickets) await this.print_pages(t.pages || []);
+				if (tickets.length < 10) break;
+			}
+		} catch (e) {
+			// The next refresh tries again; a ticket already claimed can be printed with its button.
+		} finally {
+			this._claiming = false;
+		}
+	}
+
+	async print_pages(pages) {
+		for (const html of pages) await this.print_html(html);
+	}
+
+	print_html(html) {
+		// One print job per copy. Chrome started with --kiosk-printing prints it on the default
+		// printer without a dialog; otherwise the browser's print window opens.
+		return new Promise((resolve) => {
+			const frame = document.createElement("iframe");
+			frame.setAttribute("sandbox", "allow-same-origin allow-modals");
+			frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+			let done = false;
+			const finish = () => {
+				if (done) return;
+				done = true;
+				setTimeout(() => {
+					frame.remove();
+					resolve();
+				}, 1000);
+			};
+			frame.onload = () => {
+				setTimeout(() => {
+					try {
+						frame.contentWindow.focus();
+						frame.contentWindow.print();
+					} catch (e) {
+						// printing is not available here
+					}
+					finish();
+				}, 300);
+			};
+			setTimeout(finish, 15000);
+			frame.srcdoc = html;
+			document.body.appendChild(frame);
 		});
 	}
 
