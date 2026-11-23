@@ -704,7 +704,9 @@ class TestSides(IntegrationTestCase):
 	def test_quantity_change_after_a_shared_dish_was_billed(self):
 		self.charge()
 		self.whole_nos()
-		order = self.order_with(("DISH-PLATE", 1), ("DISH-GRILL", 2))
+		# Dine in: paying a takeaway sends every line to the kitchen, held ones too.
+		order = floor.create_order(order_type="Dine In", table="T6", guests=2)
+		floor.add_items(order, json.dumps([{"item_code": "DISH-PLATE", "qty": 1}, {"item_code": "DISH-GRILL", "qty": 2}]))
 		plate, grill = (d.name for d in lines(order))
 		self.change(order, [plate, grill], {GROUP: {"SAUCE-TAHINI": 4}})
 		floor.update_line(order, grill, hold=1)
