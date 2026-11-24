@@ -508,6 +508,30 @@ def _members(order):
 	return out
 
 
+def _mark_moved(order, set_id, key):
+	"""A voided line's share of a set went to the lines still in it (they deduct it now): marked on the
+	voided line, so a waste posted for it later leaves that share out."""
+	for d in order.items:
+		if d.kitchen_status != VOID or not d.sides:
+			continue
+		choice = _loads(d.sides) or {}
+		entry = choice.get(key)
+		if isinstance(entry, dict) and entry.get("set") == set_id and not entry.get("moved"):
+			entry["moved"] = 1
+			d.sides = _dumps(choice)
+
+
+def shared_slots(row):
+	"""{slot key: set id} of the line's shared choices."""
+	return {k: e["set"] for k, e in (_loads(row.get("sides")) or {}).items() if isinstance(e, dict) and e.get("set")}
+
+
+def slot_qty(row, key):
+	"""{item: stock qty per dish} that one slot of the line serves, extra portions included."""
+	entry = (_loads(row.get("sides")) or {}).get(key)
+	return qty_per_dish(row.item_code, {key: entry}) if isinstance(entry, dict) else {}
+
+
 def check_shared(order):
 	"""A shared choice whose lines changed (one removed, voided or left it, or a quantity changed).
 
@@ -564,6 +588,7 @@ def check_shared(order):
 			sent = any(d.kitchen_status != NOT_SENT for d in rows)
 			charge = any(e.get("c") for e in entries.values()) if sent else charge_extras()
 			shares = _share(rows, key, entries[rows[0].name].get("t") or {}, set_id, strict=False, charge=charge)
+			_mark_moved(order, set_id, key)
 			frappe.msgprint(
 				_("The shared {0} was shared again over {1}").format(frappe.bold(label), ", ".join(d.item_name for d in rows)),
 				alert=True,

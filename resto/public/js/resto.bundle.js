@@ -264,3 +264,19 @@ frappe.ui.form.on("Resto Recipe Item", {
 		if (unit && now && now.item_code === item && !now.uom) frappe.model.set_value(cdt, cdn, "uom", unit);
 	},
 });
+
+// The cooked dishes of a dialog: a tick for a line of one dish, how many for a line of several.
+resto.cooked_fields = (rows, label, ticked) =>
+	rows.map((r, i) =>
+		flt(r.qty) > 1
+			? { fieldname: "c_" + i, fieldtype: "Float", label: `${label(r)} — ${__("How many were cooked?")}`, default: ticked(r) ? flt(r.qty) : 0 }
+			: { fieldname: "c_" + i, fieldtype: "Check", label: label(r), default: ticked(r) ? 1 : 0 }
+	);
+resto.cooked_values = (rows, v, key) => {
+	const out = {};
+	rows.forEach((r, i) => {
+		const q = flt(r.qty) > 1 ? flt(v["c_" + i]) : v["c_" + i] ? flt(r.qty) : 0;
+		if (q > 0) out[key(r)] = q;
+	});
+	return out;
+};

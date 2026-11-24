@@ -78,6 +78,16 @@ class SetupCheck:
 			self.error(area, _("A delivery fee is set but the Delivery Fee Item is not"))
 		if s.delivery_fee_item and frappe.db.get_value("Item", s.delivery_fee_item, "is_stock_item"):
 			self.error(area, _("Delivery Fee Item {0} must be a non-stock item").format(s.delivery_fee_item))
+		# Recipes in grams on kilo stock: 0.5 g is 0.0005 kg, which needs 5 decimals (System Settings
+		# "Float Precision"); with fewer it is rounded and stock and cost drift.
+		precision = cint(frappe.db.get_single_value("System Settings", "float_precision"))
+		if precision < 5:
+			self.warn(
+				area,
+				_("Float Precision in System Settings is {0}: set it to 5 so small recipe quantities (0.5 g = 0.0005 kg) stay exact").format(
+					precision or _("not set")
+				),
+			)
 
 	def check_pos_profile(self):
 		s = self.s

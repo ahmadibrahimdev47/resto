@@ -543,7 +543,7 @@ def on_sales_invoice_cancel(doc, method=None):
 	"""A cancelled Resto invoice re-opens its lines on the order so they can be billed again."""
 	if not doc.get("resto_order") or not frappe.db.exists("Resto Order", doc.resto_order):
 		return
-	order = frappe.get_doc("Resto Order", doc.resto_order)
+	order = frappe.get_doc("Resto Order", doc.resto_order, for_update=True)
 	row = next((d for d in order.invoices if d.sales_invoice == doc.name and not d.cancelled), None)
 	if not row:
 		return

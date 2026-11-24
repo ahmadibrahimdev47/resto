@@ -46,7 +46,11 @@ def execute(filters=None):
 		l.sales_invoice = ", ".join(i.sales_invoice for i in inv)
 		l.cashier = ", ".join(sorted({i.paid_by for i in inv if i.paid_by}))
 		l.voided_at = voids.get(l.name)
-		l.waste_cost = waste.get(l.get("void_waste"), 0) if l.get("void_waste") else 0
+		w = waste.get(l.get("void_waste")) if l.get("void_waste") else None
+		l.waste_cost = w.cost if w else 0
+		# Posted later, or by someone else than who voided it (the kitchen or the cashier): shown.
+		l.waste_by = w.owner if w else None
+		l.waste_at = w.creation if w else None
 		l.result_label = _(l.result)
 		l.result_color = COLORS.get(l.result)
 		rows.append(l)
@@ -157,12 +161,12 @@ def _waste_costs(names):
 	if not names:
 		return {}
 	return {
-		name: flt(cost)
-		for name, cost in frappe.db.sql(
-			"""select w.name, sum(-sle.stock_value_difference) from `tabResto Waste` w
+		name: frappe._dict(cost=flt(cost), owner=owner, creation=creation)
+		for name, cost, owner, creation in frappe.db.sql(
+			"""select w.name, sum(-sle.stock_value_difference), w.owner, w.creation from `tabResto Waste` w
 			join `tabStock Ledger Entry` sle on sle.voucher_type = 'Stock Entry' and sle.voucher_no = w.stock_entry
 				and sle.is_cancelled = 0
-			where w.docstatus = 1 and w.name in %s group by w.name""",
+			where w.docstatus = 1 and w.name in %s group by w.name, w.owner, w.creation""",
 			(tuple(set(names)),),
 		)
 	}
@@ -201,6 +205,8 @@ def _columns():
 		col("void_reason", _("Void Reason"), width=170),
 		col("void_waste", _("Waste Entry"), "Link", 130, "Resto Waste"),
 		col("waste_cost", _("Waste Cost"), "Currency", 100),
+		col("waste_by", _("Waste Posted By"), "Link", 130, "User"),
+		col("waste_at", _("Waste Posted At"), "Datetime", 150),
 		col("cancel_reason", _("Cancel Reason"), width=160),
 		col("waiter", _("Waiter"), "Link", 130, "User"),
 	]

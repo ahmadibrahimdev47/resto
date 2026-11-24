@@ -33,7 +33,7 @@ SERVER_HEADER_FIELDS = (
 # Changes that make a printed bill wrong.
 BILL_FIELDS = ("discount_amount", "service_charge_percent", "delivery_fee", "customer", "net_total")
 BILL_LINE_FIELDS = ("qty", "rate", "modifiers_amount", "sides_amount", "kitchen_status", "billed_qty")
-SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides", "sides_text", "sides_qty", "sides_extras", "sides_amount")
+SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides", "sides_text", "sides_qty", "sides_extras", "sides_amount", "void_waste")
 
 
 class RestoOrder(Document):

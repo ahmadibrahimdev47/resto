@@ -846,19 +846,18 @@ class RestoFloor {
 				fieldtype: "HTML",
 				options: `<p><b>${__("Already cooked?")}</b> <span class="text-muted">${__("Tick the dishes the kitchen already made: their ingredients are posted as waste.")}</span></p>`,
 			});
-			sent.forEach((d) =>
-				fields.push({
-					fieldname: "c_" + d.name,
-					fieldtype: "Check",
-					label: `${esc(d.item_name)} × ${d.qty} (${esc(__(d.kitchen_status, null, "Resto"))})`,
-					default: ["In Progress", "Ready", "Served"].includes(d.kitchen_status) ? 1 : 0,
-				})
+			fields.push(
+				...resto.cooked_fields(
+					sent,
+					(d) => `${esc(d.item_name)} × ${d.qty} (${esc(__(d.kitchen_status, null, "Resto"))})`,
+					(d) => ["In Progress", "Ready", "Served"].includes(d.kitchen_status)
+				)
 			);
 		}
 		frappe.prompt(
 			fields,
 			async (v) => {
-				const cooked = sent.filter((d) => v["c_" + d.name]).map((d) => d.name);
+				const cooked = resto.cooked_values(sent, v, (d) => d.name);
 				await call("cancel_order", { order: o.name, reason: v.reason, cooked: JSON.stringify(cooked) }, true);
 				this.close_order();
 			},

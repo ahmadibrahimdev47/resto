@@ -98,3 +98,44 @@ class TestCookedWaste(IntegrationTestCase):
 	def test_a_line_still_on_the_order_cannot_be_posted(self):
 		order, (line, _other) = self.sent_order()
 		self.assertRaises(frappe.ValidationError, floor.post_cooked_waste, order, json.dumps([line]))
+
+	def test_quantities_follow_the_recipe_and_how_many_were_cooked(self):
+		# Fries: 0.25 Kg of potato each. Three on the line, two cooked.
+		order = floor.create_order(order_type="Takeaway", customer_name="Waste Guest")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 3}]))
+		floor.send_to_kitchen(order)
+		line = frappe.get_doc("Resto Order", order).items[0].name
+		before = fx.bin_qty("RAW-POTATO")
+		floor.cancel_order(order, "Guest left", cooked=json.dumps({line: 2}))
+		self.assertAlmostEqual(before - fx.bin_qty("RAW-POTATO"), 0.5, 6)
+		self.assertRaises(frappe.ValidationError, floor.post_cooked_waste, order, json.dumps([line]))
+
+	def test_more_than_the_line_is_refused(self):
+		order, (line, _other) = self.sent_order()
+		self.assertRaises(frappe.ValidationError, floor.cancel_order, order, "Guest left", json.dumps({line: 2}))
+
+	def test_a_cancelled_waste_frees_the_dish_again(self):
+		order, (line, _other) = self.sent_order()
+		floor.cancel_order(order, "Guest left")
+		before = fx.bin_qty("RAW-POTATO")
+		waste = floor.post_cooked_waste(order, json.dumps([line]))[line]
+		self.assertAlmostEqual(before - fx.bin_qty("RAW-POTATO"), 0.25, 6)
+		doc = frappe.get_doc("Resto Waste", waste)
+		doc.cancel()
+		self.assertFalse(self.waste_of(line))
+		self.assertAlmostEqual(fx.bin_qty("RAW-POTATO"), before, 6)
+		self.assertTrue(floor.post_cooked_waste(order, json.dumps([line]))[line])
+		self.assertAlmostEqual(before - fx.bin_qty("RAW-POTATO"), 0.25, 6)
+
+	def test_a_form_cannot_clear_the_waste_link(self):
+		order, (line, _other) = self.sent_order()
+		floor.cancel_order(order, "Guest left", cooked=json.dumps([line]))
+		waste = self.waste_of(line)
+		doc = frappe.get_doc("Resto Order", order)
+		next(d for d in doc.items if d.name == line).void_waste = None
+		doc.flags.resto_allow_closed = True
+		try:
+			doc.save(ignore_permissions=True)
+		except frappe.ValidationError:
+			pass  # a closed order cannot be saved at all: fine too
+		self.assertEqual(self.waste_of(line), waste)

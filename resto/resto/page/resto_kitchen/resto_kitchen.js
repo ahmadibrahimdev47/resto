@@ -32,8 +32,9 @@ class RestoKitchen {
 		this._claim_poll = setInterval(() => this.print_stations.length && !this.paused && this.claim_prints(), 10000);
 		this.page.add_inner_button(__("Refresh"), () => this.refresh());
 		// Only a kitchen user prints automatically (the server takes the tickets for that role only).
-		this.can_post_waste = ["Resto Kitchen", "Resto Cashier", "Resto Manager", "System Manager"].some((r) => frappe.user.has_role(r));
 		this.can_autoprint = frappe.user.has_role("Resto Kitchen") || frappe.user.has_role("Resto Manager") || frappe.session.user === "Administrator";
+		// Waste for a cancelled dish already made, from its void ticket.
+		this.can_post_waste = ["Resto Kitchen", "Resto Cashier", "Resto Manager", "System Manager"].some((r) => frappe.user.has_role(r));
 		if (!this.can_autoprint) this.print_stations = [];
 		if (this.can_autoprint) {
 			this.$autoprint = this.page.add_inner_button(__("Auto Printing: Off"), () => this.toggle_autoprint());
@@ -299,17 +300,21 @@ class RestoKitchen {
 			title: __("Cooked: Post as Waste"),
 			fields: [
 				{ fieldname: "help", fieldtype: "HTML", options: `<p class="text-muted">${__("Tick the dishes the kitchen already made: their ingredients are posted as waste.")}</p>` },
-				...open.map((r, i) => ({ fieldname: "l_" + i, fieldtype: "Check", default: 1, label: `${frappe.utils.escape_html(r.item_name)} × ${r.qty}` })),
+				// Nothing ticked by itself: the cook says what was made.
+				...resto.cooked_fields(open, (r) => `${frappe.utils.escape_html(r.item_name)} × ${r.qty}`, () => false),
 			],
 			primary_action_label: __("Post Waste"),
 			primary_action: async (v) => {
-				const lines = open.filter((r, i) => v["l_" + i]).map((r) => r.order_item);
-				if (!lines.length) return frappe.msgprint(__("Choose the dishes that were cooked"));
+				const lines = resto.cooked_values(open, v, (r) => r.order_item);
+				if (!Object.keys(lines).length) return frappe.msgprint(__("Choose the dishes that were cooked"));
 				d.hide();
-				const posted = await frappe.xcall("resto.resto.floor.post_cooked_waste", { order: t.order, lines: JSON.stringify(lines) });
-				// A waste that could not be posted was already shown in orange.
-				if (Object.values(posted || {}).every(Boolean)) frappe.show_alert({ message: __("Waste posted"), indicator: "green" });
-				this.refresh();
+				try {
+					const posted = await frappe.xcall("resto.resto.floor.post_cooked_waste", { order: t.order, lines: JSON.stringify(lines) });
+					// A waste that could not be posted was already shown in orange.
+					if (Object.values(posted || {}).every(Boolean)) frappe.show_alert({ message: __("Waste posted"), indicator: "green" });
+				} finally {
+					this.refresh();
+				}
 			},
 		});
 		d.show();

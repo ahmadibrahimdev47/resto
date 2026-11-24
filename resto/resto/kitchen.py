@@ -327,13 +327,13 @@ def get_tickets(station=None, include_done_minutes=15):
 			items.setdefault(d.parent, []).append(d)
 
 	# Void tickets: which of their dishes have no waste posted yet (the kitchen can post it if cooked).
-	void_lines = [d.order_item for t in tickets if t.ticket_type == "Void" for d in items.get(t.name, []) if d.order_item]
+	voided = [d.order_item for t in tickets if t.ticket_type == "Void" for d in items.get(t.name, []) if d.order_item]
 	no_waste = set()
-	if void_lines:
+	if voided:
 		no_waste = set(
 			frappe.get_all(
 				"Resto Order Item",
-				filters={"name": ("in", void_lines), "kitchen_status": "Void", "void_waste": ("is", "not set")},
+				filters={"name": ("in", voided), "kitchen_status": "Void", "void_waste": ("is", "not set")},
 				pluck="name",
 			)
 		)

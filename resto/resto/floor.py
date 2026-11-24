@@ -470,40 +470,107 @@ def void_line(order, line, reason, cooked=0):
 	return doc.name
 
 
-def _waste_for_void(order, row, reason):
-	frappe.db.savepoint("resto_void_waste")
-	try:
-		items = [{"item_code": row.item_code, "qty": flt(row.qty), "reason": "Other", "note": reason}]
-		if row.get("sides"):
-			# Changed sides: the dish's main ingredients and the sides it was made with.
-			served = json.loads(row.sides_qty) if row.get("sides_qty") else sides.qty_per_dish(row.item_code, json.loads(row.sides))
-			per_dish = sides.dish_components(row.item_code, served)
-			items = [{"item_code": k, "qty": v * flt(row.qty), "reason": "Other", "note": reason} for k, v in per_dish.items()]
-		for mod in json.loads(row.modifiers or "[]"):
-			if flt(mod.get("price")) and mod.get("item"):
-				items.append({"item_code": mod["item"], "qty": flt(row.qty), "reason": "Other", "note": reason})
+def _deducts_stock(item_code):
+	"""A stock item, or a dish whose bundle deducts stock (a priced modifier may be neither)."""
+	if frappe.get_cached_value("Item", item_code, "is_stock_item"):
+		return True
+	return bool(frappe.db.get_value("Product Bundle", {"new_item_code": item_code, "disabled": 0}, "name"))
+
+
+def _waste_items(row, qty, extra=None):
+	"""{item: stock qty} the kitchen made for qty dishes of the line, as billing would deduct it.
+
+	A share of a shared side that went to the other dishes when this line was voided uncooked (they
+	deduct it now) is left out. extra: more plated with it (the shares of dishes cancelled with it)."""
+	out = {}
+
+	def add(item, q):
+		if q > 1e-9:
+			out[item] = out.get(item, 0) + q
+
+	choice = json.loads(row.sides) if row.get("sides") else {}
+	moved = {k for k, e in choice.items() if isinstance(e, dict) and e.get("moved")}
+	if moved:
+		# The rest of what it served, extra portions included (as stock, per portion).
+		rest = {k: e for k, e in choice.items() if k not in moved}
+		for item, q in sides.dish_components(row.item_code, sides.qty_per_dish(row.item_code, rest) if rest else {}).items():
+			add(item, q * qty)
+	elif row.get("sides"):
+		# Changed sides: the dish's main ingredients and the sides it was made with.
+		served = json.loads(row.sides_qty) if row.get("sides_qty") else sides.qty_per_dish(row.item_code, choice)
+		for item, q in sides.dish_components(row.item_code, served).items():
+			add(item, q * qty)
 		# Extra portions were plated with it: their own item, as they would have been billed.
 		for e in json.loads(row.get("sides_extras") or "{}").values():
 			if flt(e.get("portions")) > 0 and e.get("item"):
-				items.append({"item_code": e["item"], "qty": flt(e["portions"]) * flt(row.qty), "reason": "Other", "note": reason})
+				add(e["item"], flt(e["portions"]) * qty)
+	else:
+		add(row.item_code, qty)
+	for mod in json.loads(row.modifiers or "[]"):
+		if flt(mod.get("price")) and mod.get("item") and _deducts_stock(mod["item"]):
+			add(mod["item"], qty)
+	for item, q in (extra or {}).items():
+		add(item, q)
+	return out
+
+
+def _waste_for_void(order, row, reason, qty=None, extra=None):
+	"""Post the waste of a dish voided after cooking (qty dishes of the line, all by default) and link
+	it on the line. Returns the Resto Waste, or None when it could not be posted (the void stands)."""
+	qty = flt(row.qty) if qty is None else flt(qty)
+	messages = len(frappe.local.message_log or [])
+	frappe.db.savepoint("resto_void_waste")
+	try:
+		items = _waste_items(row, qty, extra)
 		waste = frappe.get_doc(
 			{
 				"doctype": "Resto Waste",
 				"remarks": _("Voided after cooking on order {0}: {1}").format(order.name, reason),
-				"items": items,
+				"items": [{"item_code": k, "qty": v, "reason": "Other", "note": reason} for k, v in items.items()],
 			}
 		)
 		waste.flags.ignore_permissions = True
 		waste.insert()
 		waste.submit()
 		frappe.db.set_value("Resto Order Item", row.name, "void_waste", waste.name, update_modified=False)
+		# A form of the order opened before this cannot be saved over the link.
+		frappe.db.set_value("Resto Order", order.name, "modified", now_datetime(), update_modified=False)
 		order.add_comment("Info", _("Waste {0} posted for the voided {1}").format(waste.name, row.item_name))
+		return waste.name
 	except Exception:
-		# The void stands; the waste can be entered by hand.
 		frappe.db.rollback(save_point="resto_void_waste")
-		frappe.clear_messages()
+		# Only this attempt's messages go; a warning about another dish stays.
+		if frappe.local.message_log:
+			del frappe.local.message_log[messages:]
 		frappe.log_error(title=f"Resto void waste for {order.name}")
-		frappe.msgprint(_("The item is void, but its waste could not be posted; enter it in Resto Waste."), indicator="orange")
+		frappe.msgprint(
+			_("{0} is void, but its waste could not be posted. Try again with Post Waste for Cooked Dishes on the order, or tell the manager.").format(
+				frappe.bold(row.item_name)
+			),
+			indicator="orange",
+		)
+		return None
+
+
+def _cooked_qty(value, rows):
+	"""{line: dishes cooked} from a list of lines (all their dishes) or {line: qty}."""
+	value = _loads(value, []) if value else []
+	if isinstance(value, list):
+		value = {name: None for name in value}
+	if not isinstance(value, dict):
+		frappe.throw(_("The cooked dishes could not be read"))
+	by_name = {d.name: d for d in rows}
+	out = {}
+	for name, qty in value.items():
+		row = by_name.get(name)
+		if not row:
+			frappe.throw(_("Only items sent to the kitchen can be marked as cooked"))
+		qty = flt(row.qty) if qty is None else flt(qty)
+		if qty < 0 or qty > flt(row.qty) + 1e-9:
+			frappe.throw(_("{0}: cooked quantity must be between 0 and {1}").format(frappe.bold(row.item_name), flt(row.qty)))
+		if qty > 1e-9:
+			out[name] = qty
+	return out
 
 
 @frappe.whitelist(methods=["POST"])
@@ -643,9 +710,8 @@ def cancel_order(order, reason, cooked=None):
 	sent = [d for d in doc.items if d.kitchen_status not in ("Not Sent", "Void")]
 	if sent:
 		require_role(MANAGER)
-	cooked = set(_loads(cooked, []) or [])
-	if cooked - {d.name for d in sent}:
-		frappe.throw(_("Only items sent to the kitchen can be marked as cooked"))
+	cooked = _cooked_qty(cooked, sent)
+	extra = _shares_with_the_cooked(doc, cooked)
 	kitchen.void_lines(doc, sent, reason)
 	for d in doc.items:
 		if d.kitchen_status == "Not Sent":
@@ -662,8 +728,32 @@ def cancel_order(order, reason, cooked=None):
 		frappe.db.set_value("Resto Reservation", doc.reservation, "status", "Cancelled")
 	for d in sent:
 		if d.name in cooked:
-			_waste_for_void(doc, d, reason)
+			_waste_for_void(doc, d, reason, cooked[d.name], extra.get(d.name))
 	return doc.name
+
+
+def _shares_with_the_cooked(order, cooked):
+	"""{cooked line: {item: stock qty}}: what dishes cancelled uncooked held of a side they shared with
+	a cooked dish. The kitchen plated the set's total, so it is wasted with the first cooked dish of the
+	set, as voiding the others first would have moved it there."""
+	out = {}
+	lines = [d for d in order.items if d.kitchen_status != "Void"]
+	sets = {}
+	for d in lines:
+		for key, set_id in sides.shared_slots(d).items():
+			sets.setdefault((set_id, key), []).append(d)
+	for (_set_id, key), members in sets.items():
+		first = next((d for d in members if d.name in cooked), None)
+		if not first:
+			continue
+		target = out.setdefault(first.name, {})
+		for d in members:
+			left = flt(d.qty) - flt(cooked.get(d.name))
+			if left <= 1e-9:
+				continue
+			for item, q in sides.slot_qty(d, key).items():
+				target[item] = target.get(item, 0) + q * left
+	return out
 
 
 @frappe.whitelist(methods=["POST"])
@@ -673,14 +763,16 @@ def post_cooked_waste(order, lines):
 	ticket on the kitchen screen. Each line once. The cashier and the kitchen: within COOKED_WASTE_HOURS
 	of its void ticket; a manager any time."""
 	require_role(CASHIER, KITCHEN)
-	names = set(_loads(lines, []) or [])
+	doc = frappe.get_doc("Resto Order", order, for_update=True)
+	asked = _loads(lines, []) if lines else []
+	names = set(asked if isinstance(asked, list) else asked if isinstance(asked, dict) else [])
 	if not names:
 		frappe.throw(_("Choose the dishes that were cooked"))
-	doc = frappe.get_doc("Resto Order", order, for_update=True)
 	manager = has_role()
 	rows = [d for d in doc.items if d.name in names]
 	if len(rows) != len(names):
 		frappe.throw(_("Some of these dishes are not on order {0}").format(doc.name))
+	cooked = _cooked_qty(asked, rows)
 	since = add_to_date(now_datetime(), hours=-COOKED_WASTE_HOURS)
 	for d in rows:
 		if not (d.ticket and d.kitchen_status == "Void"):
@@ -695,9 +787,13 @@ def post_cooked_waste(order, lines):
 				frappe.throw(
 					_("{0} was voided more than {1} hours ago: ask a manager").format(frappe.bold(d.item_name), COOKED_WASTE_HOURS)
 				)
+	posted = {}
 	for d in rows:
-		_waste_for_void(doc, d, d.void_reason or doc.cancel_reason or "")
-	return {d.name: frappe.db.get_value("Resto Order Item", d.name, "void_waste") for d in rows}
+		if d.name in cooked:
+			posted[d.name] = _waste_for_void(doc, d, d.void_reason or doc.cancel_reason or "", cooked[d.name])
+	publish("order", order=doc.name)
+	publish("ticket", order=doc.name)
+	return posted
 
 
 # --------------------------------------------------------------------------- bill

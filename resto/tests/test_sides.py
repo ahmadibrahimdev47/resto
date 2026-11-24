@@ -665,6 +665,27 @@ class TestSides(IntegrationTestCase):
 		self.assertEqual(flt(row.billed_qty), 1)
 		self.assertTrue(si.docstatus == 1)
 
+	def test_late_waste_leaves_out_a_share_that_moved(self):
+		# Plate and grill share 3 tahini. The grill is voided uncooked: the plate takes all 3. A waste
+		# posted later for the grill must not take its old share again.
+		order, plate, grill = self.shared_pair(3)
+		floor.send_to_kitchen(order)
+		before = bins()
+		floor.void_line(order, grill, "Changed mind", cooked=0)
+		self.assertAlmostEqual(self.tahini(order)["DISH-PLATE"], 3, 6)
+		floor.post_cooked_waste(order, json.dumps([grill]))
+		self.pay(order)
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+
+	def test_cancel_wastes_the_shared_total_with_the_cooked_dish(self):
+		# Only the plate was cooked: the kitchen plated the 3 tahini of the set with it.
+		order, plate, grill = self.shared_pair(3)
+		floor.send_to_kitchen(order)
+		before = bins()
+		floor.cancel_order(order, "Guest left", cooked=json.dumps([plate]))
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+		self.assertFalse(frappe.db.get_value("Resto Order Item", grill, "void_waste"))
+
 	def test_void_after_cooking_wastes_the_extra_portions(self):
 		self.charge()
 		order = self.order_with(("DISH-PLATE", 1))

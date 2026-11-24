@@ -90,6 +90,8 @@ class RestoWaste(Document):
 			se = frappe.get_doc("Stock Entry", self.stock_entry)
 			se.flags.ignore_permissions = True
 			se.cancel()
+		# A dish whose waste this was can have it posted again.
+		frappe.db.sql("update `tabResto Order Item` set void_waste = null where void_waste = %s", self.name)
 
 
 def _bundle(item_code):
