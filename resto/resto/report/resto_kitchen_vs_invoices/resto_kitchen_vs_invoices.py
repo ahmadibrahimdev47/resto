@@ -128,7 +128,7 @@ def _invoices(orders):
 	if not orders:
 		return out
 	for r in frappe.db.sql(
-		"""select parent, sales_invoice, paid_by, lines from `tabResto Order Invoice`
+		"""select parent, sales_invoice, paid_by, `lines` from `tabResto Order Invoice`
 		where parenttype = 'Resto Order' and parent in %s and ifnull(cancelled, 0) = 0""",
 		(tuple(set(orders)),),
 		as_dict=True,
