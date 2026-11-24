@@ -505,7 +505,7 @@ def _slot_part(row, key):
 
 def _mark_share(line, key, flag, value=None):
 	"""Set (value) or clear (None) a mark on one shared choice of a line, in the database only."""
-	choice = sides._loads(frappe.db.get_value("Resto Order Item", line, "sides")) or {}
+	choice = sides._loads(frappe.db.get_value("Resto Order Item", line, "sides", for_update=True)) or {}
 	entry = choice.get(key)
 	if not isinstance(entry, dict):
 		return
@@ -522,9 +522,9 @@ def _waste_items(order, row, qty):
 
 	A shared side goes with its dish: it is deducted when the dish is billed or wasted, or it went to
 	the other dishes of the set when the dish was voided uncooked (they deduct it now: "moved"). When
-	an order is cancelled the kitchen had plated each set's total at once ("c"): the first waste of a
-	dish of the set takes the shares of all its dishes, every dish of its own line too, and marks the
-	shares it took from other lines ("w", the waste), so no share is wasted twice."""
+	an order is cancelled the kitchen had plated each set's total at once ("k"): the first waste of a
+	dish of the set takes the shares of all its dishes, every dish of its own line too. Every share a
+	waste holds is marked with it ("w"), so no share is wasted twice and cancelling it frees them."""
 	out = {}
 
 	def add(item, q):
@@ -535,7 +535,8 @@ def _waste_items(order, row, qty):
 	choice = sides._loads(row.get("sides")) or {}
 	if choice:
 		# What one dish served, as frozen when it went to the kitchen; its shared choices apart.
-		free = dict(sides._loads(row.get("sides_qty")) or sides.qty_per_dish(row.item_code, choice))
+		frozen = sides._loads(row.get("sides_qty"))  # "{}": every side of the dish is a billed extra
+		free = dict(frozen if frozen is not None else sides.qty_per_dish(row.item_code, choice))
 		extra = {}
 		for e in (sides._loads(row.get("sides_extras")) or {}).values():
 			if flt(e.get("portions")) > 0 and e.get("item"):
@@ -550,23 +551,26 @@ def _waste_items(order, row, qty):
 				extra[item] = max(flt(extra.get(item)) - q, 0)
 			if entry.get("moved") or entry.get("w"):
 				continue
-			dishes = flt(row.qty) if entry.get("c") else qty
+			dishes = flt(row.qty) if entry.get("k") else qty
 			for item, q in sides._flat(slot_free).items():
 				add(item, q * dishes)
 			for item, q in slot_extra.items():
 				add(item, q * dishes)
-			if entry.get("c"):
+			# Marked as in this waste too: cancelling it frees the share, and only it.
+			taken.append((row.name, key))
+			if entry.get("k"):
 				together.add((set_id, key))
 		for item, q in sides.dish_components(row.item_code, {k: v for k, v in free.items() if v > 1e-9}).items():
 			add(item, q * qty)
 		for item, q in extra.items():
 			add(item, q * qty)
 		for d in _order_lines(order) if together else ():
-			if d.name == row.name or d.kitchen_status != "Void" or d.void_waste:
+			# "w" says whose waste a share is in (a dish wasted after its share was taken has none).
+			if d.name == row.name or d.kitchen_status != "Void":
 				continue
 			for key, set_id in sides.shared_slots(d).items():
 				entry = sides._loads(d.sides)[key]
-				if (set_id, key) not in together or not entry.get("c") or entry.get("moved") or entry.get("w"):
+				if (set_id, key) not in together or not entry.get("k") or entry.get("moved") or entry.get("w"):
 					continue
 				slot_free, slot_extra = _slot_part(d, key)
 				for item, q in sides._flat(slot_free).items():
@@ -809,7 +813,7 @@ def cancel_order(order, reason, cooked=None):
 	if sent:
 		for d in together:
 			for key in sides.shared_slots(d):
-				_mark_share(d.name, key, "c", 1)
+				_mark_share(d.name, key, "k", 1)
 	for d in sent:
 		if d.name in cooked:
 			_waste_for_void(doc, d, reason, cooked[d.name])

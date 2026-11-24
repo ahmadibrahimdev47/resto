@@ -831,3 +831,31 @@ class TestSides(IntegrationTestCase):
 		self.assertNotIn('"w"', frappe.db.get_value("Resto Order Item", grill, "sides"))
 		floor.post_cooked_waste(order, json.dumps([grill]))
 		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+
+	def test_cancelling_the_first_waste_of_a_set_then_posting_it_again(self):
+		# Both cooked: the plate's waste holds the 3 tahini. Corrected (cancelled and posted again): 3.
+		order, plate, grill = self.shared_pair(3)
+		floor.send_to_kitchen(order)
+		before = bins()
+		floor.cancel_order(order, "Guest left", cooked=json.dumps([plate, grill]))
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+		frappe.get_doc("Resto Waste", frappe.db.get_value("Resto Order Item", plate, "void_waste")).cancel()
+		floor.post_cooked_waste(order, json.dumps([plate]))
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+
+	def test_cancel_without_ticks_then_a_late_waste_with_extras_charged(self):
+		self.charge()
+		self.test_cancel_without_ticks_then_a_late_waste_takes_the_set()
+
+	def test_part_of_a_line_after_a_void_wastes_its_share_for_those_dishes(self):
+		# Charged extras mark shared choices "c": that is not the cancel's "the set was plated at once".
+		self.charge()
+		order = self.order_with(("DISH-PLATE", 3), ("DISH-GRILL", 1))
+		plate, grill = (d.name for d in lines(order))
+		self.change(order, [plate, grill], {GROUP: {"SAUCE-TAHINI": 4}})
+		floor.send_to_kitchen(order)
+		floor.void_line(order, plate, "Dropped", cooked=1)
+		frappe.get_doc("Resto Waste", frappe.db.get_value("Resto Order Item", plate, "void_waste")).cancel()
+		before = bins()
+		floor.post_cooked_waste(order, json.dumps({plate: 1}))
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 1)

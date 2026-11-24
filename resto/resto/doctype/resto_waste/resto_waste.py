@@ -101,6 +101,8 @@ class RestoWaste(Document):
 			frappe.db.set_value("Resto Order Item", name, "void_waste", None, update_modified=False)
 		order = self.order_item and frappe.db.get_value("Resto Order Item", self.order_item, "parent") or self.resto_order
 		if order:
+			# One at a time with a waste being posted on the order.
+			frappe.db.get_value("Resto Order", order, "name", for_update=True)
 			for d in frappe.get_all(
 				"Resto Order Item", filters={"parent": order, "sides": ("like", f"%{self.name}%")}, fields=["name", "sides"]
 			):

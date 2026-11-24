@@ -148,4 +148,9 @@ class TestCookedWaste(IntegrationTestCase):
 		doc.cancel()
 		amended = frappe.copy_doc(doc)
 		amended.amended_from = doc.name
-		self.assertRaises(frappe.ValidationError, amended.insert)
+		amended.docstatus = 0
+		for row in amended.items:
+			row.docstatus = 0
+		with self.assertRaises(frappe.ValidationError) as cm:
+			amended.insert()
+		self.assertIn("instead of amending", str(cm.exception))
