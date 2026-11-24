@@ -4,6 +4,7 @@ bench --site test.resto run-tests --module resto.tests.test_restaurant_flow
 """
 
 import json
+import random
 
 import frappe
 from frappe.tests import IntegrationTestCase
@@ -79,6 +80,60 @@ class TestRestaurantFlow(IntegrationTestCase):
 			json.dumps([{"mode_of_payment": "Cash", "amount": cash if cash is not None else bill["payable"]}]),
 			json.dumps(lines_) if lines_ else None,
 		), bill
+
+	# ------------------------------------------------------------------ partial payment (D-202)
+
+	def test_partial_payment_leaves_the_rest_owed_by_a_named_customer(self):
+		frappe.db.set_value("POS Profile", fx.PROFILE, "allow_partial_payment", 1)
+		frappe.clear_document_cache("POS Profile", fx.PROFILE)
+		try:
+			order = floor.create_order(order_type="Takeaway")
+			floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 2}]))
+			bill = floor.get_bill(order)
+			self.assertFalse(bill["on_account_customer"])
+			pay = json.dumps([{"mode_of_payment": "Cash", "amount": 30}])
+			# The walk-in customer owes nothing: refused before anything is billed.
+			self.assertRaises(frappe.ValidationError, floor.settle, order, pay, None, bill["payable"], None, 1)
+			self.assertFalse(frappe.db.exists("Sales Invoice", {"resto_order": order, "docstatus": 1}))
+			floor.update_order_info(order, customer_name="Credit Guest", phone=f"0109{random.randint(1000000, 9999999)}", new_customer=1)
+			customer = frappe.db.get_value("Resto Order", order, "customer")
+			self.assertTrue(customer)
+			bill = floor.get_bill(order)
+			self.assertEqual(bill["on_account_customer"], customer)
+			# A short payment without asking for it is still refused.
+			self.assertRaises(frappe.ValidationError, floor.settle, order, pay, None, bill["payable"])
+
+			r = floor.settle(order, pay, None, bill["payable"], None, 1)
+			si = frappe.get_doc("Sales Invoice", r["sales_invoice"])
+			owed = flt(bill["payable"]) - 30
+			self.assertEqual((si.customer, flt(si.paid_amount), flt(si.change_amount), flt(si.write_off_amount)), (customer, 30, 0, 0))
+			self.assertAlmostEqual(flt(si.outstanding_amount), owed, 2)
+			self.assertAlmostEqual(flt(r["outstanding_amount"]), owed, 2)
+			# The ledger: the customer owes the rest, the cash account got only what was paid.
+			receivable = frappe.db.sql(
+				"""select sum(debit - credit) from `tabGL Entry` where voucher_no = %s and account = %s
+				and party = %s and is_cancelled = 0""",
+				(si.name, si.debit_to, customer),
+			)[0][0]
+			self.assertAlmostEqual(flt(receivable), owed, 2)
+			cash_account = next(p.account for p in si.payments if p.mode_of_payment == "Cash")
+			cash = frappe.db.sql(
+				"select sum(debit - credit) from `tabGL Entry` where voucher_no = %s and account = %s and is_cancelled = 0",
+				(si.name, cash_account),
+			)[0][0]
+			self.assertAlmostEqual(flt(cash), 30, 2)
+			self.assertEqual(frappe.db.get_value("Resto Order", order, "status"), "Paid")
+		finally:
+			frappe.db.set_value("POS Profile", fx.PROFILE, "allow_partial_payment", 0)
+			frappe.clear_document_cache("POS Profile", fx.PROFILE)
+
+	def test_partial_payment_needs_the_pos_profile_to_allow_it(self):
+		order = floor.create_order(order_type="Takeaway", customer_name="Owes Nothing", phone=f"0108{random.randint(1000000, 9999999)}", new_customer=1)
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
+		bill = floor.get_bill(order)
+		self.assertFalse(bill["on_account_customer"])
+		pay = json.dumps([{"mode_of_payment": "Cash", "amount": 1}])
+		self.assertRaises(frappe.ValidationError, floor.settle, order, pay, None, bill["payable"], None, 1)
 
 	# ------------------------------------------------------------------ dine in
 

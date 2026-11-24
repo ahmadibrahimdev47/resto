@@ -1073,12 +1073,14 @@ def request_bill(order):
 
 
 @frappe.whitelist(methods=["POST"])
-def settle(order, payments, lines=None, expected=None, request_id=None):
+def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0):
 	require_role(CASHIER)
 	# A retried click after the last payment closed the order gets the same invoice back.
 	doc = _get_order(order, statuses=None if request_id else ACTIVE)
 	if doc.status not in ACTIVE:
 		return _settle_result(doc, billing.settle(doc, [], request_id=request_id))
+	if cint(on_account):
+		billing.check_on_account(doc)  # refused before anything goes to the kitchen
 	if doc.order_type != "Dine In" and any(d.kitchen_status == "Not Sent" for d in doc.active_lines()):
 		# Takeaway and delivery can be paid first; the kitchen still gets the order.
 		kitchen.send_lines(doc, course=None)
@@ -1089,7 +1091,12 @@ def settle(order, payments, lines=None, expected=None, request_id=None):
 		_save(doc)
 		doc = _get_order(order)
 	si = billing.settle(
-		doc, _loads(payments, []), _loads(lines), expected=None if expected in (None, "") else flt(expected), request_id=request_id
+		doc,
+		_loads(payments, []),
+		_loads(lines),
+		expected=None if expected in (None, "") else flt(expected),
+		request_id=request_id,
+		on_account=on_account,
 	)
 	return _settle_result(doc, si)
 
@@ -1101,6 +1108,7 @@ def _settle_result(doc, si):
 		"rounded_total": si.rounded_total,
 		"paid_amount": si.paid_amount,
 		"change_amount": si.change_amount,
+		"outstanding_amount": si.outstanding_amount,
 		"status": frappe.db.get_value("Resto Order", doc.name, "status"),
 		"print_format": frappe.db.get_value("POS Profile", doc.pos_profile, "print_format"),
 		"receipt_on_printer": printing.receipt_on_printer(),

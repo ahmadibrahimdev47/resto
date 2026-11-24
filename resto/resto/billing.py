@@ -323,6 +323,25 @@ def payable_amount(si):
 # --------------------------------------------------------------------------- preview
 
 
+def on_account_customer(order):
+	"""The customer the rest of a bill may stay owed by (D-202), or None: only when the POS Profile
+	allows partial payment, and only a named customer (never the profile's walk-in customer)."""
+	profile = frappe.get_cached_doc("POS Profile", order.pos_profile)
+	if not cint(profile.get("allow_partial_payment")):
+		return None
+	if not order.customer or order.customer == profile.customer:
+		return None
+	return order.customer
+
+
+def check_on_account(order):
+	profile = frappe.get_cached_doc("POS Profile", order.pos_profile)
+	if not cint(profile.get("allow_partial_payment")):
+		frappe.throw(_("POS Profile {0} does not allow partial payment").format(frappe.bold(order.pos_profile)))
+	if not on_account_customer(order):
+		frappe.throw(_("Choose the customer who owes the rest first (Guests and Customer): not the walk-in customer"))
+
+
 def bill_preview(order, lines=None):
 	si = build_invoice(order, lines)
 	service_account = get_settings().service_charge_account
@@ -359,6 +378,9 @@ def bill_preview(order, lines=None):
 		"per_guest": flt(payable / guests, 2),
 		"guests": guests,
 		"currency": si.currency,
+		"allow_partial_payment": cint(frappe.get_cached_value("POS Profile", order.pos_profile, "allow_partial_payment")),
+		"on_account_customer": on_account_customer(order),
+		"on_account_customer_name": order.customer_name if on_account_customer(order) else None,
 		"payment_modes": [
 			{"mode_of_payment": p.mode_of_payment, "type": p.type, "default": cint(p.default)}
 			for p in si.payments
@@ -379,12 +401,13 @@ def get_open_shift(user, pos_profile):
 	return frappe.db.get_value("POS Opening Shift", filters, "name", order_by="period_start_date desc")
 
 
-def settle(order, payments, lines=None, expected=None, request_id=None):
+def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0):
 	"""Create and submit the POS Sales Invoice, then mark the billed lines.
 
 	expected: the amount the cashier saw; if the bill changed meanwhile (another device voided an
 	item or gave a discount) nothing is billed. request_id: a retry of the same click returns the
-	invoice already made instead of billing twice.
+	invoice already made instead of billing twice. on_account: what is not paid stays owed by the
+	order's customer (D-202); without it the payments must cover the bill.
 	"""
 	require_role(CASHIER)
 	settings = get_settings()
@@ -409,6 +432,8 @@ def settle(order, payments, lines=None, expected=None, request_id=None):
 			)
 		)
 
+	if cint(on_account):
+		check_on_account(order)
 	si = build_invoice(order, lines)
 	unsent = [d.item_name for d in order.items if d.name in si.flags.resto_lines and d.kitchen_status == "Not Sent"]
 	if unsent:
@@ -423,7 +448,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None):
 				frappe.format(payable, "Currency")
 			)
 		)
-	_set_payments(si, payments)
+	_set_payments(si, payments, on_account)
 	if shift and si.meta.has_field("posa_pos_opening_shift"):
 		si.posa_pos_opening_shift = shift
 
@@ -469,7 +494,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None):
 	return si
 
 
-def _set_payments(si, payments):
+def _set_payments(si, payments, on_account=0):
 	if isinstance(payments, str):
 		payments = json.loads(payments)
 	amounts = {}
@@ -492,7 +517,13 @@ def _set_payments(si, payments):
 
 	payable = payable_amount(si)
 	paid = sum(flt(p.amount) for p in si.payments)
-	if paid + 0.005 < payable:
+	if paid + 0.005 < payable and cint(on_account):
+		# The rest stays on the customer's account: the invoice's outstanding amount, a receivable.
+		# Nothing of it is written off, and no change is given.
+		si.write_off_outstanding_amount_automatically = 0
+		si.write_off_amount = 0
+		si.base_write_off_amount = 0
+	elif paid + 0.005 < payable:
 		frappe.throw(
 			_("Paid {0} is less than the bill {1}").format(
 				frappe.format(paid, "Currency"), frappe.format(payable, "Currency")

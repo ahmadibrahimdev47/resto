@@ -1192,6 +1192,16 @@ class RestoFloor {
 			fields.push({ fieldname: `p_${i}`, fieldtype: "Currency", label: __(m.mode_of_payment), default: m.default ? bill.payable : 0 });
 		});
 		fields.push({ fieldname: "quick", fieldtype: "HTML" }, { fieldname: "change", fieldtype: "HTML" });
+		// Partial payment (D-202): what is not paid stays owed by the order's named customer, when the
+		// POS Profile allows it. Ticked by the cashier, never assumed.
+		if (bill.on_account_customer) {
+			fields.push({
+				fieldname: "on_account",
+				fieldtype: "Check",
+				label: __("Leave the rest on the account of {0}", [bill.on_account_customer_name || bill.on_account_customer]),
+				hidden: 1,
+			});
+		}
 		// One id per dialog: a retried click after a lost answer returns the same invoice.
 		const request_id = frappe.utils.get_random(20);
 		const d = new frappe.ui.Dialog({
@@ -1211,6 +1221,7 @@ class RestoFloor {
 							lines: lines ? JSON.stringify(lines) : null,
 							expected: bill.payable,
 							request_id,
+							on_account: remaining() > 0.005 && v.on_account ? 1 : 0,
 						},
 						true
 					);
@@ -1224,7 +1235,8 @@ class RestoFloor {
 						title: __("Paid"),
 						indicator: "green",
 						message: `${__("Invoice")} <a href="/app/sales-invoice/${esc(r.sales_invoice)}">${esc(r.sales_invoice)}</a><br>
-							${r.change_amount ? `<b>${__("Change", null, "Resto")}: ${money(r.change_amount)}</b>` : ""}`,
+							${r.change_amount ? `<b>${__("Change", null, "Resto")}: ${money(r.change_amount)}</b>` : ""}
+							${r.outstanding_amount > 0.005 ? `<b class="text-warning">${__("On account of {0}: {1}", [esc(bill.on_account_customer_name || bill.on_account_customer), money(r.outstanding_amount)])}</b>` : ""}`,
 						primary_action: {
 							// The receipt printed by itself (cashier printer, or this browser): this prints it again.
 							label: r.receipt_mode === "server" || auto || r.receipt_printed ? __("Print Again") : __("Print Receipt"),
@@ -1253,12 +1265,19 @@ class RestoFloor {
 				<tr class="rf-grand"><td>${__("To Pay")}</td><td class="rf-amt">${money(bill.payable)}</td></tr>
 				${bill.guests > 1 ? `<tr class="text-muted"><td>${__("Per Guest")} (${bill.guests})</td><td class="rf-amt">${money(bill.per_guest)}</td></tr>` : ""}
 			</table>`);
+		const remaining = () => bill.payable - modes.reduce((s, m, i) => s + (d.get_value(`p_${i}`) || 0), 0);
 		const update_change = () => {
-			const paid = modes.reduce((s, m, i) => s + (d.get_value(`p_${i}`) || 0), 0);
-			const diff = paid - bill.payable;
+			const diff = -remaining();
+			let note = "";
+			if (diff < -0.005 && !bill.on_account_customer && bill.allow_partial_payment) {
+				note = `<p class="text-muted">${__("To leave the rest owed, choose the customer in Guests and Customer first (not the walk-in customer).")}</p>`;
+			}
 			d.fields_dict.change.$wrapper.html(
-				diff >= 0 ? `<h4>${__("Change", null, "Resto")}: ${money(diff)}</h4>` : `<h4 class="text-danger">${__("Remaining")}: ${money(-diff)}</h4>`
+				(diff >= -0.005
+					? `<h4>${__("Change", null, "Resto")}: ${money(Math.max(diff, 0))}</h4>`
+					: `<h4 class="text-danger">${__("Remaining")}: ${money(-diff)}</h4>`) + note
 			);
+			if (d.fields_dict.on_account) d.set_df_property("on_account", "hidden", diff < -0.005 ? 0 : 1);
 		};
 		modes.forEach((m, i) => d.fields_dict[`p_${i}`].$input.on("input change", update_change));
 		// "All by card" and friends: one tap puts the whole bill on one method and clears the others.
