@@ -11,3 +11,4 @@ resto.patches.v0_1.cashier_print_method
 resto.patches.v0_1.print_copy_show_sides
 resto.patches.v0_1.sales_invoice_print_fields
 resto.patches.v0_1.receipt_print_format
+resto.patches.v0_1.customer_delivery_address

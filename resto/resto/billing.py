@@ -397,7 +397,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None):
 	shift = get_open_shift(frappe.session.user, order.pos_profile)
 	if cint(settings.require_pos_shift) and posnext_installed() and not shift:
 		frappe.throw(
-			_("Open a shift in POSNext for POS Profile {0} before settling bills").format(
+			_("Open your shift (Open Shift at the top of the floor screen) for POS Profile {0} before settling bills").format(
 				frappe.bold(order.pos_profile)
 			)
 		)

@@ -22,6 +22,20 @@ STANDARD_PERMISSIONS = {
 	"Purchase Receipt": {MANAGER: ["read", "report"]},
 }
 
+# The delivery address typed at the counter, kept on the customer as typed (an ERPNext Address
+# needs a city and country the cashier does not type).
+CUSTOMER_FIELDS = {
+	"Customer": [
+		{
+			"fieldname": "resto_address",
+			"fieldtype": "Small Text",
+			"label": "Delivery Address",
+			"insert_after": "customer_primary_address",
+			"translatable": 0,
+		}
+	]
+}
+
 SALES_INVOICE_FIELDS = {
 	"Sales Invoice": [
 		{
@@ -133,6 +147,7 @@ def after_migrate():
 def setup():
 	make_roles()
 	create_custom_fields(SALES_INVOICE_FIELDS, update=True)
+	create_custom_fields(CUSTOMER_FIELDS, update=True)
 	from resto.resto.item_recipe import item_fields
 
 	create_custom_fields(item_fields(), update=True)

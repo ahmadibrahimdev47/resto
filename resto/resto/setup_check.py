@@ -170,6 +170,15 @@ class SetupCheck:
 		if posnext_installed():
 			if not s.require_pos_shift:
 				self.warn(area, _("Bills can be settled without a POSNext shift; the shift closing will not count them"))
+			# A cashier opens the shift from the floor screen; POSNext allows it to the profile's users only.
+			users = set(frappe.get_all("POS Profile User", {"parent": p.name, "parenttype": "POS Profile"}, pluck="user"))
+			cashiers = set(
+				frappe.get_all("Has Role", {"role": "Resto Cashier", "parenttype": "User"}, pluck="parent")
+			) - {"Administrator"}
+			enabled = set(frappe.get_all("User", {"name": ("in", list(cashiers) or [""]), "enabled": 1}, pluck="name"))
+			missing = sorted(enabled - users)
+			if missing:
+				self.warn(area, _("Cashiers who cannot open a shift (not users of POS Profile {0}): {1}").format(p.name, short(missing)))
 		if not self.results or all(r["area"] != area or r["level"] == "ok" for r in self.results):
 			self.ok(area, _("POS Profile {0} is ready").format(p.name))
 

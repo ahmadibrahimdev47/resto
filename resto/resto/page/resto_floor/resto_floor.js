@@ -175,8 +175,9 @@ class RestoFloor {
 			`<button class="btn btn-sm ${this.hall === "__orders" ? "btn-primary" : "btn-default"}" data-hall="__orders">
 				${__("Takeaway & Delivery")} <span class="rf-count">${this.floor.orders.length}</span></button>`
 		);
-		this.$tabs.html(this.kitchen_print_alert() + tabs.join(""));
-		this.$tabs.find("button").on("click", (e) => {
+		this.$tabs.html(this.shift_bar() + this.kitchen_print_alert() + tabs.join(""));
+		this.$tabs.find("[data-shift]").on("click", (e) => ($(e.currentTarget).attr("data-shift") === "open" ? this.open_shift() : this.close_shift()));
+		this.$tabs.find("button[data-hall]").on("click", (e) => {
 			this.hall = $(e.currentTarget).attr("data-hall");
 			localStorage.setItem("resto_floor_hall", this.hall);
 			this.render_floor();
@@ -275,25 +276,180 @@ class RestoFloor {
 		d.show();
 	}
 
+	// ------------------------------------------------------------------ customer
+
+	// Phone first: what is typed in the phone or the name finds customers; one is picked with a click
+	// (its phone and address fill in), or the cashier saves a new one when the order starts.
+	customer_fields(o, with_address) {
+		const cashier = !!(this.floor && this.floor.roles.cashier);
+		return [
+			{ fieldname: "phone", fieldtype: "Data", label: __("Phone"), default: o.phone || "" },
+			{ fieldname: "customer_name", fieldtype: "Data", label: __("Customer Name"), default: o.customer_name || "" },
+			{ fieldname: "matches", fieldtype: "HTML" },
+			{ fieldname: "address", fieldtype: "Small Text", label: __("Address"), default: o.address || "", hidden: with_address ? 0 : 1 },
+			{ fieldname: "customer", fieldtype: "Data", hidden: 1, default: o.customer || "" },
+			{
+				fieldname: "new_customer",
+				fieldtype: "Check",
+				label: __("Save as a new customer"),
+				default: cashier && !o.customer ? 1 : 0,
+				hidden: cashier && !o.customer ? 0 : 1,
+			},
+		];
+	}
+
+	bind_customer(d) {
+		const cashier = !!(this.floor && this.floor.roles.cashier);
+		const $m = d.fields_dict.matches.$wrapper;
+		let found = [];
+		const show = () => {
+			const picked = d.get_value("customer");
+			d.set_df_property("new_customer", "hidden", cashier && !picked ? 0 : 1);
+			if (picked) {
+				$m.html(`<div class="rf-cust-picked">✓ ${esc(d.get_value("customer_name") || picked)}
+					<button class="btn btn-xs btn-default" data-unpick>${__("Change Customer")}</button></div>`);
+				$m.find("[data-unpick]").on("click", () => {
+					d.set_value("customer", "");
+					d.set_value("new_customer", cashier ? 1 : 0);
+					show();
+				});
+				return;
+			}
+			$m.html(
+				found.length
+					? found
+							.map(
+								(c, i) => `<button class="btn btn-default btn-sm rf-cust" data-i="${i}">
+									<b>${esc(c.customer_name)}</b> ${esc(c.mobile_no || "")}
+									${c.resto_address ? `<span class="text-muted">· ${esc(c.resto_address)}</span>` : ""}</button>`
+							)
+							.join("")
+					: ""
+			);
+			$m.find("[data-i]").on("click", (e) => {
+				const c = found[+$(e.currentTarget).attr("data-i")];
+				d.set_value("customer", c.name);
+				d.set_value("customer_name", c.customer_name);
+				if (c.mobile_no) d.set_value("phone", c.mobile_no);
+				if (c.resto_address && !d.get_value("address")) d.set_value("address", c.resto_address);
+				d.set_value("new_customer", 0);
+				show();
+			});
+		};
+		let t;
+		const search = (txt) => {
+			clearTimeout(t);
+			if (d.get_value("customer") || (txt || "").trim().length < 2) {
+				found = [];
+				return show();
+			}
+			t = setTimeout(async () => {
+				found = (await call("search_customers", { txt })) || [];
+				show();
+			}, 300);
+		};
+		["phone", "customer_name"].forEach((f) =>
+			d.fields_dict[f].$input.on("input", (e) => search($(e.currentTarget).val()))
+		);
+		show();
+	}
+
+	customer_values(v) {
+		// A new customer needs a name; without one the order just keeps what was typed.
+		const out = { ...v };
+		delete out.matches;
+		out.new_customer = !out.customer && out.new_customer && (out.customer_name || "").trim() ? 1 : 0;
+		return out;
+	}
+
 	new_order(order_type) {
 		const d = new frappe.ui.Dialog({
 			title: __("New {0} Order", [__(order_type, null, "Resto")]),
-			fields: [
-				{ fieldname: "customer", fieldtype: "Link", options: "Customer", label: __("Customer") },
-				{ fieldname: "customer_name", fieldtype: "Data", label: __("Customer Name") },
-				{ fieldname: "phone", fieldtype: "Data", label: __("Phone") },
-				{
-					fieldname: "address",
-					fieldtype: "Small Text",
-					label: __("Address"),
-					depends_on: `eval:${order_type === "Delivery"}`,
-				},
-			],
+			fields: this.customer_fields({}, order_type === "Delivery"),
 			primary_action_label: __("Start", null, "Resto"),
 			primary_action: async (v) => {
 				d.hide();
-				const name = await call("create_order", { order_type, ...v }, true);
+				const name = await call("create_order", { order_type, ...this.customer_values(v) }, true);
 				this.load_order(name);
+			},
+		});
+		d.show();
+		this.bind_customer(d);
+		d.fields_dict.phone.$input.focus();
+	}
+
+	// ------------------------------------------------------------------ shift (POSNext)
+
+	shift_bar() {
+		const s = this.floor.shift;
+		if (!s) return "";
+		if (s.shift) {
+			return `<div class="rf-shift rf-shift-open">${__("Shift open since {0}", [esc(frappe.datetime.str_to_user(s.since))])}
+				<button class="btn btn-xs btn-default" data-shift="close">${__("Close Shift")}</button></div>`;
+		}
+		if (s.other_profile) {
+			return `<div class="rf-shift rf-shift-none">${__("Your open shift is on POS Profile {0}; close it in POSNext first", [esc(s.other_profile)])}</div>`;
+		}
+		return `<div class="rf-shift rf-shift-none">${s.required ? __("No shift open: bills cannot be settled") : __("No shift open")}
+			<button class="btn btn-xs btn-primary" data-shift="open">${__("Open Shift")}</button></div>`;
+	}
+
+	async open_shift() {
+		const data = await frappe.xcall("resto.resto.shift.opening_data");
+		const d = new frappe.ui.Dialog({
+			title: __("Open Shift"),
+			fields: [
+				{ fieldtype: "HTML", options: `<p class="text-muted">${__("POS Profile")}: ${esc(data.pos_profile)}. ${__("Count the money in the drawer.")}</p>` },
+				...data.modes.map((m, i) => ({ fieldname: "m_" + i, fieldtype: "Currency", label: m, default: 0 })),
+			],
+			primary_action_label: __("Open Shift"),
+			primary_action: async (v) => {
+				const amounts = {};
+				data.modes.forEach((m, i) => (amounts[m] = flt(v["m_" + i])));
+				d.hide();
+				await frappe.xcall("resto.resto.shift.open_shift", { amounts: JSON.stringify(amounts) });
+				frappe.show_alert({ message: __("Shift opened"), indicator: "green" });
+				this.refresh();
+			},
+		});
+		d.show();
+	}
+
+	async close_shift() {
+		const data = await frappe.xcall("resto.resto.shift.closing_data");
+		const d = new frappe.ui.Dialog({
+			title: __("Close Shift"),
+			fields: [
+				{
+					fieldtype: "HTML",
+					options: `<p class="text-muted">${__("Invoices in this shift: {0}", [data.invoices])}. ${__("Count the money in the drawer and enter what you counted.")}</p>`,
+				},
+				...data.rows.map((r, i) => ({
+					fieldname: "m_" + i,
+					fieldtype: "Currency",
+					reqd: 1,
+					label: data.blind ? r.mode_of_payment : `${r.mode_of_payment} — ${__("expected")} ${money(r.expected_amount)}`,
+				})),
+			],
+			primary_action_label: __("Close Shift"),
+			primary_action: async (v) => {
+				const amounts = {};
+				data.rows.forEach((r, i) => (amounts[r.mode_of_payment] = flt(v["m_" + i])));
+				d.hide();
+				const res = await frappe.xcall("resto.resto.shift.close_shift", { amounts: JSON.stringify(amounts) });
+				const rows = (res.rows || [])
+					.map(
+						(r) => `<tr><td>${esc(r.mode_of_payment)}</td><td class="rf-amt">${money(r.expected_amount)}</td>
+							<td class="rf-amt">${money(r.closing_amount)}</td>
+							<td class="rf-amt ${flt(r.difference) < 0 ? "text-danger" : ""}">${money(r.difference)}</td></tr>`
+					)
+					.join("");
+				frappe.msgprint({
+					title: __("Shift closed: {0}", [esc(res.closing)]),
+					indicator: "green",
+					message: `<table class="table table-condensed"><tr><th></th><th>${__("Expected")}</th><th>${__("Counted")}</th><th>${__("Difference")}</th></tr>${rows}</table>`,
+				});
+				this.refresh();
 			},
 		});
 		d.show();
@@ -771,18 +927,23 @@ class RestoFloor {
 
 	edit_info() {
 		const o = this.order;
-		frappe.prompt(
-			[
+		const d = new frappe.ui.Dialog({
+			title: __("Guests and Customer"),
+			fields: [
 				{ fieldname: "guests", fieldtype: "Int", label: __("Guests"), default: o.guests },
-				{ fieldname: "customer", fieldtype: "Link", options: "Customer", label: __("Customer"), default: o.customer },
-				{ fieldname: "customer_name", fieldtype: "Data", label: __("Customer Name"), default: o.customer_name },
-				{ fieldname: "phone", fieldtype: "Data", label: __("Phone"), default: o.phone },
-				{ fieldname: "address", fieldtype: "Small Text", label: __("Address"), default: o.address },
+				...this.customer_fields(o, true),
 				{ fieldname: "notes", fieldtype: "Small Text", label: __("Notes"), default: o.notes },
 			],
-			async (v) => { await call("update_order_info", { order: o.name, ...v }, true); this.load_order(o.name); },
-			__("Guests and Customer")
-		);
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				d.hide();
+				// An empty customer clears the link (a name typed alone stays on the order).
+				await call("update_order_info", { order: o.name, ...this.customer_values(v), customer: v.customer || "" }, true);
+				this.load_order(o.name);
+			},
+		});
+		d.show();
+		this.bind_customer(d);
 	}
 
 	free_tables() {
@@ -987,6 +1148,11 @@ class RestoFloor {
 
 	static css() {
 		return `
+		.rf-shift { flex-basis:100%; border-radius:8px; padding:6px 10px; margin-bottom:6px; font-weight:600; display:flex; gap:10px; align-items:center; }
+		.rf-shift-open { background:var(--green-50, #f0fff4); color:var(--green-800, #276749); border:1px solid var(--green-300, #9ae6b4); }
+		.rf-shift-none { background:var(--yellow-50, #fffff0); color:var(--yellow-800, #975a16); border:2px solid var(--yellow-400, #f6e05e); }
+		.rf-cust { display:block; width:100%; text-align:start; margin-bottom:4px; white-space:normal; }
+		.rf-cust-picked { font-weight:600; color:var(--green-700, #2f855a); margin-bottom:6px; }
 		.rf-print-alert { flex-basis:100%; border-radius:8px; padding:6px 10px; margin-bottom:6px; font-weight:600; background:var(--red-100, #fed7d7); color:var(--red-800, #9b2c2c); border:2px solid var(--red-500, #f56565); }
 		.resto-floor .rf-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
 		.rf-count { opacity:.7; font-size:11px; margin-inline-start:4px; }

@@ -6,7 +6,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, getdate, now_datetime, nowdate
 
-from resto.resto import billing, kitchen, printing, sides
+from resto.resto import billing, kitchen, printing, shift, sides
 from resto.resto.doctype.resto_modifier_group.resto_modifier_group import groups_for_item
 from resto.resto.doctype.resto_order.resto_order import ACTIVE, default_service_percent
 from resto.resto.utils import (
@@ -161,6 +161,7 @@ def get_floor():
 			t: default_service_percent(settings, t) for t in ("Dine In", "Takeaway", "Delivery")
 		},
 		"delivery_fee": flt(settings.delivery_fee),
+		"shift": shift.status() if has_role(CASHIER) else None,
 	}
 
 
@@ -238,25 +239,113 @@ def get_order(order):
 	return data
 
 
+def _phone(value):
+	"""A phone as typed at the counter, without spaces and dashes."""
+	return "".join(ch for ch in (value or "") if ch not in " -").strip() or None
+
+
 @frappe.whitelist()
 def search_customers(txt=""):
+	"""Customers by name, phone (theirs or a linked contact's) or delivery address; the latest first."""
 	require_role(*STAFF)
-	txt = f"%{txt}%"
-	return frappe.get_all(
-		"Customer",
-		filters={"disabled": 0},
-		or_filters={"name": ("like", txt), "customer_name": ("like", txt), "mobile_no": ("like", txt)},
-		fields=["name", "customer_name", "mobile_no"],
-		limit=20,
+	txt = (txt or "").strip()
+	if len(txt) < 2:
+		return []
+	like = f"%{_phone(txt) if txt[:1].isdigit() or txt[:1] == '+' else txt}%"
+	return frappe.db.sql(
+		"""select c.name, c.customer_name, c.mobile_no, c.resto_address
+		from `tabCustomer` c
+		where c.disabled = 0 and (
+			c.name like %(t)s or c.customer_name like %(t)s or c.mobile_no like %(t)s or c.resto_address like %(t)s
+			or c.name in (
+				select dl.link_name from `tabDynamic Link` dl
+				join `tabContact Phone` cp on cp.parent = dl.parent and cp.parenttype = 'Contact'
+				where dl.parenttype = 'Contact' and dl.link_doctype = 'Customer' and cp.phone like %(t)s))
+		order by c.modified desc
+		limit 20""",
+		{"t": like},
+		as_dict=True,
 	)
+
+
+def _customer_by_phone(phone):
+	if not phone:
+		return None
+	found = frappe.db.get_value("Customer", {"mobile_no": phone, "disabled": 0}, "name")
+	if found:
+		return found
+	rows = frappe.db.sql(
+		"""select dl.link_name from `tabDynamic Link` dl
+		join `tabContact Phone` cp on cp.parent = dl.parent and cp.parenttype = 'Contact'
+		join `tabCustomer` c on c.name = dl.link_name and c.disabled = 0
+		where dl.parenttype = 'Contact' and dl.link_doctype = 'Customer' and cp.phone = %s limit 1""",
+		phone,
+	)
+	return rows[0][0] if rows else None
+
+
+def _leaf(doctype, value):
+	"""value when it is a leaf of the tree, else the first leaf (a customer needs one)."""
+	if value and not frappe.db.get_value(doctype, value, "is_group"):
+		return value
+	return frappe.db.get_value(doctype, {"is_group": 0}, "name", order_by="lft")
+
+
+def _new_customer(name, phone=None, address=None):
+	"""A Customer made at the counter (cashier): the phone goes on its primary contact (ERPNext makes
+	it), the delivery address is kept on it as typed. A phone already known gives that customer."""
+	require_role(CASHIER)
+	name = (name or "").strip()
+	if not name:
+		frappe.throw(_("Enter the customer's name"))
+	same = _customer_by_phone(phone)
+	if same:
+		return same
+	selling = frappe.get_cached_doc("Selling Settings")
+	doc = frappe.get_doc(
+		{
+			"doctype": "Customer",
+			"customer_name": name,
+			"customer_type": "Individual",
+			"customer_group": _leaf("Customer Group", selling.customer_group),
+			"territory": _leaf("Territory", selling.territory),
+			"mobile_no": phone,
+			"resto_address": (address or "").strip() or None,
+		}
+	)
+	doc.flags.ignore_permissions = True  # the contact too (ERPNext passes the flag on)
+	doc.insert()
+	return doc.name
+
+
+def _customer_details(customer, customer_name, phone, address, new_customer):
+	"""(customer, name, phone, address) of an order: a new customer saved when asked, and what a
+	chosen customer has filling what was left empty."""
+	phone = _phone(phone)
+	if not customer and cint(new_customer):
+		customer = _new_customer(customer_name, phone, address)
+	if customer:
+		c = frappe.db.get_value("Customer", customer, ["customer_name", "mobile_no", "resto_address"], as_dict=True)
+		if not c:
+			frappe.throw(_("Customer {0} not found").format(customer))
+		customer_name = customer_name or c.customer_name
+		phone = phone or c.mobile_no
+		if address and not c.resto_address and has_role(CASHIER):
+			# The first delivery address typed is kept for next time.
+			frappe.db.set_value("Customer", customer, "resto_address", address.strip(), update_modified=False)
+		address = address or c.resto_address
+	return customer, customer_name, phone, address
 
 
 # --------------------------------------------------------------------------- orders
 
 
 @frappe.whitelist(methods=["POST"])
-def create_order(order_type="Dine In", table=None, guests=1, customer=None, customer_name=None, phone=None, address=None):
+def create_order(
+	order_type="Dine In", table=None, guests=1, customer=None, customer_name=None, phone=None, address=None, new_customer=0
+):
 	require_role(WAITER, CASHIER)
+	customer, customer_name, phone, address = _customer_details(customer, customer_name, phone, address, new_customer)
 	order = frappe.new_doc("Resto Order")
 	order.update(
 		{
@@ -264,7 +353,7 @@ def create_order(order_type="Dine In", table=None, guests=1, customer=None, cust
 			"resto_table": table if order_type == "Dine In" else None,
 			"guests": cint(guests) or 1,
 			"customer": customer,
-			"customer_name": customer_name or (frappe.db.get_value("Customer", customer, "customer_name") if customer else None),
+			"customer_name": customer_name,
 			"phone": phone,
 			"address": address,
 			"delivery_status": "Pending" if order_type == "Delivery" else None,
@@ -276,9 +365,13 @@ def create_order(order_type="Dine In", table=None, guests=1, customer=None, cust
 
 
 @frappe.whitelist(methods=["POST"])
-def update_order_info(order, guests=None, customer=None, customer_name=None, phone=None, address=None, notes=None):
+def update_order_info(
+	order, guests=None, customer=None, customer_name=None, phone=None, address=None, notes=None, new_customer=0
+):
 	require_role(WAITER, CASHIER, HOST)
 	doc = _get_order(order)
+	if customer or cint(new_customer):
+		customer, customer_name, phone, address = _customer_details(customer, customer_name, phone, address, new_customer)
 	for field, value in (
 		("customer", customer),
 		("customer_name", customer_name),
