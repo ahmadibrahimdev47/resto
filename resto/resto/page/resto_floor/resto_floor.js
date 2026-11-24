@@ -383,12 +383,14 @@ class RestoFloor {
 	shift_bar() {
 		const s = this.floor.shift;
 		if (!s) return "";
-		if (s.shift) {
-			return `<div class="rf-shift rf-shift-open">${__("Shift open since {0}", [esc(frappe.datetime.str_to_user(s.since))])}
+		if (s.shift && s.other_profile) {
+			// Bills here need a shift on the restaurant's profile: this one is closed first.
+			return `<div class="rf-shift rf-shift-none">${__("Your open shift is on POS Profile {0}; close it and open one on {1}", [esc(s.other_profile), esc(s.pos_profile)])}
 				<button class="btn btn-xs btn-default" data-shift="close">${__("Close Shift")}</button></div>`;
 		}
-		if (s.other_profile) {
-			return `<div class="rf-shift rf-shift-none">${__("Your open shift is on POS Profile {0}; close it in POSNext first", [esc(s.other_profile)])}</div>`;
+		if (s.shift) {
+			return `<div class="rf-shift rf-shift-open">✓ ${__("Shift open since {0}", [esc(frappe.datetime.str_to_user(s.since))])}
+				<button class="btn btn-xs btn-default" data-shift="close">${__("Close Shift")}</button></div>`;
 		}
 		return `<div class="rf-shift rf-shift-none">${s.required ? __("No shift open: bills cannot be settled") : __("No shift open")}
 			<button class="btn btn-xs btn-primary" data-shift="open">${__("Open Shift")}</button></div>`;
@@ -396,11 +398,27 @@ class RestoFloor {
 
 	async open_shift() {
 		const data = await frappe.xcall("resto.resto.shift.opening_data");
+		if (data.open_shift) {
+			frappe.msgprint(__("You already have an open shift: {0}", [esc(data.open_shift)]));
+			return this.refresh();
+		}
+		// As POSNext's opening: the profile, the cashier and now, then the opening balance of each method.
+		const ro = (fieldname, label, value, fieldtype = "Data") => ({ fieldname, label, fieldtype, default: value, read_only: 1 });
 		const d = new frappe.ui.Dialog({
 			title: __("Open Shift"),
 			fields: [
-				{ fieldtype: "HTML", options: `<p class="text-muted">${__("POS Profile")}: ${esc(data.pos_profile)}. ${__("Count the money in the drawer.")}</p>` },
-				...data.modes.map((m, i) => ({ fieldname: "m_" + i, fieldtype: "Currency", label: m, default: 0 })),
+				ro("pos_profile", __("POS Profile"), data.pos_profile),
+				ro("company", __("Company"), data.company),
+				ro("warehouse", __("Warehouse"), data.warehouse),
+				{ fieldtype: "Column Break" },
+				ro("cashier", __("Cashier"), data.cashier),
+				ro("now", __("Date and Time"), data.now, "Datetime"),
+				ro("currency", __("Currency"), data.currency),
+				{ fieldtype: "Section Break", label: __("Opening Balance (Optional)") },
+				{ fieldtype: "HTML", options: `<p class="text-muted">${__("Count the money in the drawer.")}</p>` },
+				...(data.modes.length
+					? data.modes.map((m, i) => ({ fieldname: "m_" + i, fieldtype: "Currency", label: m, default: 0, options: "currency" }))
+					: [{ fieldtype: "HTML", options: `<p class="text-danger">${__("No payment methods configured for this POS Profile")}</p>` }]),
 			],
 			primary_action_label: __("Open Shift"),
 			primary_action: async (v) => {

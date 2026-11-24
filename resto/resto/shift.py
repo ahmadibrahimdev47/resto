@@ -11,7 +11,6 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-from resto.resto.billing import get_open_shift
 from resto.resto.utils import CASHIER, get_settings, posnext_installed, require_role
 
 
@@ -46,11 +45,21 @@ def _blind(profile):
 	return bool(cint(frappe.db.get_value("POS Settings", {"pos_profile": profile}, "hide_expected_amount")))
 
 
+def _user_shift():
+	"""(POS Profile, shift) the user has open: POSNext allows one per user, on any profile."""
+	row = frappe.db.get_value(
+		"POS Opening Shift",
+		{"user": frappe.session.user, "docstatus": 1, "status": "Open", "pos_closing_shift": ("is", "not set")},
+		["pos_profile", "name"],
+		order_by="period_start_date desc",
+	)
+	return tuple(row) if row else (None, None)
+
+
 def _own_shift():
-	profile = _profile()
-	name = get_open_shift(frappe.session.user, profile)
+	profile, name = _user_shift()
 	if not name:
-		frappe.throw(_("You have no open shift on POS Profile {0}").format(frappe.bold(profile)))
+		frappe.throw(_("You have no open shift"))
 	return profile, name
 
 
@@ -67,27 +76,32 @@ def status():
 	if not posnext_installed() or not frappe.db.exists("DocType", "POS Opening Shift"):
 		return None
 	settings = get_settings()
-	profile = settings.pos_profile
-	name = get_open_shift(frappe.session.user, profile) if profile else None
-	out = {"required": cint(settings.require_pos_shift), "pos_profile": profile, "shift": name}
+	profile, name = _user_shift()
+	out = {"required": cint(settings.require_pos_shift), "pos_profile": settings.pos_profile, "shift": name}
 	if name:
 		out["since"] = frappe.db.get_value("POS Opening Shift", name, "period_start_date")
-	else:
-		# POSNext allows one open shift per user: one on another POS Profile is closed in POSNext.
-		other = frappe.db.get_value(
-			"POS Opening Shift",
-			{"user": frappe.session.user, "docstatus": 1, "status": "Open", "pos_profile": ("!=", profile or "")},
-			"pos_profile",
-		)
-		out["other_profile"] = other
+		# Open on another profile (from POSNext): the restaurant's bills need one on its own profile.
+		out["other_profile"] = profile if profile != settings.pos_profile else None
 	return out
 
 
 @frappe.whitelist()
 def opening_data():
+	"""What POSNext's opening shows: the POS Profile (the restaurant's), its company, warehouse and
+	currency, the cashier, now, and each payment method for its opening balance."""
 	require_role(CASHIER)
 	profile = _profile()
-	return {"pos_profile": profile, "modes": [m.mode_of_payment for m in _modes(profile)]}
+	p = frappe.db.get_value("POS Profile", profile, ["company", "warehouse", "currency"], as_dict=True) or {}
+	return {
+		"pos_profile": profile,
+		"company": p.get("company"),
+		"warehouse": p.get("warehouse"),
+		"currency": p.get("currency"),
+		"cashier": frappe.utils.get_fullname(frappe.session.user),
+		"now": str(frappe.utils.now_datetime()),
+		"open_shift": _user_shift()[1],
+		"modes": [m.mode_of_payment for m in _modes(profile)],
+	}
 
 
 @frappe.whitelist(methods=["POST"])
