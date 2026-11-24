@@ -509,10 +509,13 @@ def _members(order):
 
 
 def _mark_moved(order, set_id, key):
-	"""A voided line's share of a set went to the lines still in it (they deduct it now): marked on the
-	voided line, so a waste posted for it later leaves that share out."""
+	"""A line voided uncooked in this save: its share of the set went to the lines still in it (they
+	deduct it now). Marked on the voided line, so a waste posted for it later leaves that share out.
+	A line voided before (its share kept, or wasted with it) is not touched."""
+	before = order.get("before_doc")
+	was = {d.name: d.kitchen_status for d in before.items} if before else {}
 	for d in order.items:
-		if d.kitchen_status != VOID or not d.sides:
+		if d.kitchen_status != VOID or not d.sides or d.get("void_waste") or was.get(d.name, VOID) == VOID:
 			continue
 		choice = _loads(d.sides) or {}
 		entry = choice.get(key)

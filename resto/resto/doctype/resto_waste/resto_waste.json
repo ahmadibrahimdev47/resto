@@ -18,6 +18,8 @@
   "total_amount",
   "stock_entry",
   "remarks",
+  "resto_order",
+  "order_item",
   "amended_from"
  ],
  "fields": [
@@ -97,6 +99,20 @@
    "label": "Remarks"
   },
   {
+   "fieldname": "resto_order",
+   "fieldtype": "Link",
+   "label": "Resto Order",
+   "options": "Resto Order",
+   "read_only": 1
+  },
+  {
+   "fieldname": "order_item",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Order Item",
+   "read_only": 1
+  },
+  {
    "fieldname": "amended_from",
    "fieldtype": "Link",
    "options": "Resto Waste",
@@ -111,7 +127,7 @@
  "is_submittable": 1,
  "istable": 0,
  "links": [],
- "modified": "2026-11-21 13:31:36.000000",
+ "modified": "2026-11-24 15:30:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Waste",

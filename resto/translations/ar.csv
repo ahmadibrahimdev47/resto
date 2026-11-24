@@ -1116,3 +1116,5 @@
 "{0} is void, but its waste could not be posted. Try again with Post Waste for Cooked Dishes on the order, or tell the manager.","أُلغي {0}، لكن تعذّر تسجيل هالكه. أعد المحاولة بزر «تسجيل هالك للأطباق المطهوّة» في الطلب، أو أبلغ المدير.",""
 "Waste Posted By","سجّل الهالك",""
 "Waste Posted At","وقت تسجيل الهالك",""
+"This waste was posted for a voided dish; post it again from its order instead of amending it","سُجّل هذا الهالك لصنف مُلغى؛ سجّله مرة أخرى من طلبه بدلًا من تعديله",""
+"Order Item","صنف الطلب",""

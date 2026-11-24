@@ -800,3 +800,34 @@ class TestSides(IntegrationTestCase):
 		row.qty = 3
 		sides._apply(row, sides.clean_choice(row.item_code, {GROUP: {"items": {"SAUCE-TAHINI": 1.5}}}, row.item_name, strict=False))
 		self.assertAlmostEqual(flt(json.loads(row.sides_extras)["SAUCE-TAHINI"]["portions"]) * 3, 1, 6)  # 1.5 → 1 cup billed, the half free
+
+	def test_late_waste_of_the_other_dish_after_cancel_takes_nothing_twice(self):
+		# The plate's waste took the 3 tahini of the set; the grill posted later wastes only its own dish.
+		order, plate, grill = self.shared_pair(3)
+		floor.send_to_kitchen(order)
+		before = bins()
+		floor.cancel_order(order, "Guest left", cooked=json.dumps([plate]))
+		self.assertTrue(floor.post_cooked_waste(order, json.dumps([grill]))[grill])
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+
+	def test_cancel_without_ticks_then_a_late_waste_takes_the_set(self):
+		# Same as ticking the plate at the cancel: the set's 3 tahini, once.
+		order, plate, grill = self.shared_pair(3)
+		floor.send_to_kitchen(order)
+		before = bins()
+		floor.cancel_order(order, "Guest left")
+		floor.post_cooked_waste(order, json.dumps([plate]))
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+		floor.post_cooked_waste(order, json.dumps([grill]))
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)
+
+	def test_a_cancelled_waste_gives_back_the_shares_it_took(self):
+		order, plate, grill = self.shared_pair(3)
+		floor.send_to_kitchen(order)
+		before = bins()
+		floor.cancel_order(order, "Guest left", cooked=json.dumps([plate]))
+		frappe.get_doc("Resto Waste", frappe.db.get_value("Resto Order Item", plate, "void_waste")).cancel()
+		self.assertFalse(moved(before).get("SAUCE-TAHINI"))
+		self.assertNotIn('"w"', frappe.db.get_value("Resto Order Item", grill, "sides"))
+		floor.post_cooked_waste(order, json.dumps([grill]))
+		self.assertEqual(moved(before).get("SAUCE-TAHINI"), 3)

@@ -477,65 +477,144 @@ def _deducts_stock(item_code):
 	return bool(frappe.db.get_value("Product Bundle", {"new_item_code": item_code, "disabled": 0}, "name"))
 
 
-def _waste_items(row, qty, extra=None):
-	"""{item: stock qty} the kitchen made for qty dishes of the line, as billing would deduct it.
+# A voided line as the waste reads it: fresh from the database (the marks of a waste posted a moment ago).
+_LINE_FIELDS = ["name", "item_code", "item_name", "qty", "modifiers", "sides", "sides_qty", "sides_extras", "kitchen_status", "void_waste"]
 
-	A share of a shared side that went to the other dishes when this line was voided uncooked (they
-	deduct it now) is left out. extra: more plated with it (the shares of dishes cancelled with it)."""
+
+def _order_lines(order):
+	return frappe.get_all("Resto Order Item", filters={"parent": order.name, "parenttype": "Resto Order"}, fields=_LINE_FIELDS)
+
+
+def _slot_part(row, key):
+	"""({side item: stock qty} free, {billing item: portions} extra) per dish of one shared choice of a
+	line, as its bill deducts them (extra portions of a set are billed apart, as their own item)."""
+	entry = (sides._loads(row.get("sides")) or {}).get(key) or {}
+	extras = [e for e in (sides._loads(row.get("sides_extras")) or {}).values() if e.get("set") and e.get("set") == entry.get("set")]
+	billed = {}
+	for option, e in (sides._loads(row.get("sides_extras")) or {}).items():
+		if e.get("set") and e.get("set") == entry.get("set"):
+			billed[option] = flt(e.get("portions"))
+	items = {i: flt(p) - flt(billed.get(i)) for i, p in (entry.get("items") or {}).items()}
+	free = sides.qty_per_dish(row.item_code, {key: {**entry, "items": {i: p for i, p in items.items() if p > 1e-9}}})
+	extra = {}
+	for e in extras:
+		if flt(e.get("portions")) > 0 and e.get("item"):
+			extra[e["item"]] = extra.get(e["item"], 0) + flt(e["portions"])
+	return free, extra
+
+
+def _mark_share(line, key, flag, value=None):
+	"""Set (value) or clear (None) a mark on one shared choice of a line, in the database only."""
+	choice = sides._loads(frappe.db.get_value("Resto Order Item", line, "sides")) or {}
+	entry = choice.get(key)
+	if not isinstance(entry, dict):
+		return
+	if value is None:
+		entry.pop(flag, None)
+	else:
+		entry[flag] = value
+	frappe.db.set_value("Resto Order Item", line, "sides", sides._dumps(choice), update_modified=False)
+
+
+def _waste_items(order, row, qty):
+	"""({item: stock qty}, [(line, slot)]): what the kitchen made for qty dishes of a voided line, as
+	billing would deduct it, and the shares of a shared side it takes from other lines.
+
+	A shared side goes with its dish: it is deducted when the dish is billed or wasted, or it went to
+	the other dishes of the set when the dish was voided uncooked (they deduct it now: "moved"). When
+	an order is cancelled the kitchen had plated each set's total at once ("c"): the first waste of a
+	dish of the set takes the shares of all its dishes, every dish of its own line too, and marks the
+	shares it took from other lines ("w", the waste), so no share is wasted twice."""
 	out = {}
 
 	def add(item, q):
 		if q > 1e-9:
 			out[item] = out.get(item, 0) + q
 
-	choice = json.loads(row.sides) if row.get("sides") else {}
-	moved = {k for k, e in choice.items() if isinstance(e, dict) and e.get("moved")}
-	if moved:
-		# The rest of what it served, extra portions included (as stock, per portion).
-		rest = {k: e for k, e in choice.items() if k not in moved}
-		for item, q in sides.dish_components(row.item_code, sides.qty_per_dish(row.item_code, rest) if rest else {}).items():
-			add(item, q * qty)
-	elif row.get("sides"):
-		# Changed sides: the dish's main ingredients and the sides it was made with.
-		served = json.loads(row.sides_qty) if row.get("sides_qty") else sides.qty_per_dish(row.item_code, choice)
-		for item, q in sides.dish_components(row.item_code, served).items():
-			add(item, q * qty)
-		# Extra portions were plated with it: their own item, as they would have been billed.
-		for e in json.loads(row.get("sides_extras") or "{}").values():
+	taken = []
+	choice = sides._loads(row.get("sides")) or {}
+	if choice:
+		# What one dish served, as frozen when it went to the kitchen; its shared choices apart.
+		free = dict(sides._loads(row.get("sides_qty")) or sides.qty_per_dish(row.item_code, choice))
+		extra = {}
+		for e in (sides._loads(row.get("sides_extras")) or {}).values():
 			if flt(e.get("portions")) > 0 and e.get("item"):
-				add(e["item"], flt(e["portions"]) * qty)
+				extra[e["item"]] = extra.get(e["item"], 0) + flt(e["portions"])
+		together = set()
+		for key, set_id in sides.shared_slots(row).items():
+			entry = choice[key]
+			slot_free, slot_extra = _slot_part(row, key)
+			for item, q in slot_free.items():
+				free[item] = max(flt(free.get(item)) - q, 0)
+			for item, q in slot_extra.items():
+				extra[item] = max(flt(extra.get(item)) - q, 0)
+			if entry.get("moved") or entry.get("w"):
+				continue
+			dishes = flt(row.qty) if entry.get("c") else qty
+			for item, q in sides._flat(slot_free).items():
+				add(item, q * dishes)
+			for item, q in slot_extra.items():
+				add(item, q * dishes)
+			if entry.get("c"):
+				together.add((set_id, key))
+		for item, q in sides.dish_components(row.item_code, {k: v for k, v in free.items() if v > 1e-9}).items():
+			add(item, q * qty)
+		for item, q in extra.items():
+			add(item, q * qty)
+		for d in _order_lines(order) if together else ():
+			if d.name == row.name or d.kitchen_status != "Void" or d.void_waste:
+				continue
+			for key, set_id in sides.shared_slots(d).items():
+				entry = sides._loads(d.sides)[key]
+				if (set_id, key) not in together or not entry.get("c") or entry.get("moved") or entry.get("w"):
+					continue
+				slot_free, slot_extra = _slot_part(d, key)
+				for item, q in sides._flat(slot_free).items():
+					add(item, q * flt(d.qty))
+				for item, q in slot_extra.items():
+					add(item, q * flt(d.qty))
+				taken.append((d.name, key))
 	else:
 		add(row.item_code, qty)
 	for mod in json.loads(row.modifiers or "[]"):
 		if flt(mod.get("price")) and mod.get("item") and _deducts_stock(mod["item"]):
 			add(mod["item"], qty)
-	for item, q in (extra or {}).items():
-		add(item, q)
-	return out
+	return out, taken
 
 
-def _waste_for_void(order, row, reason, qty=None, extra=None):
+def _waste_for_void(order, row, reason, qty=None):
 	"""Post the waste of a dish voided after cooking (qty dishes of the line, all by default) and link
 	it on the line. Returns the Resto Waste, or None when it could not be posted (the void stands)."""
-	qty = flt(row.qty) if qty is None else flt(qty)
+	# A locking read: a second request at the same moment sees the waste the first one posted.
+	line = frappe.db.get_value("Resto Order Item", row.name, _LINE_FIELDS, as_dict=True, for_update=True)
+	if line.void_waste:
+		frappe.msgprint(
+			_("Waste {0} is already posted for {1}").format(line.void_waste, frappe.bold(line.item_name)), indicator="orange"
+		)
+		return None
+	qty = flt(line.qty) if qty is None else flt(qty)
 	messages = len(frappe.local.message_log or [])
 	frappe.db.savepoint("resto_void_waste")
 	try:
-		items = _waste_items(row, qty, extra)
+		items, taken = _waste_items(order, line, qty)
 		waste = frappe.get_doc(
 			{
 				"doctype": "Resto Waste",
 				"remarks": _("Voided after cooking on order {0}: {1}").format(order.name, reason),
+				"resto_order": order.name,
+				"order_item": line.name,
 				"items": [{"item_code": k, "qty": v, "reason": "Other", "note": reason} for k, v in items.items()],
 			}
 		)
 		waste.flags.ignore_permissions = True
 		waste.insert()
 		waste.submit()
-		frappe.db.set_value("Resto Order Item", row.name, "void_waste", waste.name, update_modified=False)
+		frappe.db.set_value("Resto Order Item", line.name, "void_waste", waste.name, update_modified=False)
+		for name, key in taken:
+			_mark_share(name, key, "w", waste.name)
 		# A form of the order opened before this cannot be saved over the link.
 		frappe.db.set_value("Resto Order", order.name, "modified", now_datetime(), update_modified=False)
-		order.add_comment("Info", _("Waste {0} posted for the voided {1}").format(waste.name, row.item_name))
+		order.add_comment("Info", _("Waste {0} posted for the voided {1}").format(waste.name, line.item_name))
 		return waste.name
 	except Exception:
 		frappe.db.rollback(save_point="resto_void_waste")
@@ -545,7 +624,7 @@ def _waste_for_void(order, row, reason, qty=None, extra=None):
 		frappe.log_error(title=f"Resto void waste for {order.name}")
 		frappe.msgprint(
 			_("{0} is void, but its waste could not be posted. Try again with Post Waste for Cooked Dishes on the order, or tell the manager.").format(
-				frappe.bold(row.item_name)
+				frappe.bold(line.item_name)
 			),
 			indicator="orange",
 		)
@@ -698,8 +777,8 @@ COOKED_WASTE_HOURS = 12
 def cancel_order(order, reason, cooked=None):
 	"""Cancel an order. With sent items this needs a manager and the kitchen gets void tickets.
 
-	cooked: the sent lines the kitchen already made (JSON list of line names): their ingredients are
-	posted as waste, as for a void after cooking; the others stay in stock."""
+	cooked: the sent lines the kitchen already made (JSON list of line names, or {line: dishes}): their
+	ingredients are posted as waste, as for a void after cooking; the others stay in stock."""
 	require_role(WAITER, CASHIER)
 	if not (reason or "").strip():
 		frappe.throw(_("Enter a reason"))
@@ -711,7 +790,8 @@ def cancel_order(order, reason, cooked=None):
 	if sent:
 		require_role(MANAGER)
 	cooked = _cooked_qty(cooked, sent)
-	extra = _shares_with_the_cooked(doc, cooked)
+	# The lines whose shared sides the kitchen plated together (a held line's share went on the ticket).
+	together = [d for d in doc.items if d.kitchen_status != "Void" and sides.shared_slots(d)]
 	kitchen.void_lines(doc, sent, reason)
 	for d in doc.items:
 		if d.kitchen_status == "Not Sent":
@@ -726,34 +806,14 @@ def cancel_order(order, reason, cooked=None):
 	_save(doc)
 	if doc.reservation:
 		frappe.db.set_value("Resto Reservation", doc.reservation, "status", "Cancelled")
+	if sent:
+		for d in together:
+			for key in sides.shared_slots(d):
+				_mark_share(d.name, key, "c", 1)
 	for d in sent:
 		if d.name in cooked:
-			_waste_for_void(doc, d, reason, cooked[d.name], extra.get(d.name))
+			_waste_for_void(doc, d, reason, cooked[d.name])
 	return doc.name
-
-
-def _shares_with_the_cooked(order, cooked):
-	"""{cooked line: {item: stock qty}}: what dishes cancelled uncooked held of a side they shared with
-	a cooked dish. The kitchen plated the set's total, so it is wasted with the first cooked dish of the
-	set, as voiding the others first would have moved it there."""
-	out = {}
-	lines = [d for d in order.items if d.kitchen_status != "Void"]
-	sets = {}
-	for d in lines:
-		for key, set_id in sides.shared_slots(d).items():
-			sets.setdefault((set_id, key), []).append(d)
-	for (_set_id, key), members in sets.items():
-		first = next((d for d in members if d.name in cooked), None)
-		if not first:
-			continue
-		target = out.setdefault(first.name, {})
-		for d in members:
-			left = flt(d.qty) - flt(cooked.get(d.name))
-			if left <= 1e-9:
-				continue
-			for item, q in sides.slot_qty(d, key).items():
-				target[item] = target.get(item, 0) + q * left
-	return out
 
 
 @frappe.whitelist(methods=["POST"])

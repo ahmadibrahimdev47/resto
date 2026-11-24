@@ -1,3 +1,5 @@
+import json
+
 import frappe
 from frappe import _
 from frappe.model.document import Document
@@ -8,6 +10,9 @@ from resto.resto.utils import get_settings
 
 class RestoWaste(Document):
 	def validate(self):
+		if self.is_new() and self.amended_from and self.order_item:
+			# Its dish is free again: posted from the order, the shares of a shared side come right.
+			frappe.throw(_("This waste was posted for a voided dish; post it again from its order instead of amending it"))
 		settings = get_settings()
 		self.company = self.company or settings.company
 		self.warehouse = self.warehouse or settings.kitchen_warehouse
@@ -90,8 +95,23 @@ class RestoWaste(Document):
 			se = frappe.get_doc("Stock Entry", self.stock_entry)
 			se.flags.ignore_permissions = True
 			se.cancel()
-		# A dish whose waste this was can have it posted again.
-		frappe.db.sql("update `tabResto Order Item` set void_waste = null where void_waste = %s", self.name)
+		# The dish whose waste this was can have it posted again, and the shares of a shared side it
+		# took from other dishes go back to them.
+		for name in frappe.get_all("Resto Order Item", filters={"void_waste": self.name}, pluck="name"):
+			frappe.db.set_value("Resto Order Item", name, "void_waste", None, update_modified=False)
+		order = self.order_item and frappe.db.get_value("Resto Order Item", self.order_item, "parent") or self.resto_order
+		if order:
+			for d in frappe.get_all(
+				"Resto Order Item", filters={"parent": order, "sides": ("like", f"%{self.name}%")}, fields=["name", "sides"]
+			):
+				choice = json.loads(d.sides)
+				marked = [e for e in choice.values() if isinstance(e, dict) and e.get("w") == self.name]
+				for e in marked:
+					e.pop("w")
+				if marked:
+					frappe.db.set_value(
+						"Resto Order Item", d.name, "sides", json.dumps(choice, ensure_ascii=False, sort_keys=True), update_modified=False
+					)
 
 
 def _bundle(item_code):

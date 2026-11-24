@@ -139,3 +139,13 @@ class TestCookedWaste(IntegrationTestCase):
 		except frappe.ValidationError:
 			pass  # a closed order cannot be saved at all: fine too
 		self.assertEqual(self.waste_of(line), waste)
+
+	def test_an_amended_waste_is_refused(self):
+		order, (line, _other) = self.sent_order()
+		floor.cancel_order(order, "Guest left", cooked=json.dumps([line]))
+		doc = frappe.get_doc("Resto Waste", self.waste_of(line))
+		self.assertEqual((doc.resto_order, doc.order_item), (order, line))
+		doc.cancel()
+		amended = frappe.copy_doc(doc)
+		amended.amended_from = doc.name
+		self.assertRaises(frappe.ValidationError, amended.insert)
