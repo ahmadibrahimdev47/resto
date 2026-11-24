@@ -169,3 +169,18 @@ class TestSameDishTappedAgain(IntegrationTestCase):
 		self.assertEqual(
 			self.lines(order), [("DISH-FRIES", 2, "Sent"), ("DISH-FRIES", 1, "Sent"), ("DISH-FRIES", 1, "Not Sent")]
 		)
+
+
+class TestPOSNextFixturePermissions(IntegrationTestCase):
+	def test_a_doctype_posnext_touched_keeps_its_standard_rules(self):
+		from resto.setup.install import FIXTURE_ROLES, repair_fixture_permissions
+
+		repair_fixture_permissions()
+		touched = set(frappe.get_all("Custom DocPerm", filters={"role": ("in", FIXTURE_ROLES)}, pluck="parent"))
+		if not touched:
+			self.skipTest("No POSNext permission fixtures on this site")
+		for doctype in touched:
+			standard = {r for r in frappe.get_all("DocPerm", filters={"parent": doctype, "parenttype": "DocType"}, pluck="role")}
+			custom = set(frappe.get_all("Custom DocPerm", filters={"parent": doctype}, pluck="role"))
+			if standard - set(FIXTURE_ROLES):
+				self.assertTrue(custom & standard, doctype)

@@ -160,6 +160,8 @@ def after_app_install(app_name):
 	# An app installed after Resto may override its wording (POSNext's "Submit").
 	if app_name != "resto":
 		sync_translations()
+	if app_name == "pos_next":
+		repair_fixture_permissions()
 
 
 def sync_translations():
@@ -168,9 +170,38 @@ def sync_translations():
 	sync()
 
 
+# Roles another app gives rights to through Custom DocPerm fixtures (POSNext).
+FIXTURE_ROLES = ("POSNext Cashier", "Nexus POS Manager")
+
+
+def repair_fixture_permissions():
+	"""Once a doctype has a Custom DocPerm, Frappe reads only those rows. POSNext ships rows for its
+	own roles as fixtures, without the doctype's standard rules (Frappe copies those first only when
+	rights are added through Role Permission Manager), so a doctype it touches is left without them:
+	no one can create a POS Profile. A doctype POSNext touched whose custom rows hold none of its standard
+	roles (only POSNext's, and rights added after them) gets its standard rules copied in, as Frappe
+	would have; one that has any of them is left as it is."""
+	rows = frappe.get_all("Custom DocPerm", filters={"role": ("in", FIXTURE_ROLES)}, pluck="parent", distinct=True)
+	for doctype in set(rows):
+		roles = set(frappe.get_all("Custom DocPerm", filters={"parent": doctype}, pluck="role"))
+		standard = frappe.get_all("DocPerm", filters={"parent": doctype, "parenttype": "DocType"}, fields="*")
+		if roles & {d.role for d in standard}:
+			continue  # the standard rules are there (copied by Frappe, or the site's own choice)
+		for d in standard:
+			if d.role in FIXTURE_ROLES:
+				continue
+			perm = frappe.new_doc("Custom DocPerm")
+			perm.update({k: v for k, v in d.items() if k not in ("name", "creation", "modified", "modified_by", "owner")})
+			perm.parent, perm.parenttype, perm.parentfield = doctype, "DocType", "permissions"
+			perm.insert(ignore_permissions=True)
+		frappe.clear_cache(doctype=doctype)
+
+
 def grant_standard_permissions():
 	"""Add the rights above once; rights the site already gives are left as they are."""
 	from frappe.permissions import add_permission, update_permission_property
+
+	repair_fixture_permissions()
 
 	for doctype, roles in STANDARD_PERMISSIONS.items():
 		if not frappe.db.exists("DocType", doctype):
