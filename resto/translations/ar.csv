@@ -1094,3 +1094,4 @@
 "Ticket {0} was not given to print","لم تُسلَّم التذكرة {0} للطباعة",""
 "Kitchen ticket number not given","لم يُعطَ رقم لتذكرة المطبخ",""
 "Receipt copies have labels or sides, but only the {0} print format prints them","لنسخ الفاتورة أسماء أو أطباق جانبية، لكن تنسيق الطباعة {0} وحده يطبعها",""
+"Printing","الطباعة",""

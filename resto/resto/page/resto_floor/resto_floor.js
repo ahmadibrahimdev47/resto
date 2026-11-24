@@ -25,6 +25,11 @@ function call(method, args, freeze) {
 	});
 }
 
+// "9:05:00" (a time from the server) as "09:05".
+const hhmm = (t) => {
+	const [h, m] = String(t || "").split(":");
+	return m === undefined ? "" : `${h.padStart(2, "0")}:${m}`;
+};
 const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 const money = (v) => format_currency(v || 0);
 
@@ -110,7 +115,7 @@ class RestoFloor {
 		const here = this.prints_here();
 		const list = (rows || [])
 			.map(
-				(r, i) => `<tr><td>${esc((r.posting_time || "").slice(0, 5))}</td>
+				(r, i) => `<tr><td>${esc(hhmm(r.posting_time))}</td>
 					<td><a href="/app/sales-invoice/${esc(r.name)}">${esc(r.name)}</a>${r.is_return ? " · " + __("Return") : ""}</td>
 					<td>${r.resto_table ? __("Table {0}", [esc(r.resto_table)], "Resto") : esc(__(r.resto_order_type || "", null, "Resto"))} · ${esc(r.resto_order || "")}</td>
 					<td class="rf-amt">${money(r.rounded_total || r.grand_total)}</td>
@@ -133,7 +138,7 @@ class RestoFloor {
 		d.fields_dict.html.$wrapper.find("[data-i]").on("click", async (e) => {
 			const btn = $(e.currentTarget).prop("disabled", true);
 			const r = rows[btn.attr("data-i")];
-			await this.print_receipt(r.name);
+			await this.print_receipt(r.name, this.floor.receipt_mode || this.receipt_mode);
 			btn.prop("disabled", false);
 		});
 		d.show();

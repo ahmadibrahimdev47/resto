@@ -173,11 +173,11 @@ class RestoKitchen {
 			try {
 				const res = (await frappe.xcall("resto.resto.kitchen.kds_print", { ticket: name })) || {};
 				if (res.server) return frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
-				resto.print_window_seen = false;
+				resto.print_window_seen = resto.print_slow = false;
 				if (!(await resto.print_pages(res.pages || []))) return;
 				const confirm = () => frappe.xcall("resto.resto.kitchen.kds_printed", { ticket: name }).then(() => this.refresh());
 				// A print window can be cancelled: only the cook knows whether the paper came out.
-				if (resto.print_window_seen) frappe.confirm(__("Did the ticket come out of the printer?"), confirm);
+				if (resto.print_slow || resto.print_window_seen) frappe.confirm(__("Did the ticket come out of the printer?"), confirm);
 				else confirm();
 			} finally {
 				btn.prop("disabled", false);
@@ -274,7 +274,7 @@ class RestoKitchen {
 				})
 				.join("، ");
 			parts.push(
-				`<div class="rk-alert red">⚠ ${__("{0} tickets are not printed", [al.unprinted.length])}: ${list}. ${__("Check the printer and the printing screen, or press Print on the ticket.")}</div>`
+				`<div class="rk-alert red">⚠ ${__("{0} tickets are not printed", [al.unprinted.length])} — ${list}. ${__("Check the printer and the printing screen, or press Print on the ticket.")}</div>`
 			);
 		}
 		if ((al.no_screen || []).length) {
@@ -300,9 +300,11 @@ class RestoKitchen {
 				});
 				const t = r.message;
 				if (!t) break;
-				resto.print_window_seen = false;
+				resto.print_window_seen = resto.print_slow = false;
 				const ok = await resto.print_pages(t.pages || []);
-				if (resto.print_window_seen) {
+				// Two unsure prints in a row, or a long wait, is a print window.
+				if (resto.print_window_seen || (resto.print_slow && this._slow_prints)) {
+					this._slow_prints = 0;
 					// The print window opened: this Chrome was not started from the kitchen printing
 					// shortcut. Each ticket would wait for a click, so automatic printing stops; the
 					// ticket is not confirmed and shows unprinted on every kitchen screen.
@@ -317,6 +319,13 @@ class RestoKitchen {
 					break;
 				}
 				if (!ok) break;
+				if (resto.print_slow) {
+					// Not sure it reached the printer: not confirmed, so it is offered again later marked
+					// as a reprint, never lost.
+					this._slow_prints = 1;
+					continue;
+				}
+				this._slow_prints = 0;
 				await frappe.call({ method: "resto.resto.kitchen.kds_printed", args: { ticket: t.name }, freeze: false });
 			}
 		} catch (e) {

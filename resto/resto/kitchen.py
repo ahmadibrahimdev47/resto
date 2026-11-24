@@ -154,7 +154,11 @@ def _make_ticket(order, station, ticket_type, rows, now):
 	ticket.flags.ignore_permissions = True
 	ticket.insert()
 	_queue_print(ticket)
-	_warn_if_nobody_prints(station)
+	if ticket_type == "Order":
+		try:
+			_warn_if_nobody_prints(station)
+		except Exception:
+			pass  # a warning only: it never stops a send
 	return ticket
 
 
@@ -214,6 +218,8 @@ def _queue_print(ticket):
 			queue="short",
 			enqueue_after_commit=True,
 		)
+		# A Print press meanwhile is a reprint.
+		frappe.db.set_value("Resto Kitchen Ticket", ticket.name, "print_claimed_at", now_datetime(), update_modified=False)
 
 
 def print_ticket(ticket, reprint=0):
@@ -389,17 +395,20 @@ def kds_print(ticket):
 	as a reprint, so the kitchen does not make it twice."""
 	require_role(KITCHEN, WAITER, CASHIER)
 	station = _ticket_station(ticket)
-	printed, claimed = frappe.db.get_value("Resto Kitchen Ticket", ticket, ["printed", "print_claimed_at"]) or (0, None)
+	# Locked: a press on another device, or a screen printing automatically, waits and then sees a reprint.
+	printed, claimed = frappe.db.get_value(
+		"Resto Kitchen Ticket", ticket, ["printed", "print_claimed_at"], for_update=True
+	) or (0, None)
 	reprint = 1 if (cint(printed) or claimed) else 0
 	if (station.print_method or BROWSER_BUTTON) == SERVER_PRINTER and station.printer:
 		frappe.enqueue(
 			"resto.resto.kitchen.print_ticket", ticket=ticket, reprint=reprint, queue="short", enqueue_after_commit=True
 		)
-		return {"server": 1}
-	pages = ticket_pages(ticket, station, reprint=reprint)
-	# A second press, or a screen printing automatically, now sees it as a reprint.
+		result = {"server": 1}
+	else:
+		result = {"pages": ticket_pages(ticket, station, reprint=reprint)}
 	frappe.db.set_value("Resto Kitchen Ticket", ticket, "print_claimed_at", now_datetime(), update_modified=False)
-	return {"pages": pages}
+	return result
 
 
 @frappe.whitelist(methods=["POST"])

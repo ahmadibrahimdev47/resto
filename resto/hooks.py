@@ -15,6 +15,8 @@ app_include_css = "/assets/resto/css/resto.css"
 # Shared desk JS (Recipe Status dialog, food cost colors) as a bundle: every build gets a new
 # hashed URL, so browsers never keep running an old copy.
 app_include_js = "resto.bundle.js"
+# Kitchen station ticket numbers of the day (kitchen._daily_no) survive bench clear-cache and migrate.
+persistent_cache_keys = ["resto_kds_no:*"]
 
 boot_session = "resto.boot.boot_session"
 

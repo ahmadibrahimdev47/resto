@@ -49,10 +49,10 @@ def print_copies(doctype, name, printer, print_format, labels, no_letterhead=1, 
 		print_by_server(doctype, name, printer, print_format, doc=doc, no_letterhead=no_letterhead)
 
 
-def _run(title, doctype, name, printer, print_format, labels, no_letterhead=1):
+def _run(title, doctype, name, printer, print_format, labels, no_letterhead=1, extra=None):
 	"""Background job body. Never raises: a printer problem must not block the restaurant."""
 	try:
-		print_copies(doctype, name, printer, print_format, labels, no_letterhead=no_letterhead)
+		print_copies(doctype, name, printer, print_format, labels, no_letterhead=no_letterhead, extra=extra)
 		return True
 	except Exception:
 		frappe.log_error(title=title)
@@ -194,6 +194,7 @@ def print_receipt(sales_invoice, pos_profile=None):
 	if not settings.cashier_printer:
 		return
 	print_format = _receipt_format(pos_profile)
+	printed_before = cint(frappe.db.get_value("Sales Invoice", sales_invoice, "resto_receipt_printed"))
 	if _run(
 		_("Receipt {0} was not printed").format(sales_invoice),
 		"Sales Invoice",
@@ -202,6 +203,7 @@ def print_receipt(sales_invoice, pos_profile=None):
 		print_format,
 		copy_specs(settings.receipt_copies),
 		no_letterhead=_no_letterhead(print_format),
+		extra={"resto_reprint": printed_before},
 	):
 		frappe.db.set_value("Sales Invoice", sales_invoice, "resto_receipt_printed", 1, update_modified=False)
 
@@ -239,12 +241,20 @@ def receipt_pages(sales_invoice):
 
 @frappe.whitelist()
 def recent_receipts():
-	"""Today's restaurant invoices, newest first, to print a receipt again after its dialog closed:
-	the cashier's own, or everyone's for a manager."""
+	"""The restaurant invoices of this business day (Resto Settings "Business Day Starts At"), newest
+	first, to print a receipt again after its dialog closed: the cashier's own, or everyone's for a
+	manager."""
+	from frappe.utils import add_to_date, get_datetime, getdate, now_datetime
+
+	from resto.resto.demand import day_start_hour
 	from resto.resto.utils import CASHIER, has_role, require_role
 
 	require_role(CASHIER)
-	filters = {"docstatus": 1, "resto_order": ("is", "set"), "posting_date": frappe.utils.nowdate()}
+	now = now_datetime()
+	start = get_datetime(getdate(now)).replace(hour=day_start_hour())
+	if now < start:
+		start = add_to_date(start, days=-1)
+	filters = {"docstatus": 1, "resto_order": ("is", "set"), "creation": (">=", start)}
 	if not has_role():
 		filters["owner"] = frappe.session.user
 	return frappe.get_all(
@@ -255,7 +265,7 @@ def recent_receipts():
 			"posting_time", "resto_receipt_printed", "is_return",
 		],
 		order_by="creation desc",
-		limit=20,
+		limit=100,
 	)
 
 

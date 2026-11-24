@@ -41,6 +41,7 @@ class SetupCheck:
 			self.check_service,
 			self.check_floor,
 			self.check_kitchen,
+			self.check_receipt_format,
 			self.check_users,
 			self.check_menu,
 			self.check_prepared,
@@ -220,10 +221,11 @@ class SetupCheck:
 		if alerts["unprinted"]:
 			self.warn(area, _("{0} kitchen tickets are not printed").format(len(alerts["unprinted"])))
 		self.ok(area, _("{0} kitchen stations").format(len(stations)))
-		self.check_receipt_format(area)
 
-	def check_receipt_format(self, area):
+	def check_receipt_format(self):
 		from resto.resto import printing
+
+		area = _("Printing")
 
 		s = self.s
 		fmt = s.get("receipt_print_format")

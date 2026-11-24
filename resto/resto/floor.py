@@ -149,6 +149,7 @@ def get_floor():
 		"orders": [o for o in orders if o.order_type != "Dine In" or o.rebill],
 		# Kitchen printing that stopped, shown on the floor too (the kitchen may not look at a screen).
 		"kitchen_print": {"unprinted": len(alerts["unprinted"]), "no_screen": alerts["no_screen"]},
+		"receipt_mode": printing.receipt_mode(),
 		"refresh_seconds": cint(settings.screen_refresh_seconds) or 15,
 		"roles": {
 			"manager": has_role(),
@@ -682,9 +683,13 @@ def request_bill(order):
 	preview["on_printer"] = printing.queue_bill(doc.name) if mode == "server" else False
 	preview["pages"] = []
 	if mode == "browser":
+		messages = len(frappe.local.message_log or [])
 		try:
 			preview["pages"] = printing.bill_pages(doc.name)
 		except Exception:
+			# The waiter sees the short red notice, not the template error.
+			if frappe.local.message_log:
+				del frappe.local.message_log[messages:]
 			# A broken bill format must not stop the bill: it is requested, and printed once fixed.
 			frappe.log_error(title=_("Bill {0} was not printed").format(doc.name))
 			preview["print_error"] = 1

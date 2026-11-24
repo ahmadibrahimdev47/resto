@@ -176,7 +176,11 @@ def grant_standard_permissions():
 
 def set_new_setting_defaults():
 	"""Settings added in later versions get their default once (a Single keeps no default by itself)."""
-	for field, value in (("vat_on_service", 1),):
+	defaults = [("vat_on_service", 1)]
+	# Resto's receipt prints the copy labels, sides per copy and the kitchen ticket numbers.
+	if frappe.db.exists("Print Format", "Resto Receipt"):
+		defaults.append(("receipt_print_format", "Resto Receipt"))
+	for field, value in defaults:
 		if not frappe.db.sql("select 1 from `tabSingles` where doctype = %s and field = %s", ("Resto Settings", field)):
 			frappe.db.set_single_value("Resto Settings", field, value)
 
