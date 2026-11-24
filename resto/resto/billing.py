@@ -395,6 +395,13 @@ def settle(order, payments, lines=None, expected=None, request_id=None):
 	if order.status not in ("Open", "Bill Requested"):
 		frappe.throw(_("Order {0} is {1}").format(order.name, _(order.status, context="Resto")))
 	shift = get_open_shift(frappe.session.user, order.pos_profile)
+	if shift:
+		# Locked, and read again: a shift being closed now finishes first (its closing counts what
+		# was billed on it), and a bill after that sees it closed.
+		# (A locking read sees the latest commit; a plain one would see this transaction's snapshot.)
+		state = frappe.db.get_value("POS Opening Shift", shift, ["status", "docstatus"], as_dict=True, for_update=True)
+		if not state or state.status != "Open" or state.docstatus != 1:
+			shift = None
 	if cint(settings.require_pos_shift) and posnext_installed() and not shift:
 		frappe.throw(
 			_("Open your shift (Open Shift at the top of the floor screen) for POS Profile {0} before settling bills").format(

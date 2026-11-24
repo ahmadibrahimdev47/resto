@@ -279,86 +279,110 @@ class RestoFloor {
 	// ------------------------------------------------------------------ customer
 
 	// Phone first: what is typed in the phone or the name finds customers; one is picked with a click
-	// (its phone and address fill in), or the cashier saves a new one when the order starts.
+	// (its phone, and on a delivery its address, fill in). Editing the phone or the name after picking
+	// lets the customer go. The cashier can save a new customer once a phone is typed.
 	customer_fields(o, with_address) {
-		const cashier = !!(this.floor && this.floor.roles.cashier);
 		return [
 			{ fieldname: "phone", fieldtype: "Data", label: __("Phone"), default: o.phone || "" },
 			{ fieldname: "customer_name", fieldtype: "Data", label: __("Customer Name"), default: o.customer_name || "" },
 			{ fieldname: "matches", fieldtype: "HTML" },
 			{ fieldname: "address", fieldtype: "Small Text", label: __("Address"), default: o.address || "", hidden: with_address ? 0 : 1 },
-			{ fieldname: "customer", fieldtype: "Data", hidden: 1, default: o.customer || "" },
-			{
-				fieldname: "new_customer",
-				fieldtype: "Check",
-				label: __("Save as a new customer"),
-				default: cashier && !o.customer ? 1 : 0,
-				hidden: cashier && !o.customer ? 0 : 1,
-			},
+			{ fieldname: "new_customer", fieldtype: "Check", label: __("Save as a new customer"), default: 0, hidden: 1 },
 		];
 	}
 
-	bind_customer(d) {
+	bind_customer(d, o, tick_new) {
 		const cashier = !!(this.floor && this.floor.roles.cashier);
 		const $m = d.fields_dict.matches.$wrapper;
+		const st = { picked: o.customer ? { name: o.customer, customer_name: o.customer_name, mobile_no: o.phone } : null, filled: {}, seq: 0 };
+		d.resto_customer = st;
 		let found = [];
+		const digits = (v) => (v || "").replace(/[^0-9٠-٩۰-۹]/g, "");
 		const show = () => {
-			const picked = d.get_value("customer");
-			d.set_df_property("new_customer", "hidden", cashier && !picked ? 0 : 1);
-			if (picked) {
-				$m.html(`<div class="rf-cust-picked">✓ ${esc(d.get_value("customer_name") || picked)}
+			const p = st.picked;
+			// A new customer is offered to the cashier once a phone is typed and no one is picked.
+			const offer = cashier && !p && digits(d.get_value("phone")).length >= 7;
+			d.set_df_property("new_customer", "hidden", offer ? 0 : 1);
+			if (offer && tick_new && !st.offered) {
+				st.offered = true;
+				d.set_value("new_customer", 1);
+			}
+			if (p) {
+				$m.html(`<div class="rf-cust-picked">✓ ${esc(p.customer_name || p.name)} ${esc(p.mobile_no || "")}
 					<button class="btn btn-xs btn-default" data-unpick>${__("Change Customer")}</button></div>`);
-				$m.find("[data-unpick]").on("click", () => {
-					d.set_value("customer", "");
-					d.set_value("new_customer", cashier ? 1 : 0);
-					show();
-				});
+				$m.find("[data-unpick]").on("click", () => unpick(true));
 				return;
 			}
 			$m.html(
-				found.length
-					? found
-							.map(
-								(c, i) => `<button class="btn btn-default btn-sm rf-cust" data-i="${i}">
-									<b>${esc(c.customer_name)}</b> ${esc(c.mobile_no || "")}
-									${c.resto_address ? `<span class="text-muted">· ${esc(c.resto_address)}</span>` : ""}</button>`
-							)
-							.join("")
-					: ""
+				found
+					.map(
+						(c, i) => `<button class="btn btn-default btn-sm rf-cust" data-i="${i}">
+							<b>${esc(c.customer_name)}</b> ${esc(c.mobile_no || "")}
+							${c.resto_address ? `<span class="text-muted">· ${esc(c.resto_address)}</span>` : ""}</button>`
+					)
+					.join("")
 			);
-			$m.find("[data-i]").on("click", (e) => {
-				const c = found[+$(e.currentTarget).attr("data-i")];
-				d.set_value("customer", c.name);
-				d.set_value("customer_name", c.customer_name);
-				if (c.mobile_no) d.set_value("phone", c.mobile_no);
-				if (c.resto_address && !d.get_value("address")) d.set_value("address", c.resto_address);
-				d.set_value("new_customer", 0);
-				show();
-			});
+			$m.find("[data-i]").on("click", (e) => pick(found[+$(e.currentTarget).attr("data-i")]));
+		};
+		const pick = async (c) => {
+			st.picked = c;
+			st.filled = {};
+			found = [];
+			const fill = async (field, value) => {
+				if (!value) return;
+				st.filled[field] = value;
+				await d.set_value(field, value);
+			};
+			await fill("customer_name", c.customer_name);
+			await fill("phone", c.mobile_no);
+			if (!d.fields_dict.address.df.hidden && !d.get_value("address")) await fill("address", c.resto_address);
+			await d.set_value("new_customer", 0);
+			show();
+		};
+		// clear: what the picked customer filled in goes too (the button), or only the link (typing).
+		const unpick = async (clear) => {
+			st.picked = null;
+			if (clear) {
+				for (const [field, value] of Object.entries(st.filled)) {
+					if (d.get_value(field) === value) await d.set_value(field, "");
+				}
+			}
+			st.filled = {};
+			show();
 		};
 		let t;
 		const search = (txt) => {
 			clearTimeout(t);
-			if (d.get_value("customer") || (txt || "").trim().length < 2) {
+			const seq = ++st.seq;
+			txt = (txt || "").trim();
+			if (st.picked || txt.length < 2) {
 				found = [];
 				return show();
 			}
 			t = setTimeout(async () => {
-				found = (await call("search_customers", { txt })) || [];
+				const rows = (await call("search_customers", { txt })) || [];
+				if (seq !== st.seq) return; // an older answer, after a newer search
+				found = rows;
 				show();
 			}, 300);
 		};
 		["phone", "customer_name"].forEach((f) =>
-			d.fields_dict[f].$input.on("input", (e) => search($(e.currentTarget).val()))
+			d.fields_dict[f].$input.on("input", (e) => {
+				const v = $(e.currentTarget).val();
+				const p = st.picked;
+				if (p && v !== (f === "phone" ? p.mobile_no : p.customer_name)) unpick(false);
+				search(v);
+			})
 		);
 		show();
 	}
 
-	customer_values(v) {
-		// A new customer needs a name; without one the order just keeps what was typed.
+	customer_values(d, v) {
+		// The picked customer, or none; a new one needs a name and a phone (a name alone stays on the order).
 		const out = { ...v };
 		delete out.matches;
-		out.new_customer = !out.customer && out.new_customer && (out.customer_name || "").trim() ? 1 : 0;
+		out.customer = d.resto_customer.picked ? d.resto_customer.picked.name : "";
+		out.new_customer = !out.customer && out.new_customer && (out.customer_name || "").trim() && (out.phone || "").trim() ? 1 : 0;
 		return out;
 	}
 
@@ -368,13 +392,14 @@ class RestoFloor {
 			fields: this.customer_fields({}, order_type === "Delivery"),
 			primary_action_label: __("Start", null, "Resto"),
 			primary_action: async (v) => {
+				// Hidden once it worked: what was typed stays if the server refuses.
+				const name = await call("create_order", { order_type, ...this.customer_values(d, v) }, true);
 				d.hide();
-				const name = await call("create_order", { order_type, ...this.customer_values(v) }, true);
 				this.load_order(name);
 			},
 		});
 		d.show();
-		this.bind_customer(d);
+		this.bind_customer(d, {}, true);
 		d.fields_dict.phone.$input.focus();
 	}
 
@@ -421,16 +446,32 @@ class RestoFloor {
 					: [{ fieldtype: "HTML", options: `<p class="text-danger">${__("No payment methods configured for this POS Profile")}</p>` }]),
 			],
 			primary_action_label: __("Open Shift"),
-			primary_action: async (v) => {
-				const amounts = {};
-				data.modes.forEach((m, i) => (amounts[m] = flt(v["m_" + i])));
-				d.hide();
-				await frappe.xcall("resto.resto.shift.open_shift", { amounts: JSON.stringify(amounts) });
-				frappe.show_alert({ message: __("Shift opened"), indicator: "green" });
-				this.refresh();
-			},
+			primary_action: (v) =>
+				this.shift_busy(d, async () => {
+					const amounts = {};
+					data.modes.forEach((m, i) => (amounts[m] = flt(v["m_" + i])));
+					await frappe.xcall("resto.resto.shift.open_shift", { amounts: JSON.stringify(amounts) });
+					d.hide();
+					frappe.show_alert({ message: __("Shift opened"), indicator: "green" });
+					this.refresh();
+				}),
 		});
 		d.show();
+	}
+
+	// One tap at a time: the button waits for the server, and the dialog (with what was typed) stays
+	// open when the server refuses.
+	async shift_busy(d, fn) {
+		const $b = d.get_primary_btn();
+		if ($b.prop("disabled")) return;
+		$b.prop("disabled", true);
+		frappe.dom.freeze(__("Please wait…"));
+		try {
+			await fn();
+		} finally {
+			frappe.dom.unfreeze();
+			$b.prop("disabled", false);
+		}
 	}
 
 	// The shift's figures as POSNext's closing screen shows them: sales, returns, expenses, collected and
@@ -446,9 +487,18 @@ class RestoFloor {
 		const metric = (label, value, note) =>
 			`<div class="rf-metric"><div class="text-muted">${label}</div><b>${value}</b>${note ? `<div class="text-muted small">${note}</div>` : ""}</div>`;
 		const parts = [];
+		// The header: the profile, when the shift started (and ended), and how long it ran.
+		const start = r.period_start;
+		const end = r.period_end || frappe.datetime.now_datetime();
+		const mins = start ? Math.max(0, Math.round(moment(end).diff(moment(start), "minutes"))) : 0;
+		parts.push(`<p class="text-muted">${r.pos_profile ? `${__("POS Profile")}: <b>${esc(r.pos_profile)}</b> · ` : ""}
+			${start ? `${__("Shift start")}: ${esc(frappe.datetime.str_to_user(start))}` : ""}
+			${r.period_end ? ` · ${__("Shift end")}: ${esc(frappe.datetime.str_to_user(r.period_end))}` : ""}
+			${start ? ` · ${__("Duration")}: ${__("{0} h {1} min", [Math.floor(mins / 60), mins % 60])}` : ""}</p>`);
+		if (entry && r.open_orders) {
+			parts.push(`<div class="alert alert-warning">${__("{0} orders are still open: their bills are not in this shift.", [r.open_orders])}</div>`);
+		}
 		if (r.summary) {
-			parts.push(`<p class="text-muted">${__("Shift start")}: ${esc(frappe.datetime.str_to_user(r.period_start))}
-				${r.period_end ? ` · ${__("Shift end")}: ${esc(frappe.datetime.str_to_user(r.period_end))}` : ""}</p>`);
 			parts.push(`<div class="rf-metrics">
 				${metric(__("Gross Sales"), money(s.gross_sales), __("{0} invoices", [s.sales_count || (r.invoices || []).filter((i) => !i.is_return).length]))}
 				${s.returns_count ? metric(__("Returns"), "-" + money(s.returns_total), __("{0} returns", [s.returns_count])) : ""}
@@ -469,7 +519,7 @@ class RestoFloor {
 			parts.push(
 				inv
 					? `<details><summary><b>${__("Invoice Details")}</b> (${(r.invoices || []).length})</summary>
-						<table class="table table-condensed"><tr><th>${__("Time")}</th><th>${__("Invoice")}</th><th>${__("Customer")}</th><th>${__("Type")}</th><th>${__("Amount")}</th><th></th></tr>${inv}</table></details>`
+						<table class="table table-condensed"><tr><th>${__("Posting Date")}</th><th>${__("Invoice")}</th><th>${__("Customer")}</th><th>${__("Type")}</th><th>${__("Amount")}</th><th></th></tr>${inv}</table></details>`
 					: `<p class="text-muted">${__("No Sales During This Shift")}</p>`
 			);
 			if ((r.expenses || []).length) {
@@ -482,7 +532,8 @@ class RestoFloor {
 			}
 		}
 		const blind = entry && !r.summary;
-		const rows = (r.rows || [])
+		const list = r.rows || [];
+		const rows = list
 			.map((p, i) => {
 				const counted = entry
 					? `<input type="number" step="0.01" min="0" class="form-control input-sm rf-amt" data-m="${i}" value="">`
@@ -493,11 +544,19 @@ class RestoFloor {
 					${blind ? "" : `<td class="rf-amt" data-d="${i}">${entry ? "" : diff(p.difference)}</td>`}</tr>`;
 			})
 			.join("");
+		// The totals of all methods (none while counting blind).
+		const sum = (k) => list.reduce((a, p) => a + flt(p[k]), 0);
+		const total = blind
+			? ""
+			: `<tr class="rf-total"><th>${__("Total")}</th><th class="rf-amt">${money(sum("opening_amount"))}</th>
+				<th class="rf-amt">${money(sum("expected_amount"))}</th>
+				<th class="rf-amt" data-tc>${entry ? "" : money(sum("closing_amount"))}</th>
+				<th class="rf-amt" data-td>${entry ? "" : diff(sum("difference"))}</th></tr>`;
 		parts.push(`<h5>${__("Payment Reconciliation")}</h5>
 			${entry ? `<p class="text-muted">${__("Count the money in the drawer and enter what you counted.")}</p>` : ""}
 			<table class="table table-condensed"><tr><th></th>
 				${blind ? "" : `<th>${__("Opening")}</th><th>${__("Expected")}</th>`}<th>${__("Counted")}</th>${blind ? "" : `<th>${__("Difference")}</th>`}</tr>
-			${rows}</table>`);
+			${rows}${total}</table>`);
 		return parts.join("");
 	}
 
@@ -506,33 +565,46 @@ class RestoFloor {
 		const d = new frappe.ui.Dialog({ title: __("Close Shift"), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
 		const $w = d.fields_dict.html.$wrapper;
 		$w.html(this.shift_report(data, true));
+		const diff_html = (n) =>
+			Math.abs(n) < 0.005
+				? `<span class="text-success">✓ ${__("Balanced")}</span>`
+				: `<span class="${n < 0 ? "text-danger" : "text-warning"}">${n < 0 ? __("Short {0}", [money(-n)]) : __("Over {0}", [money(n)])}</span>`;
+		const counted = () => data.rows.map((r, i) => $w.find(`[data-m="${i}"]`).val());
 		// The difference as the cashier types, unless POSNext counts blind.
-		$w.find("[data-m]").on("input", (e) => {
-			const i = +$(e.currentTarget).attr("data-m");
-			const row = data.rows[i];
-			if (data.blind || row.expected_amount == null) return;
-			const v = $(e.currentTarget).val();
-			const n = flt(v) - flt(row.expected_amount);
-			$w.find(`[data-d="${i}"]`).html(
-				v === "" ? "" : Math.abs(n) < 0.005 ? `<span class="text-success">✓ ${__("Balanced")}</span>`
-					: `<span class="${n < 0 ? "text-danger" : "text-warning"}">${n < 0 ? __("Short {0}", [money(-n)]) : __("Over {0}", [money(n)])}</span>`
-			);
-		});
-		d.set_primary_action(__("Close Shift"), async () => {
-			const amounts = {};
-			let missing = false;
-			data.rows.forEach((r, i) => {
-				const v = $w.find(`[data-m="${i}"]`).val();
-				if (v === "") missing = true;
-				amounts[r.mode_of_payment] = flt(v);
+		$w.find("[data-m]").on("input", () => {
+			if (data.blind) return;
+			const vals = counted();
+			data.rows.forEach((row, i) => {
+				$w.find(`[data-d="${i}"]`).html(vals[i] === "" ? "" : diff_html(flt(vals[i]) - flt(row.expected_amount)));
 			});
-			if (missing) return frappe.msgprint(__("Please enter all closing amounts"));
-			d.hide();
-			const res = await frappe.xcall("resto.resto.shift.close_shift", { amounts: JSON.stringify(amounts) });
-			const done = new frappe.ui.Dialog({ title: __("Shift closed: {0}", [res.closing]), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
-			done.fields_dict.html.$wrapper.html(this.shift_report(res, false));
-			done.show();
-			this.refresh();
+			const all = vals.every((v) => v !== "");
+			const tc = vals.reduce((a, v) => a + flt(v), 0);
+			const te = data.rows.reduce((a, r) => a + flt(r.expected_amount), 0);
+			$w.find("[data-tc]").html(all ? money(tc) : "");
+			$w.find("[data-td]").html(all ? diff_html(tc - te) : "");
+		});
+		d.set_primary_action(__("Close Shift"), () => {
+			const vals = counted();
+			if (vals.some((v) => v === "")) return frappe.msgprint(__("Please enter all closing amounts"));
+			const amounts = {};
+			data.rows.forEach((r, i) => (amounts[r.mode_of_payment] = flt(vals[i])));
+			// Asked once more: a closed shift cannot be opened again.
+			const notes = [];
+			if (!data.blind) {
+				const short = data.rows.reduce((a, r, i) => a + Math.min(0, flt(vals[i]) - flt(r.expected_amount)), 0);
+				if (short < -0.005) notes.push(`<p class="text-danger">${__("The drawer is short by {0}.", [money(-short)])}</p>`);
+			}
+			if (data.open_orders) notes.push(`<p class="text-warning">${__("{0} orders are still open: their bills are not in this shift.", [data.open_orders])}</p>`);
+			frappe.confirm(`${notes.join("")}<p>${__("Close the shift? A closed shift cannot be opened again.")}</p>`, () =>
+				this.shift_busy(d, async () => {
+					const res = await frappe.xcall("resto.resto.shift.close_shift", { amounts: JSON.stringify(amounts) });
+					d.hide();
+					const done = new frappe.ui.Dialog({ title: __("Shift closed: {0}", [res.closing]), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
+					done.fields_dict.html.$wrapper.html(this.shift_report(res, false));
+					done.show();
+					this.refresh();
+				})
+			);
 		});
 		d.show();
 	}
@@ -1013,19 +1085,19 @@ class RestoFloor {
 			title: __("Guests and Customer"),
 			fields: [
 				{ fieldname: "guests", fieldtype: "Int", label: __("Guests"), default: o.guests },
-				...this.customer_fields(o, true),
+				...this.customer_fields(o, o.order_type === "Delivery"),
 				{ fieldname: "notes", fieldtype: "Small Text", label: __("Notes"), default: o.notes },
 			],
 			primary_action_label: __("Save"),
 			primary_action: async (v) => {
+				// No customer picked clears the link (a name typed alone stays on the order).
+				await call("update_order_info", { order: o.name, ...this.customer_values(d, v) }, true);
 				d.hide();
-				// An empty customer clears the link (a name typed alone stays on the order).
-				await call("update_order_info", { order: o.name, ...this.customer_values(v), customer: v.customer || "" }, true);
 				this.load_order(o.name);
 			},
 		});
 		d.show();
-		this.bind_customer(d);
+		this.bind_customer(d, o, false);
 	}
 
 	free_tables() {

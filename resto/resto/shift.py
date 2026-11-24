@@ -42,7 +42,10 @@ def _blind(profile):
 	"""POSNext's "hide expected amount": the cashier counts the drawer without seeing what is expected."""
 	if not frappe.db.exists("DocType", "POS Settings") or not frappe.get_meta("POS Settings").has_field("hide_expected_amount"):
 		return False
-	return bool(cint(frappe.db.get_value("POS Settings", {"pos_profile": profile}, "hide_expected_amount")))
+	filters = {"pos_profile": profile}
+	if frappe.get_meta("POS Settings").has_field("enabled"):
+		filters["enabled"] = 1
+	return bool(cint(frappe.db.get_value("POS Settings", filters, "hide_expected_amount")))
 
 
 def _user_shift():
@@ -56,10 +59,22 @@ def _user_shift():
 	return tuple(row) if row else (None, None)
 
 
-def _own_shift():
+def _lock_user():
+	"""One shift action of a user at a time (a double tap, two devices)."""
+	frappe.db.sql("select name from `tabUser` where name = %s for update", frappe.session.user)
+
+
+def _own_shift(lock=False):
+	if lock:
+		_lock_user()
 	profile, name = _user_shift()
 	if not name:
 		frappe.throw(_("You have no open shift"))
+	if lock:
+		# A bill being settled on this shift finishes first, and none starts until it is closed.
+		# A locking read sees a close another request just committed (a plain one, this snapshot).
+		if frappe.db.get_value("POS Opening Shift", name, "status", for_update=True) != "Open":
+			frappe.throw(_("This shift is already closed"))
 	return profile, name
 
 
@@ -111,6 +126,15 @@ def open_shift(amounts=None):
 	if not posnext_installed():
 		frappe.throw(_("POSNext is not installed"))
 	profile = _profile()
+	_lock_user()
+	# A locking read: an opening another request just committed is seen (a plain read would not).
+	already = frappe.db.sql(
+		"""select name from `tabPOS Opening Shift`
+		where user = %s and docstatus = 1 and status = 'Open' limit 1 for update""",
+		frappe.session.user,
+	)
+	if already:
+		frappe.throw(_("You already have an open shift: {0}").format(already[0][0]))
 	if not frappe.db.exists("POS Profile User", {"parent": profile, "parenttype": "POS Profile", "user": frappe.session.user}):
 		frappe.throw(_("You are not a user of POS Profile {0}; ask the manager to add you").format(frappe.bold(profile)))
 	amounts = json.loads(amounts) if isinstance(amounts, str) else (amounts or {})
@@ -137,6 +161,7 @@ def _report(data):
 	outstanding = data.get("outstanding_total")
 	return {
 		"shift": data.get("pos_opening_shift"),
+		"pos_profile": data.get("pos_profile"),
 		"user": data.get("user"),
 		"period_start": data.get("period_start_date"),
 		"period_end": data.get("period_end_date"),
@@ -195,10 +220,15 @@ def closing_data():
 	if report["blind"]:
 		report = {
 			"shift": report["shift"],
+			"pos_profile": report["pos_profile"],
 			"blind": True,
 			"period_start": report["period_start"],
 			"rows": [{"mode_of_payment": r["mode_of_payment"]} for r in report["rows"]],
 		}
+	# Orders still open on this profile: their bills are not in this shift.
+	from resto.resto.doctype.resto_order.resto_order import ACTIVE
+
+	report["open_orders"] = frappe.db.count("Resto Order", {"status": ("in", ACTIVE), "pos_profile": profile})
 	return report
 
 
@@ -206,7 +236,7 @@ def closing_data():
 def close_shift(amounts):
 	"""Close the cashier's shift with the amounts counted, through POSNext's own closing."""
 	require_role(CASHIER)
-	_profile_name, name = _own_shift()
+	_profile_name, name = _own_shift(lock=True)
 	amounts = json.loads(amounts) if isinstance(amounts, str) else (amounts or {})
 	data = _closing(name)
 	for row in data.get("payment_reconciliation") or []:

@@ -79,6 +79,24 @@ class TestFloorCustomers(IntegrationTestCase):
 		floor.update_order_info(order, customer="")
 		self.assertFalse(frappe.db.get_value("Resto Order", order, "customer"))
 
+	def test_a_name_alone_saves_no_customer(self):
+		before = frappe.db.count("Customer")
+		order = floor.create_order(order_type="Takeaway", customer_name="Just A Name", new_customer=1)
+		self.assertFalse(frappe.db.get_value("Resto Order", order, "customer"))
+		self.assertEqual(frappe.db.get_value("Resto Order", order, "customer_name"), "Just A Name")
+		self.assertEqual(frappe.db.count("Customer"), before)
+
+	def test_another_customers_phone_is_refused_and_a_known_phone_links(self):
+		a_phone, b_phone = self.phone("6"), self.phone("7")
+		a = frappe.db.get_value("Resto Order", floor.create_order(order_type="Takeaway", customer_name="Owner A", phone=a_phone, new_customer=1), "customer")
+		b = frappe.db.get_value("Resto Order", floor.create_order(order_type="Takeaway", customer_name="Owner B", phone=b_phone, new_customer=1), "customer")
+		# B picked with A's phone: refused, nothing saved on either.
+		self.assertRaises(frappe.ValidationError, floor.create_order, order_type="Takeaway", customer=b, phone=a_phone)
+		self.assertEqual(frappe.db.get_value("Customer", b, "mobile_no"), b_phone)
+		# A's phone typed, no one picked, no new customer asked: the order is A's.
+		order = floor.create_order(order_type="Takeaway", phone=a_phone)
+		self.assertEqual(frappe.db.get_value("Resto Order", order, "customer"), a)
+
 
 class TestFloorShift(IntegrationTestCase):
 	@classmethod
@@ -117,11 +135,13 @@ class TestFloorShift(IntegrationTestCase):
 		# Every payment method must be counted.
 		if len(data["rows"]) > 1:
 			self.assertRaises(frappe.ValidationError, shift.close_shift, json.dumps({"Cash": 150}))
-		result = shift.close_shift(json.dumps({r["mode_of_payment"]: (140 if r["mode_of_payment"] == "Cash" else r["expected_amount"] or 0) for r in data["rows"]}))
+		result = shift.close_shift(json.dumps({r["mode_of_payment"]: (140 if r["mode_of_payment"] == "Cash" else r.get("expected_amount") or 0) for r in data["rows"]}))
 		row = next(r for r in result["rows"] if r["mode_of_payment"] == "Cash")
 		self.assertEqual((row["opening_amount"], row["expected_amount"], row["closing_amount"], row["difference"]), (150, 150, 140, -10))
 		self.assertEqual(frappe.db.get_value("POS Closing Shift", result["closing"], "docstatus"), 1)
 		self.assertFalse(billing.get_open_shift(CASHIER, fx.PROFILE))
+		# Closed once: a second close (a double tap) finds no open shift.
+		self.assertRaises(frappe.ValidationError, shift.close_shift, json.dumps({"Cash": 140}))
 
 	def test_a_negative_opening_is_refused(self):
 		self.assertRaises(frappe.ValidationError, shift.open_shift, json.dumps({"Cash": -5}))

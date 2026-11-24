@@ -239,36 +239,59 @@ def get_order(order):
 	return data
 
 
+_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+
+
 def _phone(value):
-	"""A phone as typed at the counter, without spaces and dashes."""
-	return "".join(ch for ch in (value or "") if ch not in " -").strip() or None
+	"""A phone as one form: Arabic-Indic digits as 0-9, no spaces, dashes or brackets, and an
+	Egyptian +20 / 0020 prefix as the leading 0 people dial."""
+	text = (value or "").translate(_DIGITS)
+	digits = "".join(ch for ch in text if ch.isdigit())
+	if not digits:
+		return None
+	for prefix in ("0020", "20"):
+		if (text.strip().startswith("+") or prefix == "0020") and digits.startswith(prefix) and len(digits) == len(prefix) + 10:
+			return "0" + digits[len(prefix) :]
+	return digits
+
+
+def _looks_like_phone(text):
+	return bool(text) and all(ch.isdigit() or ch in " -+()" for ch in text.translate(_DIGITS))
 
 
 @frappe.whitelist()
 def search_customers(txt=""):
-	"""Customers by name, phone (theirs or a linked contact's) or delivery address; the latest first."""
+	"""Customers by phone (theirs or a linked contact's: 4 digits or more), or by name or delivery
+	address; the latest first."""
 	require_role(*STAFF)
 	txt = (txt or "").strip()
-	if len(txt) < 2:
-		return []
-	like = f"%{_phone(txt) if txt[:1].isdigit() or txt[:1] == '+' else txt}%"
+	if _looks_like_phone(txt):
+		phone = _phone(txt) or ""
+		if len(phone) < 4:
+			return []
+		where = """c.mobile_no like %(t)s or c.name in (
+			select dl.link_name from `tabDynamic Link` dl
+			join `tabContact Phone` cp on cp.parent = dl.parent and cp.parenttype = 'Contact'
+			where dl.parenttype = 'Contact' and dl.link_doctype = 'Customer' and cp.phone like %(t)s)"""
+		like = f"%{phone}%"
+	else:
+		if len(txt) < 2:
+			return []
+		where = "c.name like %(t)s or c.customer_name like %(t)s or c.resto_address like %(t)s"
+		like = f"%{txt}%"
 	return frappe.db.sql(
-		"""select c.name, c.customer_name, c.mobile_no, c.resto_address
+		f"""select c.name, c.customer_name, c.mobile_no, c.resto_address
 		from `tabCustomer` c
-		where c.disabled = 0 and (
-			c.name like %(t)s or c.customer_name like %(t)s or c.mobile_no like %(t)s or c.resto_address like %(t)s
-			or c.name in (
-				select dl.link_name from `tabDynamic Link` dl
-				join `tabContact Phone` cp on cp.parent = dl.parent and cp.parenttype = 'Contact'
-				where dl.parenttype = 'Contact' and dl.link_doctype = 'Customer' and cp.phone like %(t)s))
+		where c.disabled = 0 and ({where})
 		order by c.modified desc
-		limit 20""",
+		limit 8""",
 		{"t": like},
 		as_dict=True,
 	)
 
 
 def _customer_by_phone(phone):
+	"""The customer with this phone (theirs or a linked contact's), if any."""
 	if not phone:
 		return None
 	found = frappe.db.get_value("Customer", {"mobile_no": phone, "disabled": 0}, "name")
@@ -291,16 +314,13 @@ def _leaf(doctype, value):
 	return frappe.db.get_value(doctype, {"is_group": 0}, "name", order_by="lft")
 
 
-def _new_customer(name, phone=None, address=None):
-	"""A Customer made at the counter (cashier): the phone goes on its primary contact (ERPNext makes
-	it), the delivery address is kept on it as typed. A phone already known gives that customer."""
+def _new_customer(name, phone, address=None):
+	"""A Customer made at the counter (cashier), always with a phone (one customer per phone): the
+	phone goes on its primary contact (ERPNext makes it), the delivery address is kept as typed."""
 	require_role(CASHIER)
 	name = (name or "").strip()
 	if not name:
 		frappe.throw(_("Enter the customer's name"))
-	same = _customer_by_phone(phone)
-	if same:
-		return same
 	selling = frappe.get_cached_doc("Selling Settings")
 	doc = frappe.get_doc(
 		{
@@ -318,23 +338,46 @@ def _new_customer(name, phone=None, address=None):
 	return doc.name
 
 
-def _customer_details(customer, customer_name, phone, address, new_customer):
-	"""(customer, name, phone, address) of an order: a new customer saved when asked, and what a
-	chosen customer has filling what was left empty."""
+def _customer_details(customer, customer_name, phone, address, new_customer, order_type):
+	"""(customer, name, phone, address) of an order.
+
+	A chosen customer fills what was left empty (the address on a delivery only); a phone that is
+	another customer's is refused. Without a chosen customer a known phone links its customer, and a
+	new customer is saved only with a phone (a name alone stays on the order)."""
 	phone = _phone(phone)
-	if not customer and cint(new_customer):
-		customer = _new_customer(customer_name, phone, address)
+	delivery = order_type == "Delivery"
 	if customer:
-		c = frappe.db.get_value("Customer", customer, ["customer_name", "mobile_no", "resto_address"], as_dict=True)
-		if not c:
+		c = frappe.db.get_value("Customer", customer, ["customer_name", "mobile_no", "resto_address", "disabled"], as_dict=True)
+		if not c or c.disabled:
 			frappe.throw(_("Customer {0} not found").format(customer))
+		owner = _customer_by_phone(phone) if phone else None
+		if owner and owner != customer:
+			frappe.throw(
+				_("Phone {0} is the phone of customer {1}; choose that customer or correct the phone").format(
+					phone, frappe.bold(frappe.db.get_value("Customer", owner, "customer_name"))
+				)
+			)
 		customer_name = customer_name or c.customer_name
-		phone = phone or c.mobile_no
-		if address and not c.resto_address and has_role(CASHIER):
-			# The first delivery address typed is kept for next time.
+		phone = phone or _phone(c.mobile_no)
+		if delivery and address and not c.resto_address and owner == customer and has_role(CASHIER):
+			# The first delivery address typed for this phone is kept for next time.
 			frappe.db.set_value("Customer", customer, "resto_address", address.strip(), update_modified=False)
-		address = address or c.resto_address
-	return customer, customer_name, phone, address
+		if delivery:
+			address = address or c.resto_address
+		return customer, customer_name, phone, address
+	if phone:
+		known = _customer_by_phone(phone)
+		if known:
+			c = frappe.db.get_value("Customer", known, ["customer_name", "resto_address"], as_dict=True)
+			frappe.msgprint(
+				_("Phone {0} is customer {1}'s: the order is theirs").format(phone, frappe.bold(c.customer_name)),
+				alert=True,
+				indicator="blue",
+			)
+			return known, customer_name or c.customer_name, phone, (address or c.resto_address) if delivery else address
+		if cint(new_customer) and (customer_name or "").strip():
+			return _new_customer(customer_name, phone, address if delivery else None), customer_name.strip(), phone, address
+	return None, customer_name, phone, address
 
 
 # --------------------------------------------------------------------------- orders
@@ -345,7 +388,9 @@ def create_order(
 	order_type="Dine In", table=None, guests=1, customer=None, customer_name=None, phone=None, address=None, new_customer=0
 ):
 	require_role(WAITER, CASHIER)
-	customer, customer_name, phone, address = _customer_details(customer, customer_name, phone, address, new_customer)
+	customer, customer_name, phone, address = _customer_details(
+		customer, customer_name, phone, address, new_customer, order_type
+	)
 	order = frappe.new_doc("Resto Order")
 	order.update(
 		{
@@ -370,8 +415,11 @@ def update_order_info(
 ):
 	require_role(WAITER, CASHIER, HOST)
 	doc = _get_order(order)
-	if customer or cint(new_customer):
-		customer, customer_name, phone, address = _customer_details(customer, customer_name, phone, address, new_customer)
+	if customer or phone or cint(new_customer):
+		customer, customer_name, phone, address = _customer_details(
+			customer, customer_name, phone, address, new_customer, doc.order_type
+		)
+		customer = customer or ""  # none found: the order's link is cleared, as asked
 	for field, value in (
 		("customer", customer),
 		("customer_name", customer_name),
