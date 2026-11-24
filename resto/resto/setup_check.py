@@ -261,13 +261,14 @@ class SetupCheck:
 
 	# Menu: price, recipe bundle.
 	def menu_items(self):
+		# A variant template is never sold (the floor shows its variants): it needs no price or recipe.
 		group = self.s.menu_item_group
 		if not group:
 			return []
 		lft, rgt = frappe.db.get_value("Item Group", group, ["lft", "rgt"])
 		return frappe.db.sql(
 			"""select i.name, i.is_stock_item from `tabItem` i join `tabItem Group` g on g.name = i.item_group
-			where g.lft >= %s and g.rgt <= %s and i.disabled = 0 and i.is_sales_item = 1""",
+			where g.lft >= %s and g.rgt <= %s and i.disabled = 0 and i.is_sales_item = 1 and i.has_variants = 0""",
 			(lft, rgt),
 			as_dict=True,
 		)

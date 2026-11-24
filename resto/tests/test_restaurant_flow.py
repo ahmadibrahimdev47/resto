@@ -425,6 +425,20 @@ class TestRestaurantFlow(IntegrationTestCase):
 		frappe.set_user("waiter@resto.test")
 		self.assertRaises(frappe.PermissionError, setup_check.run)
 
+	def test_setup_check_leaves_out_variant_templates(self):
+		from resto.resto import setup_check
+
+		# A template is never sold, so no price or recipe is asked of it; a plain item is.
+		fx.item("TPL-GRILL-MIX", stock=0, group="Resto Menu")
+		frappe.db.set_value("Item", "TPL-GRILL-MIX", {"disabled": 0, "has_variants": 0})  # a run before left it off
+		said = lambda: " ".join(r["message"] for r in setup_check.run())
+		self.assertIn("TPL-GRILL-MIX", said())
+		frappe.db.set_value("Item", "TPL-GRILL-MIX", "has_variants", 1)
+		try:
+			self.assertNotIn("TPL-GRILL-MIX", said())
+		finally:
+			frappe.db.set_value("Item", "TPL-GRILL-MIX", "disabled", 1)
+
 	# ------------------------------------------------------------------ review fixes
 
 	def test_tax_inclusive_follows_posnext(self):
