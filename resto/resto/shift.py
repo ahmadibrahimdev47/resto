@@ -112,27 +112,80 @@ def open_shift(amounts=None):
 	return data["pos_opening_shift"]["name"]
 
 
-@frappe.whitelist()
-def closing_data():
-	"""What the close dialog shows: each payment method, with what it should hold unless POSNext
-	counts blind."""
-	require_role(CASHIER)
-	profile, name = _own_shift()
-	data = _closing(name)
-	blind = _blind(profile)
+def _report(data):
+	"""What POSNext's closing screen shows, from its closing data: the shift's sales, returns,
+	expenses, money collected and on account, taxes, invoices, and each payment method."""
+	txns = data.get("pos_transactions") or []
+	sales = flt(data.get("sales_total") if data.get("sales_total") is not None else data.get("grand_total"))
+	returns = flt(data.get("returns_total"))
+	expenses = flt(data.get("expenses_total"))
+	collected = data.get("collected_amount")
+	outstanding = data.get("outstanding_total")
 	return {
-		"shift": name,
-		"blind": blind,
-		"invoices": len(data.get("pos_transactions") or []),
+		"shift": data.get("pos_opening_shift"),
+		"user": data.get("user"),
+		"period_start": data.get("period_start_date"),
+		"period_end": data.get("period_end_date"),
+		"summary": {
+			"gross_sales": sales,
+			"returns_total": returns,
+			"returns_count": cint(data.get("returns_count")),
+			"sales_count": cint(data.get("sales_count")),
+			"expenses_total": expenses,
+			"expenses_count": cint(data.get("expenses_count")),
+			"net_sales": flt(data.get("grand_total")),
+			"net_total": flt(data.get("net_total")),
+			"total_quantity": flt(data.get("total_quantity")),
+			"collected": flt(collected if collected is not None else sum(flt(t.get("collected_amount")) for t in txns)),
+			"outstanding": flt(outstanding if outstanding is not None else sum(flt(t.get("outstanding_amount")) for t in txns)),
+			"net_cash": sales - returns - expenses,
+			"tax_total": sum(flt(t.get("amount")) for t in data.get("taxes") or []),
+		},
+		"taxes": [{"account_head": t.get("account_head"), "rate": flt(t.get("rate")), "amount": flt(t.get("amount"))} for t in data.get("taxes") or []],
+		"invoices": [
+			{
+				"name": t.get("sales_invoice") or t.get("pos_invoice"),
+				"posting_date": t.get("posting_date"),
+				"customer": t.get("customer"),
+				"grand_total": flt(t.get("grand_total")),
+				"is_return": cint(t.get("is_return")),
+				"outstanding_amount": flt(t.get("outstanding_amount")),
+			}
+			for t in txns
+		],
+		"expenses": [
+			{"expense_account": e.get("expense_account"), "amount": flt(e.get("amount")), "remarks": e.get("remarks")}
+			for e in data.get("pos_expenses") or []
+		],
 		"rows": [
 			{
 				"mode_of_payment": r.get("mode_of_payment"),
 				"opening_amount": flt(r.get("opening_amount")),
-				"expected_amount": None if blind else flt(r.get("expected_amount")),
+				"expected_amount": flt(r.get("expected_amount")),
+				"closing_amount": flt(r.get("closing_amount")) if r.get("closing_amount") is not None else None,
+				"difference": flt(r.get("difference")) if r.get("difference") is not None else None,
 			}
 			for r in data.get("payment_reconciliation") or []
 		],
 	}
+
+
+@frappe.whitelist()
+def closing_data():
+	"""What the close dialog shows, as POSNext's closing screen does. When POSNext counts blind
+	(«إخفاء المبلغ المتوقع») only the payment methods are given until the shift is closed."""
+	require_role(CASHIER)
+	profile, name = _own_shift()
+	report = _report(_closing(name))
+	report["blind"] = _blind(profile)
+	if report["blind"]:
+		report = {
+			"shift": report["shift"],
+			"blind": True,
+			"period_start": report["period_start"],
+			"rows": [{"mode_of_payment": r["mode_of_payment"]} for r in report["rows"]],
+		}
+	return report
 
 
 @frappe.whitelist(methods=["POST"])
@@ -152,10 +205,19 @@ def close_shift(amounts):
 	from pos_next.pos_next.doctype.pos_closing_shift.pos_closing_shift import submit_closing_shift
 
 	closing = submit_closing_shift(json.dumps(data, default=str))
-	rows = frappe.get_all(
-		"POS Closing Shift Detail",
-		filters={"parent": closing, "parenttype": "POS Closing Shift"},
-		fields=["mode_of_payment", "expected_amount", "closing_amount", "difference"],
-		order_by="idx",
-	)
-	return {"closing": closing, "rows": rows}
+	# The full report, as POSNext shows it after a close, with what the closing document saved.
+	report = _report(data)
+	saved = {
+		r.mode_of_payment: r
+		for r in frappe.get_all(
+			"POS Closing Shift Detail",
+			filters={"parent": closing, "parenttype": "POS Closing Shift"},
+			fields=["mode_of_payment", "opening_amount", "expected_amount", "closing_amount", "difference"],
+		)
+	}
+	for row in report["rows"]:
+		s = saved.get(row["mode_of_payment"])
+		if s:
+			row.update({k: flt(s[k]) for k in ("opening_amount", "expected_amount", "closing_amount", "difference")})
+	report["closing"] = closing
+	return report

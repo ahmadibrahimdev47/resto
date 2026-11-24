@@ -118,8 +118,8 @@ class TestFloorShift(IntegrationTestCase):
 		if len(data["rows"]) > 1:
 			self.assertRaises(frappe.ValidationError, shift.close_shift, json.dumps({"Cash": 150}))
 		result = shift.close_shift(json.dumps({r["mode_of_payment"]: (140 if r["mode_of_payment"] == "Cash" else r["expected_amount"] or 0) for r in data["rows"]}))
-		row = next(r for r in result["rows"] if r.mode_of_payment == "Cash")
-		self.assertEqual((row.expected_amount, row.closing_amount, row.difference), (150, 140, -10))
+		row = next(r for r in result["rows"] if r["mode_of_payment"] == "Cash")
+		self.assertEqual((row["opening_amount"], row["expected_amount"], row["closing_amount"], row["difference"]), (150, 150, 140, -10))
 		self.assertEqual(frappe.db.get_value("POS Closing Shift", result["closing"], "docstatus"), 1)
 		self.assertFalse(billing.get_open_shift(CASHIER, fx.PROFILE))
 

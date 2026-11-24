@@ -415,42 +415,106 @@ class RestoFloor {
 		d.show();
 	}
 
+	// The shift's figures as POSNext's closing screen shows them: sales, returns, expenses, collected and
+	// on account, taxes, the invoices, and per payment method opening, expected, counted and difference.
+	// entry: the counted amounts are inputs (data-m); otherwise the closed shift's report.
+	shift_report(r, entry) {
+		const s = r.summary || {};
+		const diff = (v) => {
+			const n = flt(v);
+			if (Math.abs(n) < 0.005) return `<span class="text-success">✓ ${__("Balanced")}</span>`;
+			return `<span class="${n < 0 ? "text-danger" : "text-warning"}">${n < 0 ? __("Short {0}", [money(-n)]) : __("Over {0}", [money(n)])}</span>`;
+		};
+		const metric = (label, value, note) =>
+			`<div class="rf-metric"><div class="text-muted">${label}</div><b>${value}</b>${note ? `<div class="text-muted small">${note}</div>` : ""}</div>`;
+		const parts = [];
+		if (r.summary) {
+			parts.push(`<p class="text-muted">${__("Shift start")}: ${esc(frappe.datetime.str_to_user(r.period_start))}
+				${r.period_end ? ` · ${__("Shift end")}: ${esc(frappe.datetime.str_to_user(r.period_end))}` : ""}</p>`);
+			parts.push(`<div class="rf-metrics">
+				${metric(__("Gross Sales"), money(s.gross_sales), __("{0} invoices", [s.sales_count || (r.invoices || []).filter((i) => !i.is_return).length]))}
+				${s.returns_count ? metric(__("Returns"), "-" + money(s.returns_total), __("{0} returns", [s.returns_count])) : ""}
+				${s.expenses_count ? metric(__("POS Expenses"), "-" + money(s.expenses_total), __("{0} expenses", [s.expenses_count])) : ""}
+				${metric(__("Net Sales"), money(s.net_sales), __("After returns"))}
+				${metric(__("Collected"), money(s.collected), __("Money taken"))}
+				${s.outstanding > 0.005 ? metric(__("On Account"), money(s.outstanding), __("Not collected")) : ""}
+				${s.expenses_count ? metric(__("Net Cash Impact"), money(s.net_cash), __("Sales - Returns - Expenses")) : ""}
+				${metric(__("Tax Collected"), money(s.tax_total))}
+			</div>`);
+			const inv = (r.invoices || [])
+				.map(
+					(i) => `<tr><td>${esc(frappe.datetime.str_to_user(i.posting_date))}</td><td>${esc(i.name)}</td><td>${esc(i.customer || "")}</td>
+						<td>${i.is_return ? __("Return") : __("Sale")}</td><td class="rf-amt">${money(i.grand_total)}</td>
+						<td class="rf-amt">${i.outstanding_amount > 0.005 ? __("Unpaid: {0}", [money(i.outstanding_amount)]) : ""}</td></tr>`
+				)
+				.join("");
+			parts.push(
+				inv
+					? `<details><summary><b>${__("Invoice Details")}</b> (${(r.invoices || []).length})</summary>
+						<table class="table table-condensed"><tr><th>${__("Time")}</th><th>${__("Invoice")}</th><th>${__("Customer")}</th><th>${__("Type")}</th><th>${__("Amount")}</th><th></th></tr>${inv}</table></details>`
+					: `<p class="text-muted">${__("No Sales During This Shift")}</p>`
+			);
+			if ((r.expenses || []).length) {
+				parts.push(`<details><summary><b>${__("POS Expenses")}</b></summary><table class="table table-condensed">
+					${r.expenses.map((e) => `<tr><td>${esc(e.expense_account)}</td><td>${esc(e.remarks || "")}</td><td class="rf-amt">${money(e.amount)}</td></tr>`).join("")}</table></details>`);
+			}
+			if ((r.taxes || []).length) {
+				parts.push(`<details><summary><b>${__("Tax Summary")}</b></summary><table class="table table-condensed">
+					${r.taxes.map((t) => `<tr><td>${esc(t.account_head)}</td><td>${flt(t.rate)}%</td><td class="rf-amt">${money(t.amount)}</td></tr>`).join("")}</table></details>`);
+			}
+		}
+		const blind = entry && !r.summary;
+		const rows = (r.rows || [])
+			.map((p, i) => {
+				const counted = entry
+					? `<input type="number" step="0.01" min="0" class="form-control input-sm rf-amt" data-m="${i}" value="">`
+					: money(p.closing_amount);
+				return `<tr><td>${esc(p.mode_of_payment)}</td>
+					${blind ? "" : `<td class="rf-amt">${money(p.opening_amount)}</td><td class="rf-amt">${money(p.expected_amount)}</td>`}
+					<td class="rf-amt">${counted}</td>
+					${blind ? "" : `<td class="rf-amt" data-d="${i}">${entry ? "" : diff(p.difference)}</td>`}</tr>`;
+			})
+			.join("");
+		parts.push(`<h5>${__("Payment Reconciliation")}</h5>
+			${entry ? `<p class="text-muted">${__("Count the money in the drawer and enter what you counted.")}</p>` : ""}
+			<table class="table table-condensed"><tr><th></th>
+				${blind ? "" : `<th>${__("Opening")}</th><th>${__("Expected")}</th>`}<th>${__("Counted")}</th>${blind ? "" : `<th>${__("Difference")}</th>`}</tr>
+			${rows}</table>`);
+		return parts.join("");
+	}
+
 	async close_shift() {
 		const data = await frappe.xcall("resto.resto.shift.closing_data");
-		const d = new frappe.ui.Dialog({
-			title: __("Close Shift"),
-			fields: [
-				{
-					fieldtype: "HTML",
-					options: `<p class="text-muted">${__("Invoices in this shift: {0}", [data.invoices])}. ${__("Count the money in the drawer and enter what you counted.")}</p>`,
-				},
-				...data.rows.map((r, i) => ({
-					fieldname: "m_" + i,
-					fieldtype: "Currency",
-					reqd: 1,
-					label: data.blind ? r.mode_of_payment : `${r.mode_of_payment} — ${__("expected")} ${money(r.expected_amount)}`,
-				})),
-			],
-			primary_action_label: __("Close Shift"),
-			primary_action: async (v) => {
-				const amounts = {};
-				data.rows.forEach((r, i) => (amounts[r.mode_of_payment] = flt(v["m_" + i])));
-				d.hide();
-				const res = await frappe.xcall("resto.resto.shift.close_shift", { amounts: JSON.stringify(amounts) });
-				const rows = (res.rows || [])
-					.map(
-						(r) => `<tr><td>${esc(r.mode_of_payment)}</td><td class="rf-amt">${money(r.expected_amount)}</td>
-							<td class="rf-amt">${money(r.closing_amount)}</td>
-							<td class="rf-amt ${flt(r.difference) < 0 ? "text-danger" : ""}">${money(r.difference)}</td></tr>`
-					)
-					.join("");
-				frappe.msgprint({
-					title: __("Shift closed: {0}", [esc(res.closing)]),
-					indicator: "green",
-					message: `<table class="table table-condensed"><tr><th></th><th>${__("Expected")}</th><th>${__("Counted")}</th><th>${__("Difference")}</th></tr>${rows}</table>`,
-				});
-				this.refresh();
-			},
+		const d = new frappe.ui.Dialog({ title: __("Close Shift"), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
+		const $w = d.fields_dict.html.$wrapper;
+		$w.html(this.shift_report(data, true));
+		// The difference as the cashier types, unless POSNext counts blind.
+		$w.find("[data-m]").on("input", (e) => {
+			const i = +$(e.currentTarget).attr("data-m");
+			const row = data.rows[i];
+			if (data.blind || row.expected_amount == null) return;
+			const v = $(e.currentTarget).val();
+			const n = flt(v) - flt(row.expected_amount);
+			$w.find(`[data-d="${i}"]`).html(
+				v === "" ? "" : Math.abs(n) < 0.005 ? `<span class="text-success">✓ ${__("Balanced")}</span>`
+					: `<span class="${n < 0 ? "text-danger" : "text-warning"}">${n < 0 ? __("Short {0}", [money(-n)]) : __("Over {0}", [money(n)])}</span>`
+			);
+		});
+		d.set_primary_action(__("Close Shift"), async () => {
+			const amounts = {};
+			let missing = false;
+			data.rows.forEach((r, i) => {
+				const v = $w.find(`[data-m="${i}"]`).val();
+				if (v === "") missing = true;
+				amounts[r.mode_of_payment] = flt(v);
+			});
+			if (missing) return frappe.msgprint(__("Please enter all closing amounts"));
+			d.hide();
+			const res = await frappe.xcall("resto.resto.shift.close_shift", { amounts: JSON.stringify(amounts) });
+			const done = new frappe.ui.Dialog({ title: __("Shift closed: {0}", [res.closing]), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
+			done.fields_dict.html.$wrapper.html(this.shift_report(res, false));
+			done.show();
+			this.refresh();
 		});
 		d.show();
 	}
@@ -1153,6 +1217,8 @@ class RestoFloor {
 		.rf-shift-none { background:var(--yellow-50, #fffff0); color:var(--yellow-800, #975a16); border:2px solid var(--yellow-400, #f6e05e); }
 		.rf-cust { display:block; width:100%; text-align:start; margin-bottom:4px; white-space:normal; }
 		.rf-cust-picked { font-weight:600; color:var(--green-700, #2f855a); margin-bottom:6px; }
+		.rf-metrics { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:10px; }
+		.rf-metric { border:1px solid var(--border-color); border-radius:8px; padding:6px 10px; }
 		.rf-print-alert { flex-basis:100%; border-radius:8px; padding:6px 10px; margin-bottom:6px; font-weight:600; background:var(--red-100, #fed7d7); color:var(--red-800, #9b2c2c); border:2px solid var(--red-500, #f56565); }
 		.resto-floor .rf-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
 		.rf-count { opacity:.7; font-size:11px; margin-inline-start:4px; }
