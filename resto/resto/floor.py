@@ -143,9 +143,13 @@ def get_floor():
 				t.status = "free"
 		halls.append({"name": hall.name, "grid_columns": cint(hall.grid_columns) or 6, "tables": tables})
 
+	alerts = kitchen.print_alerts()
 	return {
 		"halls": halls,
 		"orders": [o for o in orders if o.order_type != "Dine In" or o.rebill],
+		# Kitchen printing that stopped, shown on the floor too (the kitchen may not look at a screen).
+		"kitchen_print": {"unprinted": len(alerts["unprinted"]), "no_screen": alerts["no_screen"]},
+		"receipt_mode": printing.receipt_mode(),
 		"refresh_seconds": cint(settings.screen_refresh_seconds) or 15,
 		"roles": {
 			"manager": has_role(),
@@ -492,6 +496,7 @@ def _waste_for_void(order, row, reason):
 		waste.flags.ignore_permissions = True
 		waste.insert()
 		waste.submit()
+		frappe.db.set_value("Resto Order Item", row.name, "void_waste", waste.name, update_modified=False)
 		order.add_comment("Info", _("Waste {0} posted for the voided {1}").format(waste.name, row.item_name))
 	except Exception:
 		# The void stands; the waste can be entered by hand.
@@ -672,8 +677,22 @@ def request_bill(order):
 	doc.bill_grand_total = preview["payable"]
 	doc.bill_details = json.dumps(preview, default=str, ensure_ascii=False)
 	_save(doc)
-	# With a cashier printer the bill prints there (all its copies); else the browser prints it.
-	preview["on_printer"] = printing.queue_bill(doc.name)
+	# The bill prints on the cashier printer, or the screen that asked for it prints its pages
+	# (all its copies, each with its label), or it is not printed (Resto Settings).
+	mode = printing.bill_mode()
+	preview["on_printer"] = printing.queue_bill(doc.name) if mode == "server" else False
+	preview["pages"] = []
+	if mode == "browser":
+		messages = len(frappe.local.message_log or [])
+		try:
+			preview["pages"] = printing.bill_pages(doc.name)
+		except Exception:
+			# The waiter sees the short red notice, not the template error.
+			if frappe.local.message_log:
+				del frappe.local.message_log[messages:]
+			# A broken bill format must not stop the bill: it is requested, and printed once fixed.
+			frappe.log_error(title=_("Bill {0} was not printed").format(doc.name))
+			preview["print_error"] = 1
 	return preview
 
 
@@ -709,6 +728,11 @@ def _settle_result(doc, si):
 		"status": frappe.db.get_value("Resto Order", doc.name, "status"),
 		"print_format": frappe.db.get_value("POS Profile", doc.pos_profile, "print_format"),
 		"receipt_on_printer": printing.receipt_on_printer(),
+		# server / auto / button / none (printing.receipt_mode); auto prints it unless printed before
+		# (a retried payment returns the invoice already paid).
+		"receipt_mode": printing.receipt_mode(),
+		# Read from the document: a payment never fails on a custom column a broken migrate left out.
+		"receipt_printed": cint(si.get("resto_receipt_printed")),
 	}
 
 

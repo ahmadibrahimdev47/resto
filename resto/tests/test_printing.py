@@ -34,6 +34,7 @@ class TestPrinting(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		self.settings = frappe.get_doc("Resto Settings")
 		self.saved = {
+			"cashier_print_method": self.settings.cashier_print_method,
 			"cashier_printer": self.settings.cashier_printer,
 			"print_bill_on_printer": self.settings.print_bill_on_printer,
 			"print_receipt_on_printer": self.settings.print_receipt_on_printer,
@@ -43,7 +44,7 @@ class TestPrinting(IntegrationTestCase):
 
 	def tearDown(self):
 		settings = frappe.get_doc("Resto Settings")
-		for key in ("cashier_printer", "print_bill_on_printer", "print_receipt_on_printer"):
+		for key in ("cashier_print_method", "cashier_printer", "print_bill_on_printer", "print_receipt_on_printer"):
 			settings.set(key, self.saved[key])
 		for table in ("bill_copies", "receipt_copies"):
 			settings.set(table, [{"label": label} for label in self.saved[table]])
@@ -51,6 +52,7 @@ class TestPrinting(IntegrationTestCase):
 
 	def configure(self, bill=(), receipt=()):
 		settings = frappe.get_doc("Resto Settings")
+		settings.cashier_print_method = printing.SERVER_PRINTER
 		settings.cashier_printer = PRINTER
 		settings.print_bill_on_printer = 1
 		settings.print_receipt_on_printer = 1
@@ -80,6 +82,7 @@ class TestPrinting(IntegrationTestCase):
 
 	def test_queue_only_when_printer_is_on(self):
 		settings = frappe.get_doc("Resto Settings")
+		settings.cashier_print_method = printing.BROWSER_BUTTON
 		settings.cashier_printer = None
 		settings.print_bill_on_printer = 0
 		settings.print_receipt_on_printer = 0
@@ -100,4 +103,4 @@ class TestPrinting(IntegrationTestCase):
 			printing.print_bill("ORDER-1")
 		args = print_copies.call_args.args
 		self.assertEqual(args[:4], ("Resto Order", "ORDER-1", PRINTER, "Resto Pre-Bill"))
-		self.assertEqual(args[4], ["Customer Copy", "Restaurant Copy"])
+		self.assertEqual([c["label"] for c in args[4]], ["Customer Copy", "Restaurant Copy"])

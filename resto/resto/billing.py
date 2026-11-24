@@ -97,6 +97,9 @@ def build_invoice(order, lines=None):
 		if cint(order.get("print_sides")) and row.sides_text:
 			description += f" - {row.sides_text}"
 		_append_item(si, row.item_code, qty, flt(row.rate), description)
+		# The sides changed from the recipe, for the copies of the bill and receipt that show them
+		# (Resto Print Copy "Show Side Dishes"); with the order tick they are in the description.
+		si.items[-1].resto_sides_text = row.get("sides_text") or None
 		if row.get("sides"):
 			# Changed sides, as frozen when the line went to the kitchen: the invoice's validate
 			# hook packs them instead of the recipe's (sides.py).
@@ -337,6 +340,7 @@ def bill_preview(order, lines=None):
 				"item_code": d.item_code,
 				"item_name": d.item_name,
 				"description": d.description,
+				"sides_text": d.get("resto_sides_text") or "",
 				"qty": flt(d.qty),
 				"rate": flt(d.rate),
 				"amount": flt(d.qty) * flt(d.rate),

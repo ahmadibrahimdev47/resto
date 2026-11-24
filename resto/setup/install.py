@@ -81,6 +81,18 @@ SALES_INVOICE_FIELDS = {
 			"read_only": 1,
 			"no_copy": 1,
 		},
+		# Set once the receipt printed (on the cashier printer, or by the cashier browser), so a
+		# retried payment never prints it twice; Print Again still prints it.
+		{
+			"fieldname": "resto_receipt_printed",
+			"fieldtype": "Check",
+			"label": "Receipt Printed",
+			"insert_after": "resto_guests",
+			"read_only": 1,
+			"no_copy": 1,
+			"allow_on_submit": 1,
+			"print_hide": 1,
+		},
 	],
 	# The sides a dish was served with when they differ from its recipe (resto/resto/sides.py).
 	# Copied to a return, which takes back what was served.
@@ -90,6 +102,17 @@ SALES_INVOICE_FIELDS = {
 			"fieldtype": "Code",
 			"label": "Sides Served",
 			"insert_after": "description",
+			"read_only": 1,
+			"hidden": 1,
+			"print_hide": 1,
+			"report_hide": 1,
+		},
+		# Their text (with / without), printed by Resto Receipt on the copies that show the sides.
+		{
+			"fieldname": "resto_sides_text",
+			"fieldtype": "Small Text",
+			"label": "Sides Text",
+			"insert_after": "resto_sides",
 			"read_only": 1,
 			"hidden": 1,
 			"print_hide": 1,
@@ -153,7 +176,11 @@ def grant_standard_permissions():
 
 def set_new_setting_defaults():
 	"""Settings added in later versions get their default once (a Single keeps no default by itself)."""
-	for field, value in (("vat_on_service", 1),):
+	defaults = [("vat_on_service", 1)]
+	# Resto's receipt prints the copy labels, sides per copy and the kitchen ticket numbers.
+	if frappe.db.exists("Print Format", "Resto Receipt"):
+		defaults.append(("receipt_print_format", "Resto Receipt"))
+	for field, value in defaults:
 		if not frappe.db.sql("select 1 from `tabSingles` where doctype = %s and field = %s", ("Resto Settings", field)):
 			frappe.db.set_single_value("Resto Settings", field, value)
 

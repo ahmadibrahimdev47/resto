@@ -29,6 +29,10 @@ class RestoSettings(Document):
 				frappe.throw(_("Account {0} is a group account").format(frappe.bold(self.waste_account)))
 
 		self.validate_food_cost_levels()
+		if not self.cashier_print_method:
+			self.cashier_print_method = "Server Printer" if self.cashier_printer else "Browser Button"
+		if self.cashier_print_method == "Server Printer" and not self.cashier_printer:
+			frappe.throw(_("Choose the cashier printer, or another printing method"))
 
 	def validate_food_cost_levels(self):
 		from resto.resto.food_cost import STEP_FIELDS, STEPS

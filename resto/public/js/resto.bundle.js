@@ -191,3 +191,76 @@ resto.food_cost_headline = function (frm) {
 		level.color
 	);
 };
+
+// Printing from the browser (kitchen tickets, bills, receipts): each page is one print job, printed
+// from a hidden frame. Chrome started with --kiosk-printing prints it on the computer's default
+// printer with no window; otherwise the browser's print window opens for each page.
+// Resolves true once every page was handed to the browser's printing, false when one could not be.
+resto.print_pages = async function (pages) {
+	for (const html of pages || []) {
+		if (!(await resto.print_html(html))) return false;
+	}
+	return true;
+};
+
+resto.print_html = function (html) {
+	return new Promise((resolve) => {
+		const frame = document.createElement("iframe");
+		frame.setAttribute("sandbox", "allow-same-origin allow-modals");
+		frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+		let done = false;
+		let started = false;
+		const finish = (ok) => {
+			if (done) return;
+			done = true;
+			// A short gap before the next job, so a slow computer does not drop it.
+			setTimeout(() => {
+				frame.remove();
+				resolve(ok);
+			}, 700);
+		};
+		frame.onload = () => {
+			setTimeout(() => {
+				try {
+					const win = frame.contentWindow;
+					win.addEventListener("afterprint", () => finish(true));
+					win.focus();
+					started = true;
+					const t0 = Date.now();
+					// Returns once the job is queued (kiosk printing) or the print window is closed.
+					win.print();
+					// Kiosk printing returns at once; a print window held it open. A few seconds may be a
+					// print window closed quickly or a slow computer (print_slow: not sure it printed);
+					// a long wait is a print window (print_window_seen).
+					const took = Date.now() - t0;
+					if (took > 3000) resto.print_slow = true;
+					if (took > 8000) resto.print_window_seen = true;
+					setTimeout(() => finish(true), 1500);
+				} catch (e) {
+					finish(false);
+				}
+			}, 300);
+		};
+		// The page never loaded: not printed.
+		setTimeout(() => started || finish(false), 60000);
+		frame.srcdoc = html;
+		document.body.appendChild(frame);
+	});
+};
+
+// Recipes are written in grams and millilitres: an ingredient stocked by the kilo or the litre gets
+// that unit on its recipe row (Resto Recipe and the Item Recipe tab), unless a unit was chosen. The
+// stock unit and the cost stay as they are; a row left empty still means the stock unit.
+resto.RECIPE_UNITS = { Kg: "Gram", Litre: "Millilitre" };
+frappe.ui.form.on("Resto Recipe Item", {
+	async item_code(frm, cdt, cdn) {
+		const row = locals[cdt][cdn];
+		const item = row.item_code;
+		if (!item || row.uom) return;
+		const r = await frappe.db.get_value("Item", item, "stock_uom");
+		const unit = resto.RECIPE_UNITS[r && r.message && r.message.stock_uom];
+		const now = locals[cdt] && locals[cdt][cdn];
+		// The user may have picked another item or a unit meanwhile.
+		if (unit && now && now.item_code === item && !now.uom) frappe.model.set_value(cdt, cdn, "uom", unit);
+	},
+});

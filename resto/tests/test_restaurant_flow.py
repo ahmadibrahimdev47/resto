@@ -384,6 +384,7 @@ class TestRestaurantFlow(IntegrationTestCase):
 			("Resto Kitchen Times", [{"group_by": g} for g in ("Station", "Item", "Day", "Hour", "Waiter")]),
 			("Resto Table Analysis", [{"group_by": g} for g in ("Table", "Hall", "Waiter", "Weekday", "Hour")]),
 			("Resto Voids and Discounts", [{"type": t} for t in ("Voided Items", "Discounts", "Cancelled Orders", "Cancelled Invoices")]),
+			("Resto Kitchen vs Invoices", [{"show": "All Lines"}, {"show": "Exceptions"}, {"station": "Grill"}]),
 			("Resto Waste Analysis", [{"group_by": g} for g in ("Item", "Item Group", "Reason", "Day")]),
 			("Resto Customer Insights", [{}]),
 			("Resto Purchase Price Changes", [{}]),

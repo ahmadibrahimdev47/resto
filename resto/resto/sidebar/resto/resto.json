@@ -366,6 +366,22 @@
    "open_in_new_tab": 0,
    "show_arrow": 0,
    "type": "Link",
+   "label": "Resto Kitchen vs Invoices",
+   "link_type": "Report",
+   "link_to": "Resto Kitchen vs Invoices",
+   "icon": ""
+  },
+  {
+   "added": 0,
+   "child": 1,
+   "collapsible": 1,
+   "hidden": 0,
+   "indent": 0,
+   "is_default_module": 0,
+   "keep_closed": 0,
+   "open_in_new_tab": 0,
+   "show_arrow": 0,
+   "type": "Link",
    "label": "Resto Waste Analysis",
    "link_type": "Report",
    "link_to": "Resto Waste Analysis",
@@ -531,7 +547,7 @@
    "icon": ""
   }
  ],
- "modified": "2026-11-22 18:00:00.000000",
+ "modified": "2026-11-24 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto",
