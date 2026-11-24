@@ -318,6 +318,53 @@ class TestSides(IntegrationTestCase):
 		si2 = self.pay(order2)
 		self.assertIn(lines(order2)[0].sides_text, si2.items[0].description)
 
+	def test_copies_show_sides_by_their_own_setting(self):
+		from resto.resto import printing
+
+		settings = frappe.get_doc("Resto Settings")
+		saved = {
+			"cashier_print_method": settings.cashier_print_method,
+			"receipt_print_format": settings.receipt_print_format,
+			"bill_copies": [(r.label, r.show_sides) for r in settings.bill_copies],
+			"receipt_copies": [(r.label, r.show_sides) for r in settings.receipt_copies],
+		}
+		copies = [{"label": "Customer Copy", "show_sides": 0}, {"label": "Restaurant Copy", "show_sides": 1}]
+		settings.cashier_print_method = printing.BROWSER_BUTTON
+		settings.receipt_print_format = printing.RECEIPT_FORMAT
+		settings.set("bill_copies", copies)
+		settings.set("receipt_copies", copies)
+		settings.save()
+		try:
+			order, line = self.swapped_plate(1)
+			floor.send_to_kitchen(order)
+			text = lines(order)[0].sides_text
+			customer, restaurant = floor.request_bill(order)["pages"]
+			self.assertNotIn(text, customer)
+			self.assertIn(text, restaurant)
+			si = self.pay(order)
+			self.assertEqual(si.items[0].resto_sides_text, text)
+			customer, restaurant = printing.receipt_pages(si.name)
+			self.assertIn("Customer Copy", customer)
+			self.assertNotIn(text, customer)
+			self.assertIn(text, restaurant)
+			self.assertIn(order, customer)  # the order number, to match the kitchen tickets
+
+			# The order tick prints the sides on every copy.
+			order2, line2 = self.swapped_plate(1)
+			floor.set_print_sides(order2, 1)
+			floor.send_to_kitchen(order2)
+			text2 = lines(order2)[0].sides_text
+			for page in printing.receipt_pages(self.pay(order2).name):
+				self.assertEqual(page.count(text2), 1)
+		finally:
+			settings = frappe.get_doc("Resto Settings")
+			settings.cashier_print_method = saved["cashier_print_method"]
+			settings.receipt_print_format = saved["receipt_print_format"]
+			for table in ("bill_copies", "receipt_copies"):
+				settings.set(table, [{"label": label, "show_sides": show} for label, show in saved[table]])
+			settings.save()
+
+
 	# ------------------------------------------------------------------ returns
 
 	def test_full_return_of_a_swapped_side(self):

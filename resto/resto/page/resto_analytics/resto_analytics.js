@@ -139,6 +139,7 @@ class RestoAnalytics {
 			"Resto Kitchen Times",
 			"Resto Table Analysis",
 			"Resto Voids and Discounts",
+			"Resto Kitchen vs Invoices",
 			"Resto Waste Analysis",
 			"Resto Customer Insights",
 			"Resto Purchase Price Changes",

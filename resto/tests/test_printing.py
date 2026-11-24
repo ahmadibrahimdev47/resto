@@ -103,4 +103,4 @@ class TestPrinting(IntegrationTestCase):
 			printing.print_bill("ORDER-1")
 		args = print_copies.call_args.args
 		self.assertEqual(args[:4], ("Resto Order", "ORDER-1", PRINTER, "Resto Pre-Bill"))
-		self.assertEqual(args[4], ["Customer Copy", "Restaurant Copy"])
+		self.assertEqual([c["label"] for c in args[4]], ["Customer Copy", "Restaurant Copy"])

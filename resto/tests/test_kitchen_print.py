@@ -4,6 +4,7 @@ bench --site test.resto run-tests --module resto.tests.test_kitchen_print
 """
 
 import json
+from unittest.mock import patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
@@ -135,7 +136,7 @@ class TestKitchenPrint(IntegrationTestCase):
 		floor.void_line(order, frappe.get_doc("Resto Order", order).items[0].name, "Wrong dish")
 		claimed = kitchen.kds_claim_print(SCREEN)
 		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", claimed["name"], "ticket_type"), "Void")
-		self.assertIn("DO NOT PREPARE", claimed["pages"][0])
+		self.assertIn("DO NOT SERVE", claimed["pages"][0])
 		self.assertIn(original, claimed["pages"][0])  # which ticket it cancels
 
 	def test_void_of_a_ticket_never_printed_does_not_print(self):
@@ -162,17 +163,45 @@ class TestKitchenPrint(IntegrationTestCase):
 		name = self.ticket()
 		self.assertIsNone(kitchen.kds_claim_print(SCREEN))  # the button prints, not the screen
 		self.assertNotIn("REPRINT", kitchen.kds_print(name)["pages"][0])
+		# A second press before the first printed is a reprint too.
+		self.assertIn("REPRINT", kitchen.kds_print(name)["pages"][0])
 		kitchen.kds_printed(name)
 		self.assertIn("REPRINT", kitchen.kds_print(name)["pages"][0])
 		self.station(kitchen.NO_PRINTING)
 		self.assertEqual(len(kitchen.kds_print(name)["pages"]), 1)
 
+	def test_confirm_needs_a_ticket_given_to_print(self):
+		self.station(kitchen.BROWSER_BUTTON)
+		name = self.ticket()
+		self.assertRaises(frappe.ValidationError, kitchen.kds_printed, name)
+		self.assertEqual(self.printed(name), 0)
+
+	def test_a_ticket_that_cannot_be_rendered_is_not_claimed(self):
+		self.station(kitchen.BROWSER_AUTO)
+		name = self.ticket()
+		with patch("resto.resto.kitchen.ticket_pages", side_effect=RuntimeError("broken format")):
+			self.assertIsNone(kitchen.kds_claim_print(SCREEN))
+		self.assertFalse(frappe.db.get_value("Resto Kitchen Ticket", name, "print_claimed_at"))
+		# When it prints at last, it is not marked as a reprint: nothing reached the paper before.
+		claimed = kitchen.kds_claim_print(SCREEN)
+		self.assertEqual(claimed["name"], name)
+		self.assertNotIn("REPRINT", claimed["pages"][0])
+
 	def test_station_numbers_follow_each_other(self):
 		self.station(kitchen.BROWSER_BUTTON)
 		first = frappe.db.get_value("Resto Kitchen Ticket", self.ticket(), "daily_no")
-		second = frappe.db.get_value("Resto Kitchen Ticket", self.ticket(), "daily_no")
+		order = self.order()
+		floor.send_to_kitchen(order)
+		floor.void_line(order, frappe.get_doc("Resto Order", order).items[0].name, "Wrong dish")
+		void = frappe.get_value("Resto Kitchen Ticket", {"resto_order": order, "ticket_type": "Void"}, "daily_no")
+		self.assertFalse(void)  # a void takes no number: it names the ticket it cancels
+		third = frappe.db.get_value("Resto Kitchen Ticket", self.ticket(), "daily_no")
 		self.assertTrue(first >= 1)
-		self.assertEqual(second, first + 1)
+		self.assertEqual(third, first + 2)
+
+	def test_the_floor_sees_when_kitchen_printing_stopped(self):
+		self.station(kitchen.BROWSER_AUTO)
+		self.assertIn(STATION, floor.get_floor()["kitchen_print"]["no_screen"])
 
 	def test_kitchen_screens_warn_when_no_screen_prints(self):
 		self.station(kitchen.BROWSER_AUTO)

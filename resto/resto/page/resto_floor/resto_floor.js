@@ -72,10 +72,84 @@ class RestoFloor {
 		} catch (e) {
 			return;
 		}
+		if (!this._receipts_btn && this.floor.roles.cashier) {
+			this._receipts_btn = this.page.add_inner_button(__("Receipts"), () => this.receipts());
+		}
 		this.render_floor();
 		if (this.order) this.reload_lines(this.order.name);
 		clearInterval(this._poll);
 		this._poll = setInterval(() => this.refresh(), (this.floor.refresh_seconds || 15) * 1000);
+	}
+
+	// ------------------------------------------------------------------ printing
+
+	kitchen_print_alert() {
+		// Kitchen printing that stopped is shown here too: the kitchen may not be looking at a screen.
+		const k = this.floor.kitchen_print || {};
+		const parts = [];
+		if (k.unprinted) parts.push(__("Kitchen tickets not printed: {0}", [k.unprinted]));
+		if ((k.no_screen || []).length) parts.push(__("No kitchen screen is printing for: {0}", [esc(k.no_screen.join("، "))]));
+		return parts.length ? `<div class="rf-print-alert">⚠ ${parts.join(" · ")}</div>` : "";
+	}
+
+	prints_here() {
+		// Bills and receipts print from the browser only on the device that prints them (the cashier's),
+		// not on a waiter's tablet. Kept per device; a cashier's device prints by default.
+		let v = null;
+		try {
+			v = localStorage.getItem("resto_prints_here");
+		} catch (e) {
+			v = null;
+		}
+		return v === null ? !!(this.floor && this.floor.roles.cashier) : v === "1";
+	}
+
+	async receipts() {
+		const rows = await frappe.xcall("resto.resto.printing.recent_receipts");
+		const d = new frappe.ui.Dialog({ title: __("Receipts"), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
+		const here = this.prints_here();
+		const list = (rows || [])
+			.map(
+				(r, i) => `<tr><td>${esc((r.posting_time || "").slice(0, 5))}</td>
+					<td><a href="/app/sales-invoice/${esc(r.name)}">${esc(r.name)}</a>${r.is_return ? " · " + __("Return") : ""}</td>
+					<td>${r.resto_table ? __("Table {0}", [esc(r.resto_table)], "Resto") : esc(__(r.resto_order_type || "", null, "Resto"))} · ${esc(r.resto_order || "")}</td>
+					<td class="rf-amt">${money(r.rounded_total || r.grand_total)}</td>
+					<td>${r.resto_receipt_printed ? "🖨" : ""}</td>
+					<td><button class="btn btn-default btn-xs" data-i="${i}">${__("Print Again")}</button></td></tr>`
+			)
+			.join("");
+		d.fields_dict.html.$wrapper.html(`
+			<p><button class="btn btn-sm ${here ? "btn-success" : "btn-default"}" data-here="1">${here ? "☑" : "☐"} ${__("This device prints bills and receipts")}</button></p>
+			${list ? `<table class="table table-condensed">${list}</table>` : `<p class="text-muted">${__("No receipts today")}</p>`}`);
+		d.fields_dict.html.$wrapper.find("[data-here]").on("click", () => {
+			try {
+				localStorage.setItem("resto_prints_here", here ? "0" : "1");
+			} catch (e) {
+				// private window: the default stays
+			}
+			d.hide();
+			this.receipts();
+		});
+		d.fields_dict.html.$wrapper.find("[data-i]").on("click", async (e) => {
+			const btn = $(e.currentTarget).prop("disabled", true);
+			const r = rows[btn.attr("data-i")];
+			await this.print_receipt(r.name);
+			btn.prop("disabled", false);
+		});
+		d.show();
+	}
+
+	async print_receipt(sales_invoice, mode) {
+		mode = mode || this.receipt_mode;
+		if (mode === "server") {
+			await frappe.xcall("resto.resto.printing.reprint", { doctype: "Sales Invoice", name: sales_invoice });
+			return frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
+		}
+		frappe.show_alert({ message: __("Printing…"), indicator: "blue" });
+		const pages = await frappe.xcall("resto.resto.printing.receipt_pages", { sales_invoice });
+		if (await resto.print_pages(pages)) {
+			await frappe.xcall("resto.resto.printing.receipt_printed", { sales_invoice });
+		}
 	}
 
 	// ------------------------------------------------------------------ floor
@@ -96,7 +170,7 @@ class RestoFloor {
 			`<button class="btn btn-sm ${this.hall === "__orders" ? "btn-primary" : "btn-default"}" data-hall="__orders">
 				${__("Takeaway & Delivery")} <span class="rf-count">${this.floor.orders.length}</span></button>`
 		);
-		this.$tabs.html(tabs.join(""));
+		this.$tabs.html(this.kitchen_print_alert() + tabs.join(""));
 		this.$tabs.find("button").on("click", (e) => {
 			this.hall = $(e.currentTarget).attr("data-hall");
 			localStorage.setItem("resto_floor_hall", this.hall);
@@ -511,10 +585,21 @@ class RestoFloor {
 			return this.load_order(o.name);
 		}
 		if (act === "bill") {
-			const bill = await call("request_bill", { order: o.name }, true);
-			if (bill && bill.on_printer) frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
-			else if (bill && bill.pages && bill.pages.length) resto.print_pages(bill.pages);
-			else frappe.show_alert({ message: __("Bill requested"), indicator: "green" });
+			if (this._billing) return;
+			this._billing = true;
+			try {
+				const bill = await call("request_bill", { order: o.name }, true);
+				if (bill && bill.on_printer) frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
+				else if (bill && bill.print_error) frappe.show_alert({ message: __("Bill requested, but it could not be printed. Tell the manager."), indicator: "red" }, 10);
+				else if (bill && bill.pages && bill.pages.length && this.prints_here()) {
+					frappe.show_alert({ message: __("Printing the bill…"), indicator: "blue" });
+					await resto.print_pages(bill.pages);
+				} else if (bill && bill.pages && bill.pages.length) {
+					frappe.show_alert({ message: __("Bill requested. Print it from the cashier device (Print Bill there)."), indicator: "orange" }, 8);
+				} else frappe.show_alert({ message: __("Bill requested"), indicator: "green" });
+			} finally {
+				this._billing = false;
+			}
 			return this.load_order(o.name);
 		}
 		if (act === "pay") return this.pay();
@@ -785,18 +870,11 @@ class RestoFloor {
 						true
 					);
 					d.hide();
-					const print_receipt = async () => {
-						if (r.receipt_mode === "server") {
-							await frappe.xcall("resto.resto.printing.reprint", { doctype: "Sales Invoice", name: r.sales_invoice });
-							return frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
-						}
-						const pages = await frappe.xcall("resto.resto.printing.receipt_pages", { sales_invoice: r.sales_invoice });
-						if (await resto.print_pages(pages)) {
-							await frappe.xcall("resto.resto.printing.receipt_printed", { sales_invoice: r.sales_invoice });
-						}
-					};
-					// Printed once by itself: a retried payment (same invoice) does not print it again.
-					const auto = r.receipt_mode === "auto" && !r.receipt_printed;
+					this.receipt_mode = r.receipt_mode;
+					const print_receipt = () => this.print_receipt(r.sales_invoice, r.receipt_mode);
+					// Printed once by itself, on the device that prints receipts: a retried payment (same
+					// invoice) does not print it again.
+					const auto = r.receipt_mode === "auto" && !r.receipt_printed && this.prints_here();
 					frappe.msgprint({
 						title: __("Paid"),
 						indicator: "green",
@@ -804,7 +882,7 @@ class RestoFloor {
 							${r.change_amount ? `<b>${__("Change", null, "Resto")}: ${money(r.change_amount)}</b>` : ""}`,
 						primary_action: {
 							// The receipt printed by itself (cashier printer, or this browser): this prints it again.
-							label: r.receipt_mode === "server" || r.receipt_mode === "auto" || r.receipt_printed ? __("Print Again") : __("Print Receipt"),
+							label: r.receipt_mode === "server" || auto || r.receipt_printed ? __("Print Again") : __("Print Receipt"),
 							action: () => print_receipt(),
 						},
 					});
@@ -879,6 +957,7 @@ class RestoFloor {
 
 	static css() {
 		return `
+		.rf-print-alert { flex-basis:100%; border-radius:8px; padding:6px 10px; margin-bottom:6px; font-weight:600; background:var(--red-100, #fed7d7); color:var(--red-800, #9b2c2c); border:2px solid var(--red-500, #f56565); }
 		.resto-floor .rf-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
 		.rf-count { opacity:.7; font-size:11px; margin-inline-start:4px; }
 		.rf-grid { display:grid; gap:12px; }

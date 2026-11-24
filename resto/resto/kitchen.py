@@ -23,8 +23,8 @@ PRINTER_SEEN_SECONDS = 120
 UNPRINTED_SECONDS = 60
 # ...when it was sent in the last hours.
 ALERT_HOURS = 12
-# Station ticket numbers start again at 1 each day at this hour (a service past midnight keeps counting).
-DAY_STARTS_AT_HOUR = 5
+# Station ticket numbers are kept this long after their business day.
+DAILY_NO_KEEP_SECONDS = 2 * 24 * 3600
 # Hides the print page banner and the page margins, whatever the browser remembers.
 BROWSER_PAGE_STYLE = "<style>@page { margin: 0; } .action-banner, .print-hide { display: none !important; }</style>"
 
@@ -65,7 +65,6 @@ def send_lines(order, course=None):
 
 	now = now_datetime()
 	tickets = []
-	# Stations in name order: two sends lock their stations (ticket numbers) in the same order.
 	for station, rows in sorted(by_station.items()):
 		ticket = _make_ticket(order, station, "Order", rows, now)
 		for d in rows:
@@ -134,7 +133,8 @@ def _make_ticket(order, station, ticket_type, rows, now):
 			"status": "New",
 			"waiter": order.waiter or frappe.session.user,
 			"sent_at": now,
-			"daily_no": _daily_no(station, now),
+			# Order tickets only: a void refers to the number of the ticket it cancels.
+			"daily_no": _daily_no(station, now) if ticket_type == "Order" else None,
 		}
 	)
 	for d in rows:
@@ -154,23 +154,52 @@ def _make_ticket(order, station, ticket_type, rows, now):
 	ticket.flags.ignore_permissions = True
 	ticket.insert()
 	_queue_print(ticket)
+	_warn_if_nobody_prints(station)
 	return ticket
 
 
+def _warn_if_nobody_prints(station):
+	"""The waiter is told at once when the ticket will not come out on paper by itself."""
+	if frappe.db.get_value("Resto Kitchen Station", station, "print_method") != BROWSER_AUTO:
+		return
+	if frappe.cache.get_value(_printer_key(station)):
+		return
+	frappe.msgprint(
+		_("No kitchen screen is printing for {0} now: tell the kitchen to turn on Auto Printing.").format(
+			frappe.bold(station)
+		),
+		indicator="orange",
+		alert=True,
+	)
+
+
 def _daily_no(station, now):
-	"""The next ticket number of the station today (the day starts at DAY_STARTS_AT_HOUR). The station
-	row is locked and the last number read with a locking read (it sees a ticket another send just
-	committed), so two tickets sent at the same moment never share a number."""
-	frappe.db.get_value("Resto Kitchen Station", station, "name", for_update=True)
-	start = get_datetime(getdate(now)).replace(hour=DAY_STARTS_AT_HOUR)
+	"""The next ticket number of the station in this business day (Resto Settings "Business Day Starts
+	At"), to match paper with the screen and the receipt.
+
+	An atomic counter in the cache, not a read of the tickets: two sends at the same moment never share
+	a number, and a number never locks a row or holds up a send or a payment. The counter starts from
+	the tickets of the day when the cache has none (a restart). A send that fails leaves a gap. Without
+	the cache the ticket simply has no number."""
+	from resto.resto.demand import day_start_hour
+
+	start = get_datetime(getdate(now)).replace(hour=day_start_hour())
 	if now < start:
 		start = add_to_date(start, days=-1)
-	last = frappe.db.sql(
-		"""select ifnull(max(daily_no), 0) from `tabResto Kitchen Ticket`
-		where station = %s and sent_at >= %s for update""",
-		(station, start),
-	)[0][0]
-	return cint(last) + 1
+	key = frappe.cache.make_key(f"resto_kds_no:{station}:{start.date()}")
+	try:
+		if frappe.cache.get(key) is None:
+			last = frappe.db.sql(
+				"""select ifnull(max(daily_no), 0) from `tabResto Kitchen Ticket`
+				where station = %s and sent_at >= %s""",
+				(station, start),
+			)[0][0]
+			# Only the first of two sends at the same moment sets it.
+			frappe.cache.set(key, cint(last), ex=DAILY_NO_KEEP_SECONDS, nx=True)
+		return cint(frappe.cache.incr(key))
+	except Exception:
+		frappe.log_error(title=_("Kitchen ticket number not given"))
+		return None
 
 
 def _queue_print(ticket):
@@ -360,20 +389,26 @@ def kds_print(ticket):
 	as a reprint, so the kitchen does not make it twice."""
 	require_role(KITCHEN, WAITER, CASHIER)
 	station = _ticket_station(ticket)
-	printed, claimed = frappe.db.get_value("Resto Kitchen Ticket", ticket, ["printed", "print_claimed_at"])
+	printed, claimed = frappe.db.get_value("Resto Kitchen Ticket", ticket, ["printed", "print_claimed_at"]) or (0, None)
 	reprint = 1 if (cint(printed) or claimed) else 0
 	if (station.print_method or BROWSER_BUTTON) == SERVER_PRINTER and station.printer:
 		frappe.enqueue(
 			"resto.resto.kitchen.print_ticket", ticket=ticket, reprint=reprint, queue="short", enqueue_after_commit=True
 		)
 		return {"server": 1}
-	return {"pages": ticket_pages(ticket, station, reprint=reprint)}
+	pages = ticket_pages(ticket, station, reprint=reprint)
+	# A second press, or a screen printing automatically, now sees it as a reprint.
+	frappe.db.set_value("Resto Kitchen Ticket", ticket, "print_claimed_at", now_datetime(), update_modified=False)
+	return {"pages": pages}
 
 
 @frappe.whitelist(methods=["POST"])
 def kds_printed(ticket):
-	"""The browser printed the ticket's pages."""
+	"""The browser printed the ticket's pages (given by kds_print or kds_claim_print, which stamp the
+	claim)."""
 	require_role(KITCHEN, WAITER, CASHIER)
+	if not frappe.db.get_value("Resto Kitchen Ticket", ticket, "print_claimed_at"):
+		frappe.throw(_("Ticket {0} was not given to print").format(ticket))
 	frappe.db.set_value("Resto Kitchen Ticket", ticket, "printed", 1, update_modified=False)
 	return True
 
@@ -396,6 +431,16 @@ def kds_claim_print(stations):
 	now = now_datetime()
 	for s in auto:
 		frappe.cache.set_value(_printer_key(s.name), str(now), expires_in_sec=PRINTER_SEEN_SECONDS)
+	try:
+		return _claim_next(auto, now)
+	except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+		# Another screen or a send holds the ticket (or changed it since this request began): nothing
+		# is claimed, the next poll tries again.
+		frappe.db.rollback()
+		return None
+
+
+def _claim_next(auto, now):
 	skip = set()
 	for _round in range(20):
 		name = _next_to_print(auto, now, skip)
@@ -409,25 +454,41 @@ def kds_claim_print(stations):
 			as_dict=True,
 			for_update=True,
 		)
-		if cint(row.printed) or row.status not in TO_PRINT_STATUSES:
+		claimed_at = now_datetime()
+		if not row or cint(row.printed) or row.status not in TO_PRINT_STATUSES:
 			continue
-		if row.print_claimed_at and row.print_claimed_at > add_to_date(now, seconds=-CLAIM_SECONDS):
+		if row.print_claimed_at and row.print_claimed_at > add_to_date(claimed_at, seconds=-CLAIM_SECONDS):
 			continue  # another screen is printing it
 		if row.ticket_type == "Void" and not _original_on_paper(name):
 			# Nothing of it reached the kitchen on paper: the struck lines show on the screen only.
 			frappe.db.set_value("Resto Kitchen Ticket", name, "printed", 1, update_modified=False)
 			continue
-		frappe.db.set_value("Resto Kitchen Ticket", name, "print_claimed_at", now, update_modified=False)
-		try:
-			station = frappe.get_cached_doc("Resto Kitchen Station", row.station)
-			pages = ticket_pages(name, station, reprint=1 if row.print_claimed_at else 0)
-		except Exception:
-			# A ticket that cannot be rendered (a broken custom format) must not hold up the others: it
-			# stays claimed, so it is tried again later, and the kitchen screens show it unprinted.
-			frappe.log_error(title=_("Kitchen ticket {0} was not printed").format(name))
+		# Rendered before it is claimed: a ticket that could not be rendered is not marked as a reprint
+		# when it finally prints. The row lock keeps other screens off it meanwhile.
+		pages = _render_for_claim(name, row)
+		if pages is None:
 			continue
+		frappe.db.set_value("Resto Kitchen Ticket", name, "print_claimed_at", claimed_at, update_modified=False)
 		return {"name": name, "pages": pages}
 	return None
+
+
+def _render_for_claim(name, row):
+	"""The ticket's pages, or None when it cannot be rendered (a broken custom format): it must not hold
+	up the others, it is tried again on the next poll and the kitchen screens show it unprinted."""
+	messages = len(frappe.local.message_log or [])
+	try:
+		station = frappe.get_cached_doc("Resto Kitchen Station", row.station)
+		return ticket_pages(name, station, reprint=1 if row.print_claimed_at else 0)
+	except Exception:
+		# The error is not shown on the kitchen screen at every poll: it is logged once in five minutes.
+		if frappe.local.message_log:
+			del frappe.local.message_log[messages:]
+		key = f"resto_kds_render_failed:{name}"
+		if not frappe.cache.get_value(key):
+			frappe.cache.set_value(key, 1, expires_in_sec=300)
+			frappe.log_error(title=_("Kitchen ticket {0} was not printed").format(name))
+		return None
 
 
 def _next_to_print(stations, now, skip):
@@ -471,7 +532,7 @@ def _original_on_paper(void_ticket):
 	return bool(
 		frappe.db.sql(
 			"""select count(*) from `tabResto Kitchen Ticket`
-			where name in %s and (ifnull(printed, 0) = 1 or print_claimed_at is not null)""",
+			where name in %s and (ifnull(printed, 0) = 1 or print_claimed_at is not null) for update""",
 			(tuple(originals),),
 		)[0][0]
 	)

@@ -107,6 +107,17 @@ SALES_INVOICE_FIELDS = {
 			"print_hide": 1,
 			"report_hide": 1,
 		},
+		# Their text (with / without), printed by Resto Receipt on the copies that show the sides.
+		{
+			"fieldname": "resto_sides_text",
+			"fieldtype": "Small Text",
+			"label": "Sides Text",
+			"insert_after": "resto_sides",
+			"read_only": 1,
+			"hidden": 1,
+			"print_hide": 1,
+			"report_hide": 1,
+		},
 	],
 }
 

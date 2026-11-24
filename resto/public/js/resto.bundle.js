@@ -229,8 +229,9 @@ resto.print_html = function (html) {
 					const t0 = Date.now();
 					// Returns once the job is queued (kiosk printing) or the print window is closed.
 					win.print();
-					// Kiosk printing returns at once; a print window held it open.
-					if (Date.now() - t0 > 4000) resto.print_window_seen = true;
+					// Kiosk printing returns at once; a print window held it open (a slow computer can
+					// take a few seconds, so only a long wait counts).
+					if (Date.now() - t0 > 8000) resto.print_window_seen = true;
 					setTimeout(() => finish(true), 1500);
 				} catch (e) {
 					finish(false);

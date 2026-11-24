@@ -200,7 +200,9 @@ class SetupCheck:
 
 	def check_kitchen(self):
 		area = _("Kitchen")
-		stations = frappe.db.get_all("Resto Kitchen Station", {"is_active": 1}, ["name", "is_default", "printer", "auto_print"])
+		stations = frappe.db.get_all(
+			"Resto Kitchen Station", {"is_active": 1}, ["name", "is_default", "printer", "auto_print", "print_method"]
+		)
 		if not stations:
 			self.error(area, _("No kitchen station; orders cannot be sent to the kitchen"))
 			return
@@ -208,7 +210,7 @@ class SetupCheck:
 		if not defaults:
 			self.warn(area, _("No default station; items that match no station cannot be sent"))
 		for st in stations:
-			if st.auto_print and not st.printer:
+			if st.print_method == "Server Printer" and st.auto_print and not st.printer:
 				self.warn(area, _("Station {0} prints automatically but has no printer").format(st.name))
 		from resto.resto.kitchen import print_alerts
 
@@ -218,6 +220,21 @@ class SetupCheck:
 		if alerts["unprinted"]:
 			self.warn(area, _("{0} kitchen tickets are not printed").format(len(alerts["unprinted"])))
 		self.ok(area, _("{0} kitchen stations").format(len(stations)))
+		self.check_receipt_format(area)
+
+	def check_receipt_format(self, area):
+		from resto.resto import printing
+
+		s = self.s
+		fmt = s.get("receipt_print_format")
+		labelled = [r for r in (s.get("receipt_copies") or []) if r.label or cint(r.get("show_sides"))]
+		if labelled and fmt != printing.RECEIPT_FORMAT:
+			self.warn(
+				area,
+				_("Receipt copies have labels or sides, but only the {0} print format prints them").format(
+					printing.RECEIPT_FORMAT
+				),
+			)
 
 	def check_users(self):
 		area = _("Users")

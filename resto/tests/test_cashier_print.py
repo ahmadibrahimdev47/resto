@@ -64,8 +64,8 @@ class TestCashierPrint(IntegrationTestCase):
 		floor.send_to_kitchen(order)
 		return order
 
-	def pay(self, order, request_id):
-		bill = floor.get_bill(order)
+	def pay(self, order, request_id, bill=None):
+		bill = bill or floor.get_bill(order)
 		return floor.settle(
 			order, json.dumps([{"mode_of_payment": "Cash", "amount": bill["payable"]}]), None, bill["payable"], request_id
 		)
@@ -110,17 +110,22 @@ class TestCashierPrint(IntegrationTestCase):
 	def test_receipt_prints_once_by_itself(self):
 		self.configure(printing.BROWSER_AUTO, receipt=("Customer Copy", "Restaurant Copy"))
 		order = self.order()
-		first = self.pay(order, "cashier-print-1")
+		bill = floor.get_bill(order)
+		first = self.pay(order, "cashier-print-1", bill)
 		self.assertEqual(first["receipt_mode"], "auto")
 		self.assertEqual(first["receipt_printed"], 0)
 		self.assertEqual(len(printing.receipt_pages(first["sales_invoice"])), 2)
 		printing.receipt_printed(first["sales_invoice"])
 		# The answer was lost and the cashier clicked again: same invoice, already printed.
-		again = self.pay(order, "cashier-print-1")
+		again = self.pay(order, "cashier-print-1", bill)
 		self.assertEqual(again["sales_invoice"], first["sales_invoice"])
 		self.assertEqual(again["receipt_printed"], 1)
-		# Print Again still prints it.
-		self.assertEqual(len(printing.receipt_pages(first["sales_invoice"])), 2)
+		# Print Again still prints it, marked as printed again, and from the list of the day.
+		again_pages = printing.receipt_pages(first["sales_invoice"])
+		self.assertEqual(len(again_pages), 2)
+		if printing.get_settings().receipt_print_format == printing.RECEIPT_FORMAT:
+			self.assertIn("PRINTED AGAIN", again_pages[0])
+		self.assertIn(first["sales_invoice"], [r.name for r in printing.recent_receipts()])
 
 	def test_receipt_pages_only_for_restaurant_invoices(self):
 		self.assertRaises(frappe.ValidationError, printing.receipt_pages, "no-such-invoice")

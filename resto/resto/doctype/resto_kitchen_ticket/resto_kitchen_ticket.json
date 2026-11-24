@@ -79,7 +79,7 @@
    "label": "Station Number",
    "read_only": 1,
    "no_copy": 1,
-   "description": "The ticket number of its station today; a gap shows a missing ticket."
+   "description": "The ticket number of its station in the business day, to match the paper with the screen and the receipt. A ticket not printed shows in red on the kitchen screens."
   },
   {
    "fieldname": "column_break_1",
