@@ -151,7 +151,11 @@ class TestFloorShift(IntegrationTestCase):
 		floor.settle(order2, json.dumps([{"mode_of_payment": "Card", "amount": bill2["payable"]}]), None, bill2["payable"])
 
 		# Money paid out of the drawer: a Journal Entry from the cash account.
-		account = frappe.db.get_value("Account", {"company": fx.COMPANY, "root_type": "Expense", "is_group": 0, "disabled": 0})
+		account = frappe.db.sql(
+			"""select name from `tabAccount` where company = %s and root_type = 'Expense' and is_group = 0 and disabled = 0
+			and ifnull(account_type, '') in ('', 'Expense Account', 'Chargeable', 'Indirect Expense') limit 1""",
+			fx.COMPANY,
+		)[0][0]
 		self.assertRaises(frappe.ValidationError, shift.add_expense, "Cash", account, 100000, "Too much")
 		je = shift.add_expense("Cash", account, 20, "Ice")
 		self.assertEqual(frappe.db.get_value("Journal Entry", je, "docstatus"), 1)
@@ -183,6 +187,9 @@ class TestFloorShift(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		doc.remarks = "x"
 		self.assertRaises(frappe.ValidationError, doc.save)
+		# What a closed shift counted cannot be cancelled: a bill, a drawer expense.
+		self.assertRaises(frappe.ValidationError, frappe.get_doc("Sales Invoice", paid["sales_invoice"]).cancel)
+		self.assertRaises(frappe.ValidationError, frappe.get_doc("Journal Entry", je).cancel)
 
 	def test_a_bill_needs_an_open_shift_when_required(self):
 		frappe.set_user("Administrator")
@@ -201,6 +208,36 @@ class TestFloorShift(IntegrationTestCase):
 		self.assertRaises(
 			frappe.ValidationError, floor.settle, order2, json.dumps([{"mode_of_payment": "Cash", "amount": bill2["payable"]}]), None, bill2["payable"]
 		)
+
+	def test_a_debt_paid_to_the_cashier_is_in_the_drawer(self):
+		name = shift.open_shift(json.dumps({"Cash": 0}))
+		customer = frappe.db.get_value("Resto Order", floor.create_order(order_type="Takeaway", customer_name="Debtor", phone=f"0107{random.randint(1000000, 9999999)}", new_customer=1), "customer")
+		cash = frappe.db.get_value("Mode of Payment Account", {"parent": "Cash", "company": fx.COMPANY}, "default_account")
+		from erpnext.accounts.party import get_party_account
+
+		pe = frappe.get_doc(
+			{
+				"doctype": "Payment Entry",
+				"payment_type": "Receive",
+				"company": fx.COMPANY,
+				"party_type": "Customer",
+				"party": customer,
+				"mode_of_payment": "Cash",
+				"paid_from": get_party_account("Customer", customer, fx.COMPANY),
+				"paid_to": cash,
+				"paid_amount": 35,
+				"received_amount": 35,
+				"reference_no": "debt",
+				"reference_date": frappe.utils.nowdate(),
+			}
+		)
+		pe.flags.ignore_permissions = True
+		pe.insert()
+		pe.submit()
+		self.assertEqual(pe.resto_shift, name)
+		data = shift.closing_data()
+		self.assertAlmostEqual(next(r for r in data["rows"] if r["mode_of_payment"] == "Cash")["expected_amount"], 35, 2)
+		self.assertAlmostEqual(data["summary"]["debts_total"], 35, 2)
 
 	def test_a_negative_opening_is_refused(self):
 		self.assertRaises(frappe.ValidationError, shift.open_shift, json.dumps({"Cash": -5}))

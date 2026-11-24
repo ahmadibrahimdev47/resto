@@ -41,16 +41,31 @@ def _blind():
 
 
 def open_shift_of(user, pos_profile=None, lock=False):
-	"""The user's open shift (on that POS Profile, when given), or None. lock: a locking read, so a
-	close committed by another request is seen and a close running now is waited for."""
-	filters = {"user": user, "status": "Open"}
-	if pos_profile:
-		filters["pos_profile"] = pos_profile
-	name = frappe.db.get_value("Resto Shift", filters, "name", order_by="opening_time desc")
-	if name and lock:
-		if frappe.db.get_value("Resto Shift", name, "status", for_update=True) != "Open":
-			return None
-	return name
+	"""The user's open shift (on that POS Profile, when given), or None. lock: a locking read (it
+	sees what other requests committed, and waits for a close or a bill running now)."""
+	cond = " and pos_profile = %(pos_profile)s" if pos_profile else ""
+	suffix = " for update" if lock else ""
+	row = frappe.db.sql(
+		f"""select name from `tabResto Shift` where user = %(user)s and status = 'Open'{cond}
+		order by opening_time desc limit 1{suffix}""",
+		{"user": user, "pos_profile": pos_profile},
+	)
+	return row[0][0] if row else None
+
+
+def shift_status(name, lock=False):
+	if not name:
+		return None
+	suffix = " for update" if lock else ""
+	row = frappe.db.sql(f"select status from `tabResto Shift` where name = %s{suffix}", name)
+	return row[0][0] if row else None
+
+
+def _fresh():
+	"""Start from a new transaction, so what is read after the locks below includes every bill
+	committed before them (a REPEATABLE READ snapshot taken earlier in this request would not)."""
+	if not frappe.flags.in_test:
+		frappe.db.commit()
 
 
 def _lock_user():
@@ -60,6 +75,7 @@ def _lock_user():
 
 def _own_shift(lock=False):
 	if lock:
+		_fresh()
 		_lock_user()
 	name = open_shift_of(frappe.session.user, lock=lock)
 	if not name:
@@ -77,6 +93,10 @@ def _mode_account(mode, company):
 
 
 # --------------------------------------------------------------------------- figures
+
+
+def _cash_mode(modes):
+	return next((m for m in modes if frappe.get_cached_value("Mode of Payment", m, "type") == "Cash"), None)
 
 
 def _payable(si):
@@ -126,8 +146,23 @@ def compute(shift):
 			row = next((p for p in rows if p.account == i.account_for_change_amount), None) or next(
 				(p for p in rows if p.type == "Cash"), None
 			)
-			if row:
-				change[row.mode_of_payment] += flt(i.change_amount)
+			# ERPNext drops a zero cash row on submit: the change still left the cash drawer.
+			mode = row.mode_of_payment if row else _cash_mode(modes)
+			if mode:
+				change[mode] += flt(i.change_amount)
+
+	# Debts customers paid to the cashier in this shift (Payment Entries): money in the drawer too.
+	debts = frappe.get_all(
+		"Payment Entry",
+		filters={"resto_shift": shift.name, "docstatus": 1, "payment_type": "Receive"},
+		fields=["name", "party", "party_name", "mode_of_payment", "received_amount", "posting_date"],
+		order_by="creation",
+	)
+	for p in debts:
+		if p.mode_of_payment not in opening:
+			modes.append(p.mode_of_payment)
+			opening[p.mode_of_payment] = received[p.mode_of_payment] = change[p.mode_of_payment] = 0
+		received[p.mode_of_payment] += flt(p.received_amount)
 
 	expenses = [
 		e
@@ -190,7 +225,8 @@ def compute(shift):
 	returns = [r for r in inv_rows if r["is_return"]]
 	gross = sum(r["grand_total"] for r in sales)
 	returns_total = -sum(r["grand_total"] for r in returns)
-	collected = sum(r["paid_amount"] for r in inv_rows)
+	debts_total = sum(flt(p.received_amount) for p in debts)
+	collected = sum(r["paid_amount"] for r in inv_rows) + debts_total
 	expenses_total = sum(flt(e.amount) for e in expenses)
 	return {
 		"rows": rows,
@@ -200,7 +236,13 @@ def compute(shift):
 			{"mode_of_payment": e.mode_of_payment, "expense_account": e.expense_account, "amount": flt(e.amount), "remarks": e.remarks, "journal_entry": e.journal_entry}
 			for e in expenses
 		],
+		"debts": [
+			{"payment_entry": p.name, "customer": p.party_name or p.party, "mode_of_payment": p.mode_of_payment, "amount": flt(p.received_amount)}
+			for p in debts
+		],
 		"summary": {
+			"debts_count": len(debts),
+			"debts_total": flt(debts_total, ACCOUNTS_PRECISION),
 			"sales_count": len(sales),
 			"gross_sales": flt(gross, ACCOUNTS_PRECISION),
 			"returns_count": len(returns),
@@ -239,6 +281,7 @@ def _report(shift, figures):
 			for r in figures["invoices"]
 		],
 		"expenses": figures["expenses"],
+		"debts": figures["debts"],
 		"rows": figures["rows"],
 	}
 
@@ -283,6 +326,7 @@ def open_shift(amounts=None):
 	"""Open the cashier's shift on the restaurant's POS Profile, with the money in the drawer."""
 	require_role(CASHIER)
 	profile = _profile()
+	_fresh()
 	_lock_user()
 	already = open_shift_of(frappe.session.user, lock=True)
 	if already:
@@ -394,33 +438,68 @@ def expense_accounts():
 	"""The expense accounts a drawer expense can go to, and the shift's payment methods."""
 	require_role(CASHIER)
 	shift = _own_shift()
-	accounts = frappe.get_all(
-		"Account",
-		filters={"company": shift.company, "root_type": "Expense", "is_group": 0, "disabled": 0},
-		fields=["name", "account_name"],
-		order_by="lft",
-	)
-	return {"accounts": accounts, "modes": [p.mode_of_payment for p in shift.payments]}
+	accounts = [
+		a
+		for a in frappe.get_all(
+			"Account",
+			filters={"company": shift.company, "root_type": "Expense", "is_group": 0, "disabled": 0},
+			fields=["name", "account_name", "account_type"],
+			order_by="lft",
+		)
+		if (a.account_type or "") in EXPENSE_TYPES
+	]
+	return {"accounts": accounts, "modes": _cash_modes(shift)}
+
+
+# Ordinary expenses only: not cost of goods sold, stock adjustment, depreciation and the like, which
+# the stock and the food cost reports own.
+EXPENSE_TYPES = ("", "Expense Account", "Chargeable", "Indirect Expense")
+
+
+def _cash_modes(shift):
+	"""Only cash leaves a drawer: an expense "paid by card" would credit the bank with no bank movement."""
+	return [
+		p.mode_of_payment
+		for p in shift.payments
+		if frappe.get_cached_value("Mode of Payment", p.mode_of_payment, "type") == "Cash"
+	]
 
 
 @frappe.whitelist(methods=["POST"])
-def add_expense(mode_of_payment, expense_account, amount, remarks=None):
+def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_id=None):
 	"""Money paid out of the drawer: a Journal Entry from the payment method's account to the
 	expense account, counted by the shift (its expected amount goes down)."""
 	require_role(CASHIER)
 	shift = _own_shift(lock=True)
+	if request_id:
+		# The same click again, after a lost answer: the entry already made.
+		done = next((e for e in shift.expenses if e.request_id == request_id), None)
+		if done:
+			return done.journal_entry
 	amount = flt(amount, ACCOUNTS_PRECISION)
 	if amount <= 0:
 		frappe.throw(_("The expense amount must be more than zero"))
-	if mode_of_payment not in [p.mode_of_payment for p in shift.payments]:
-		frappe.throw(_("Payment method {0} is not in this shift").format(frappe.bold(mode_of_payment)))
-	acc = frappe.db.get_value("Account", expense_account, ["company", "root_type", "is_group", "disabled"], as_dict=True)
-	if not acc or acc.company != shift.company or acc.root_type != "Expense" or cint(acc.is_group) or cint(acc.disabled):
+	if mode_of_payment not in _cash_modes(shift):
+		frappe.throw(_("Payment method {0} is not a cash method of this shift").format(frappe.bold(mode_of_payment)))
+	acc = frappe.db.get_value(
+		"Account", expense_account, ["company", "root_type", "is_group", "disabled", "account_type"], as_dict=True
+	)
+	if (
+		not acc
+		or acc.company != shift.company
+		or acc.root_type != "Expense"
+		or cint(acc.is_group)
+		or cint(acc.disabled)
+		or (acc.account_type or "") not in EXPENSE_TYPES
+	):
 		frappe.throw(_("{0} is not an expense account of {1}").format(expense_account, shift.company))
 	if not (remarks or "").strip():
 		frappe.throw(_("Write what the expense was for"))
 	row = next(r for r in compute(shift)["rows"] if r["mode_of_payment"] == mode_of_payment)
 	if amount > row["expected_amount"] + 0.005:
+		if _blind():
+			# Counting blind: the cashier is not told what the drawer should hold.
+			frappe.throw(_("The drawer does not hold that much for {0}").format(mode_of_payment))
 		frappe.throw(
 			_("Only {0} should be in the drawer for {1}").format(frappe.format(row["expected_amount"], "Currency"), mode_of_payment)
 		)
@@ -453,8 +532,36 @@ def add_expense(mode_of_payment, expense_account, amount, remarks=None):
 			"remarks": remarks.strip(),
 			"journal_entry": je.name,
 			"currency": shift.currency,
+			"request_id": request_id,
 		},
 	)
 	shift.flags.resto_shift = True
 	shift.save(ignore_permissions=True)
 	return je.name
+
+
+def link_payment_entry(doc, method=None):
+	"""Payment Entry before_submit: money a customer pays to a cashier who has an open shift (a debt
+	left on account, D-202) is in that cashier's drawer, so the shift counts it."""
+	if doc.get("resto_shift") or doc.payment_type != "Receive" or doc.party_type != "Customer" or not doc.mode_of_payment:
+		return
+	if not doc.meta.has_field("resto_shift"):
+		return
+	name = open_shift_of(frappe.session.user, lock=True)
+	if name and doc.company == frappe.db.get_value("Resto Shift", name, "company"):
+		doc.resto_shift = name
+
+
+def check_cancel(doc, method=None):
+	"""before_cancel of Sales Invoice, Payment Entry and Journal Entry: what a closed shift counted
+	stays as it counted it (ERPNext does the same for its own POS closing). A credit note or a new
+	entry corrects it instead."""
+	name = doc.get("resto_shift")
+	if not name and doc.doctype == "Journal Entry":
+		name = frappe.db.get_value("Resto Shift Expense", {"journal_entry": doc.name}, "parent")
+	if name and shift_status(name, lock=True) == "Closed":
+		frappe.throw(
+			_("{0} is in closed shift {1} and cannot be cancelled; make a return (credit note) or a new entry instead").format(
+				doc.name, name
+			)
+		)

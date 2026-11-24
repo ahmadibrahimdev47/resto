@@ -471,6 +471,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 		)
 	_set_payments(si, payments, on_account)
 	si.resto_shift = shift
+	si.flags.resto_shift_set = True
 
 	si.flags.ignore_permissions = True
 	si.insert()
@@ -559,12 +560,19 @@ def _set_payments(si, payments, on_account=0):
 
 
 def before_sales_invoice_cancel(doc, method=None):
-	"""Cancelling a paid floor bill changes the shift cash; only a manager may do it."""
+	"""Cancelling a paid floor bill changes the shift cash; only a manager may do it, and not after
+	its shift was closed."""
+	from resto.resto.shift import check_cancel
+
+	check_cancel(doc)
 	if doc.get("resto_order") and not has_role():
 		frappe.throw(_("Only a Resto Manager can cancel a restaurant bill"), frappe.PermissionError)
 
 
 def validate_sales_invoice(doc, method=None):
+	# The shift is set by settling (or on submit, below): never typed or sent in by hand.
+	if doc.get("resto_shift") and not doc.flags.resto_shift_set and doc.docstatus != 2:
+		doc.resto_shift = None
 	"""An amended copy of a floor bill would be paid twice: the order does not know it."""
 	if doc.get("resto_order") and doc.get("amended_from") and doc.docstatus == 0:
 		frappe.throw(_("A restaurant bill cannot be amended; bill the order again from the floor screen"))
@@ -574,10 +582,24 @@ def validate_sales_invoice(doc, method=None):
 
 def before_sales_invoice_submit(doc, method=None):
 	sides.check_invoice(doc)
-	# A POS bill made at the desk by a cashier with an open shift is in that shift too: its money
-	# is in the same drawer.
 	if cint(doc.is_pos) and not doc.get("resto_shift") and doc.pos_profile and doc.meta.has_field("resto_shift"):
-		doc.resto_shift = get_open_shift(frappe.session.user, doc.pos_profile, lock=True)
+		doc.resto_shift = _shift_for_desk_bill(doc)
+
+
+def _shift_for_desk_bill(doc):
+	"""The drawer a desk POS bill's money goes into or out of. A return refunds from the shift of the
+	bill it returns while that shift is open; otherwise the submitter's own open shift. Cash refunded
+	with no open shift to count it is refused when shifts are required."""
+	from resto.resto.shift import shift_status
+
+	if cint(doc.is_return) and doc.return_against:
+		orig = frappe.db.get_value("Sales Invoice", doc.return_against, "resto_shift")
+		if orig and shift_status(orig, lock=True) == "Open":
+			return orig
+	shift = get_open_shift(frappe.session.user, doc.pos_profile, lock=True)
+	if not shift and cint(doc.is_return) and flt(doc.paid_amount) and cint(get_settings().require_pos_shift):
+		frappe.throw(_("Open your shift on the floor screen first: the refund is paid from your drawer"))
+	return shift
 
 
 def on_sales_invoice_cancel(doc, method=None):

@@ -12,7 +12,8 @@
   "amount",
   "remarks",
   "journal_entry",
-  "currency"
+  "currency",
+  "request_id"
  ],
  "fields": [
   {
@@ -60,13 +61,20 @@
    "options": "Currency",
    "hidden": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "request_id",
+   "fieldtype": "Data",
+   "label": "Request ID",
+   "hidden": 1,
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-25 14:00:00.000000",
+ "modified": "2026-11-25 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Shift Expense",

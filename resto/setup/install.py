@@ -19,7 +19,26 @@ STANDARD_PERMISSIONS = {
 	"Employee": {CASHIER: ["select"], MANAGER: ["select"]},
 	"Sales Invoice": {CASHIER: ["read", "print"], MANAGER: ["read", "print", "report"]},
 	"Bin": {MANAGER: ["read", "report"]},
+	# ERPNext checks the customer's receivable account (select) while it builds any bill.
+	"Account": {WAITER: ["select"], CASHIER: ["select"], MANAGER: ["select"]},
 	"Purchase Receipt": {MANAGER: ["read", "report"]},
+}
+
+# A customer's debt paid to the cashier during a shift is counted by that shift's drawer (D-203).
+PAYMENT_ENTRY_FIELDS = {
+	"Payment Entry": [
+		{
+			"fieldname": "resto_shift",
+			"fieldtype": "Link",
+			"label": "Restaurant Shift",
+			"options": "Resto Shift",
+			"insert_after": "mode_of_payment",
+			"read_only": 1,
+			"no_copy": 1,
+			"print_hide": 1,
+			"search_index": 1,
+		}
+	]
 }
 
 # The delivery address typed at the counter, kept on the customer as typed (an ERPNext Address
@@ -161,6 +180,7 @@ def setup():
 	make_roles()
 	create_custom_fields(SALES_INVOICE_FIELDS, update=True)
 	create_custom_fields(CUSTOMER_FIELDS, update=True)
+	create_custom_fields(PAYMENT_ENTRY_FIELDS, update=True)
 	from resto.resto.item_recipe import item_fields
 
 	create_custom_fields(item_fields(), update=True)

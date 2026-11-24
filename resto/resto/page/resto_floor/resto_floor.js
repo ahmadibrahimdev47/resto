@@ -512,6 +512,7 @@ class RestoFloor {
 				${metric(__("Net Sales"), money(s.net_sales), __("After returns"))}
 				${metric(__("Collected"), money(s.collected), __("Money taken"))}
 				${s.outstanding > 0.005 ? metric(__("On Account"), money(s.outstanding), __("Not collected")) : ""}
+				${s.debts_count ? metric(__("Debts Collected"), money(s.debts_total), __("{0} payments", [s.debts_count])) : ""}
 				${s.expenses_count ? metric(__("Net Cash Impact"), money(s.net_cash), __("Collected - Expenses")) : ""}
 				${metric(__("Tax Collected"), money(s.tax_total))}
 			</div>`);
@@ -570,6 +571,9 @@ class RestoFloor {
 	// expected amount goes down by it.
 	async drawer_expense() {
 		const data = await frappe.xcall("resto.resto.shift.expense_accounts");
+		if (!data.modes.length) return frappe.msgprint(__("This shift has no cash payment method"));
+		// One id per dialog: a retried click after a lost answer gives the same entry.
+		const request_id = frappe.utils.get_random(20);
 		const d = new frappe.ui.Dialog({
 			title: __("Drawer Expense"),
 			fields: [
@@ -587,7 +591,7 @@ class RestoFloor {
 			primary_action_label: __("Save"),
 			primary_action: (v) =>
 				this.shift_busy(d, async () => {
-					const je = await frappe.xcall("resto.resto.shift.add_expense", v);
+					const je = await frappe.xcall("resto.resto.shift.add_expense", { ...v, request_id });
 					d.hide();
 					frappe.show_alert({ message: __("Expense recorded: {0}", [je]), indicator: "green" });
 				}),

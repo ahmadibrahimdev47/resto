@@ -56,6 +56,12 @@ doc_events = {
 		"before_cancel": "resto.resto.billing.before_sales_invoice_cancel",
 		"on_cancel": "resto.resto.billing.on_sales_invoice_cancel",
 	},
+	# A customer's debt paid to a cashier with an open shift goes into that shift's drawer.
+	"Payment Entry": {
+		"before_submit": "resto.resto.shift.link_payment_entry",
+		"before_cancel": "resto.resto.shift.check_cancel",
+	},
+	"Journal Entry": {"before_cancel": "resto.resto.shift.check_cancel"},
 }
 
 # Recipe costs follow purchase prices: refresh them every night.
