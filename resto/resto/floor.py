@@ -386,12 +386,38 @@ def update_order_info(
 	return _save(doc).name
 
 
+def _plain_unsent_line(doc, it):
+	"""An unsent line of the same dish with nothing of its own (modifiers, note, course, hold, changed
+	sides or extras), when what is added has nothing either: its quantity goes up instead."""
+	if it.get("modifiers") or (it.get("notes") or "").strip() or it.get("course") or cint(it.get("hold")):
+		return None
+	for d in doc.items:
+		if (
+			d.item_code == it.get("item_code")
+			and d.kitchen_status == "Not Sent"
+			and not json.loads(d.modifiers or "[]")
+			and not (d.notes or "").strip()
+			and not d.course
+			and not cint(d.hold)
+			and not d.sides
+			and not d.get("sides_extras")
+			and not flt(d.billed_qty)
+		):
+			return d
+	return None
+
+
 @frappe.whitelist(methods=["POST"])
 def add_items(order, items):
 	require_role(WAITER, CASHIER)
 	doc = _get_order(order)
 	for it in _loads(items, []):
 		qty = flt(it.get("qty") or 1)
+		same = _plain_unsent_line(doc, it)
+		if same:
+			# The same dish tapped again: one line with more dishes, not a second line.
+			same.qty = flt(same.qty) + qty
+			continue
 		doc.append(
 			"items",
 			{

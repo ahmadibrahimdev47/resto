@@ -125,3 +125,27 @@ class TestFloorShift(IntegrationTestCase):
 
 	def test_a_negative_opening_is_refused(self):
 		self.assertRaises(frappe.ValidationError, shift.open_shift, json.dumps({"Cash": -5}))
+
+
+class TestSameDishTappedAgain(IntegrationTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+
+	def lines(self, order):
+		return [(d.item_code, d.qty, d.kitchen_status) for d in frappe.get_doc("Resto Order", order).items]
+
+	def test_a_second_tap_raises_the_quantity(self):
+		order = floor.create_order(order_type="Takeaway", customer_name="Tap Guest")
+		tap = json.dumps([{"item_code": "DISH-FRIES", "qty": 1}])
+		floor.add_items(order, tap)
+		floor.add_items(order, tap)
+		self.assertEqual(self.lines(order), [("DISH-FRIES", 2, "Not Sent")])
+		# A line with a note of its own stays apart, and so does anything after sending.
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1, "notes": "no salt"}]))
+		floor.send_to_kitchen(order)
+		floor.add_items(order, tap)
+		self.assertEqual(
+			self.lines(order), [("DISH-FRIES", 2, "Sent"), ("DISH-FRIES", 1, "Sent"), ("DISH-FRIES", 1, "Not Sent")]
+		)
