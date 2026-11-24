@@ -7,3 +7,4 @@
 resto.patches.v0_1.rename_main_course
 resto.patches.v0_1.food_cost_level_steps
 resto.patches.v0_1.kitchen_print_method
+resto.patches.v0_1.cashier_print_method

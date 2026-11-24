@@ -16,12 +16,24 @@ class RestoKitchen {
 		this.station = localStorage.getItem("resto_kds_station") || "";
 		this.known = null;
 		this.print_methods = {};
-		// This screen prints new tickets by itself (stations set to print automatically from the
-		// browser): kept per browser, so only the computer with the kitchen printer turns it on.
-		this.autoprint = localStorage.getItem("resto_kds_autoprint") === "1";
+		// The stations this screen prints new tickets for by itself (stations set to print
+		// automatically from the browser): kept per browser, so only the computer with the kitchen
+		// printer turns it on, and apart from the station shown.
+		this.print_stations = [];
+		try {
+			this.print_stations = JSON.parse(localStorage.getItem("resto_kds_print_stations") || "[]") || [];
+		} catch (e) {
+			this.print_stations = [];
+		}
+		this.print_alerts = {};
 		this.page.add_inner_button(__("Refresh"), () => this.refresh());
-		this.$autoprint = this.page.add_inner_button("", () => this.toggle_autoprint());
-		this.show_autoprint();
+		// Only a kitchen user prints automatically (the server takes the tickets for that role only).
+		this.can_autoprint = frappe.user.has_role("Resto Kitchen") || frappe.user.has_role("Resto Manager") || frappe.session.user === "Administrator";
+		if (!this.can_autoprint) this.print_stations = [];
+		if (this.can_autoprint) {
+			this.$autoprint = this.page.add_inner_button(__("Auto Printing: Off"), () => this.toggle_autoprint());
+			this.show_autoprint();
+		}
 		this.page.add_inner_button(__("Full Screen"), () => document.documentElement.requestFullscreen && document.documentElement.requestFullscreen());
 		this.station_field = this.page.add_field({
 			fieldname: "station",
@@ -36,7 +48,8 @@ class RestoKitchen {
 				this.refresh();
 			},
 		});
-		$(this.page.body).html(`<style>${RestoKitchen.css()}</style><div class="rk-board"></div>`);
+		$(this.page.body).html(`<style>${RestoKitchen.css()}</style><div class="rk-alerts"></div><div class="rk-board"></div>`);
+		this.$alerts = $(this.page.body).find(".rk-alerts");
 		this.$board = $(this.page.body).find(".rk-board");
 		frappe.realtime.on("resto_update", (d) => {
 			if (d && (d.kind === "ticket" || d.kind === "order")) {
@@ -65,8 +78,10 @@ class RestoKitchen {
 				this.known = names;
 				this.tickets = data.tickets;
 				this.print_methods = data.print_methods || {};
+				this.print_alerts = data.print_alerts || {};
 				this.render();
-				if (this.autoprint && data.to_print) this.claim_prints();
+				// On every refresh: it prints what is new and tells the other screens this one prints.
+				if (this.print_stations.length) this.claim_prints();
 				const seconds = data.refresh_seconds || 15;
 				if (seconds !== this.poll_seconds) {
 					this.poll_seconds = seconds;
@@ -92,6 +107,7 @@ class RestoKitchen {
 
 	render() {
 		const esc = frappe.utils.escape_html;
+		this.render_alerts();
 		if (!this.tickets.length) {
 			this.$board.html(`<div class="rk-empty">${__("No tickets")}</div>`);
 			return;
@@ -113,6 +129,10 @@ class RestoKitchen {
 						)
 						.join("");
 					const isVoid = t.ticket_type === "Void";
+					const prints = this.print_methods[t.station] && this.print_methods[t.station] !== "No Printing";
+					const paper = prints
+						? `<span class="${t.printed ? "rk-printed" : "rk-unprinted"}">${t.printed ? "🖨 " + __("Printed") : "🖨 " + __("Not Printed")}</span>`
+						: "";
 					const btn =
 						t.status === "Served"
 							? `<button class="btn btn-default btn-sm" data-s="Ready">${__("Recall")}</button>`
@@ -120,11 +140,11 @@ class RestoKitchen {
 								? `<button class="btn btn-danger btn-sm" data-s="Served">${__("Seen", null, "Resto")}</button>`
 								: `<button class="btn btn-primary btn-sm" data-s="${next[t.status]}">${label[t.status]}</button>`;
 					return `<div class="rk-ticket s-${t.status.replace(/ /g, "")} ${isVoid ? "void" : ""} ${m >= 20 ? "late" : m >= 10 ? "warn" : ""}" data-name="${esc(t.name)}">
-						<div class="rk-head"><b>${where}</b><span data-since="${t.sent_at}">${m}′</span></div>
-						<div class="rk-sub">${isVoid ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${esc(t.waiter || "")} · ${__(t.status, null, "Resto")}</div>
+						<div class="rk-head"><b>${t.daily_no ? `<span class="rk-no">#${t.daily_no}</span> ` : ""}${where}</b><span data-since="${t.sent_at}">${m}′</span></div>
+						<div class="rk-sub">${isVoid ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${esc(t.waiter || "")} · ${__(t.status, null, "Resto")} ${paper}</div>
 						<ul>${items}</ul>
 						<div class="rk-actions">${btn}
-							${this.print_methods[t.station] === "No Printing" ? "" : `<button class="btn btn-default btn-sm" data-print="1">${__("Print", null, "Resto")}</button>`}</div>
+							<button class="btn btn-default btn-sm" data-print="1">${t.printed ? __("Reprint") : __("Print", null, "Resto")}</button></div>
 					</div>`;
 				})
 				.join("")
@@ -142,86 +162,127 @@ class RestoKitchen {
 			frappe.call({
 				method: "resto.resto.kitchen.kds_print",
 				args: { ticket: name },
-				callback: (r) => {
+				callback: async (r) => {
 					const res = r.message || {};
-					if (res.server) frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
-					else this.print_pages(res.pages || []);
+					if (res.server) return frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
+					if (await resto.print_pages(res.pages || [])) {
+						frappe.call({ method: "resto.resto.kitchen.kds_printed", args: { ticket: name }, callback: () => this.refresh() });
+					}
 				},
 			});
 		});
 	}
 
 	show_autoprint() {
-		this.$autoprint.html(`${this.autoprint ? "☑" : "☐"} ${__("This Screen Prints Tickets")}`);
+		const on = this.print_stations.length > 0;
+		this.$autoprint
+			.html(on ? `🖨 ${__("Auto Printing: On")} (${frappe.utils.escape_html(this.print_stations.join("، "))})` : `🖨 ${__("Auto Printing: Off")}`)
+			.toggleClass("rk-autoprint-on", on)
+			.toggleClass("rk-autoprint-off", !on);
+	}
+
+	set_print_stations(stations) {
+		this.print_stations = stations;
+		localStorage.setItem("resto_kds_print_stations", JSON.stringify(stations));
+		this.show_autoprint();
 	}
 
 	toggle_autoprint() {
-		this.autoprint = !this.autoprint;
-		localStorage.setItem("resto_kds_autoprint", this.autoprint ? "1" : "0");
-		this.show_autoprint();
-		frappe.show_alert({
-			message: this.autoprint
-				? __("This screen now prints new tickets of the stations that print automatically from the browser")
-				: __("This screen no longer prints tickets by itself"),
-			indicator: this.autoprint ? "green" : "orange",
+		if (this.print_stations.length) {
+			frappe.confirm(__("Stop printing new tickets on this screen? Tickets of these stations will then wait unprinted: {0}", [frappe.utils.escape_html(this.print_stations.join("، "))]), () => {
+				this.set_print_stations([]);
+				frappe.show_alert({ message: __("This screen no longer prints tickets by itself"), indicator: "orange" });
+			});
+			return;
+		}
+		const auto = Object.keys(this.print_methods).filter((s) => this.print_methods[s] === "Browser Automatic");
+		if (!auto.length) {
+			frappe.msgprint(__("No kitchen station prints automatically from the screen. Set a station's Printing Method to Browser Automatic first."));
+			return;
+		}
+		const d = new frappe.ui.Dialog({
+			title: __("This screen prints the tickets of"),
+			fields: [
+				{
+					fieldname: "stations",
+					fieldtype: "MultiCheck",
+					options: auto.map((s) => ({ label: s, value: s, checked: auto.length === 1 || s === this.station })),
+				},
+			],
+			primary_action_label: __("Start Printing"),
+			primary_action: (v) => {
+				const chosen = (v.stations || []).filter(Boolean);
+				if (!chosen.length) return frappe.msgprint(__("Choose at least one station"));
+				d.hide();
+				this.set_print_stations(chosen);
+				frappe.show_alert({ message: __("This screen now prints the new tickets of: {0}", [frappe.utils.escape_html(chosen.join("، "))]), indicator: "green" });
+				this.refresh();
+			},
 		});
-		if (this.autoprint) this.refresh();
+		d.show();
+	}
+
+	render_alerts() {
+		const esc = frappe.utils.escape_html;
+		const al = this.print_alerts || {};
+		const parts = [];
+		if ((al.unprinted || []).length) {
+			const list = al.unprinted
+				.map((t) => {
+					const where = t.resto_table ? __("Table {0}", [esc(t.resto_table)], "Resto") : `${__(t.order_type, null, "Resto")} ${esc(t.resto_order || "")}`;
+					return `${esc(t.station)}${t.daily_no ? " #" + t.daily_no : ""} (${where}${t.ticket_type === "Void" ? " · " + __("VOID") : ""})`;
+				})
+				.join("، ");
+			parts.push(
+				`<div class="rk-alert red">⚠ ${__("{0} tickets are not printed", [al.unprinted.length])}: ${list}. ${__("Check the printer and the printing screen, or press Print on the ticket.")}</div>`
+			);
+		}
+		if ((al.no_screen || []).length) {
+			parts.push(
+				`<div class="rk-alert orange">⚠ ${__("No screen is printing automatically for: {0}. Turn on Auto Printing on the computer with the printer.", [esc(al.no_screen.join("، "))])}</div>`
+			);
+		}
+		this.$alerts.html(parts.join(""));
 	}
 
 	async claim_prints() {
-		// One claim at a time: each ticket is claimed once on the server, so a second screen never
-		// prints it again, and a ticket missed while this screen was closed prints when it opens.
+		// One ticket at a time: the server claims it (a second screen never prints it as well), the
+		// browser prints it, then the screen confirms it. A ticket claimed but never confirmed (the
+		// computer restarted, the network dropped) is offered again after a while, as a reprint.
 		if (this._claiming) return;
 		this._claiming = true;
 		try {
-			for (let round = 0; round < 5; round++) {
-				const r = await frappe.call({ method: "resto.resto.kitchen.kds_claim_prints", args: { station: this.station }, freeze: false });
-				const tickets = r.message || [];
-				for (const t of tickets) await this.print_pages(t.pages || []);
-				if (tickets.length < 10) break;
+			for (let i = 0; i < 30; i++) {
+				const r = await frappe.call({
+					method: "resto.resto.kitchen.kds_claim_print",
+					args: { stations: JSON.stringify(this.print_stations) },
+					freeze: false,
+				});
+				const t = r.message;
+				if (!t) break;
+				resto.print_window_seen = false;
+				const ok = await resto.print_pages(t.pages || []);
+				if (resto.print_window_seen) {
+					// The print window opened: this Chrome was not started from the kitchen printing
+					// shortcut. Each ticket would wait for a click, so automatic printing stops; the
+					// ticket is not confirmed and shows unprinted on every kitchen screen.
+					resto.print_window_seen = false;
+					this.set_print_stations([]);
+					frappe.msgprint({
+						title: __("Auto Printing stopped"),
+						indicator: "red",
+						message: __("The print window opened, so this browser was not started from the kitchen printing shortcut. Close Chrome, open it from that shortcut, then turn Auto Printing on again."),
+					});
+					break;
+				}
+				if (!ok) break;
+				await frappe.call({ method: "resto.resto.kitchen.kds_printed", args: { ticket: t.name }, freeze: false });
 			}
 		} catch (e) {
-			// The next refresh tries again; a ticket already claimed can be printed with its button.
+			// The next refresh tries again.
 		} finally {
 			this._claiming = false;
 		}
-	}
-
-	async print_pages(pages) {
-		for (const html of pages) await this.print_html(html);
-	}
-
-	print_html(html) {
-		// One print job per copy. Chrome started with --kiosk-printing prints it on the default
-		// printer without a dialog; otherwise the browser's print window opens.
-		return new Promise((resolve) => {
-			const frame = document.createElement("iframe");
-			frame.setAttribute("sandbox", "allow-same-origin allow-modals");
-			frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
-			let done = false;
-			const finish = () => {
-				if (done) return;
-				done = true;
-				setTimeout(() => {
-					frame.remove();
-					resolve();
-				}, 1000);
-			};
-			frame.onload = () => {
-				setTimeout(() => {
-					try {
-						frame.contentWindow.focus();
-						frame.contentWindow.print();
-					} catch (e) {
-						// printing is not available here
-					}
-					finish();
-				}, 300);
-			};
-			setTimeout(finish, 15000);
-			frame.srcdoc = html;
-			document.body.appendChild(frame);
-		});
 	}
 
 	audio() {
@@ -270,6 +331,15 @@ class RestoKitchen {
 		.rk-sides { font-size:14px; font-weight:700; color:var(--orange-600, #c05621); }
 		.rk-course { font-size:11px; background:var(--gray-100); border-radius:6px; padding:0 6px; margin-inline-start:4px; }
 		.rk-actions { display:flex; gap:6px; }
+		.rk-no { font-size:20px; font-weight:800; }
+		.rk-printed { color:var(--green-600, #2f855a); margin-inline-start:4px; }
+		.rk-unprinted { color:var(--red-600, #e53e3e); font-weight:700; margin-inline-start:4px; }
+		.rk-alerts:empty { display:none; }
+		.rk-alert { border-radius:8px; padding:8px 12px; margin-bottom:8px; font-size:15px; font-weight:600; }
+		.rk-alert.red { background:var(--red-100, #fed7d7); color:var(--red-800, #9b2c2c); border:2px solid var(--red-500, #f56565); }
+		.rk-alert.orange { background:var(--orange-100, #feebc8); color:var(--orange-800, #9c4221); }
+		.rk-autoprint-on { background:var(--green-500, #48bb78) !important; color:#fff !important; }
+		.rk-autoprint-off { background:var(--red-500, #f56565) !important; color:#fff !important; }
 		.rk-actions .btn-primary, .rk-actions .btn-danger { flex:1; padding:8px; font-size:15px; }`;
 	}
 }

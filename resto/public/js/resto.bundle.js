@@ -191,3 +191,55 @@ resto.food_cost_headline = function (frm) {
 		level.color
 	);
 };
+
+// Printing from the browser (kitchen tickets, bills, receipts): each page is one print job, printed
+// from a hidden frame. Chrome started with --kiosk-printing prints it on the computer's default
+// printer with no window; otherwise the browser's print window opens for each page.
+// Resolves true once every page was handed to the browser's printing, false when one could not be.
+resto.print_pages = async function (pages) {
+	for (const html of pages || []) {
+		if (!(await resto.print_html(html))) return false;
+	}
+	return true;
+};
+
+resto.print_html = function (html) {
+	return new Promise((resolve) => {
+		const frame = document.createElement("iframe");
+		frame.setAttribute("sandbox", "allow-same-origin allow-modals");
+		frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+		let done = false;
+		let started = false;
+		const finish = (ok) => {
+			if (done) return;
+			done = true;
+			// A short gap before the next job, so a slow computer does not drop it.
+			setTimeout(() => {
+				frame.remove();
+				resolve(ok);
+			}, 700);
+		};
+		frame.onload = () => {
+			setTimeout(() => {
+				try {
+					const win = frame.contentWindow;
+					win.addEventListener("afterprint", () => finish(true));
+					win.focus();
+					started = true;
+					const t0 = Date.now();
+					// Returns once the job is queued (kiosk printing) or the print window is closed.
+					win.print();
+					// Kiosk printing returns at once; a print window held it open.
+					if (Date.now() - t0 > 4000) resto.print_window_seen = true;
+					setTimeout(() => finish(true), 1500);
+				} catch (e) {
+					finish(false);
+				}
+			}, 300);
+		};
+		// The page never loaded: not printed.
+		setTimeout(() => started || finish(false), 60000);
+		frame.srcdoc = html;
+		document.body.appendChild(frame);
+	});
+};

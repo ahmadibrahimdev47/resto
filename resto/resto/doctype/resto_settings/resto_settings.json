@@ -48,6 +48,7 @@
   "column_break_discount",
   "cashier_discount_limit",
   "printing_section",
+  "cashier_print_method",
   "cashier_printer",
   "print_bill_on_printer",
   "print_receipt_on_printer",
@@ -315,27 +316,37 @@
    "fieldname": "printing_section",
    "fieldtype": "Section Break",
    "label": "Printing",
-   "description": "Bills and receipts go straight to the cashier printer (Network Printer Settings). Without a printer they open in the browser print window, one copy."
+   "description": "How the bill (before payment) and the receipt (after payment) are printed."
+  },
+  {
+   "fieldname": "cashier_print_method",
+   "fieldtype": "Select",
+   "label": "Cashier Printing Method",
+   "options": "Server Printer\nBrowser Automatic\nBrowser Button\nNo Printing",
+   "default": "Browser Button",
+   "description": "Server Printer: bills and receipts print on the cashier network printer through the server. Browser Automatic: the cashier computer prints them on its own printer (Chrome started with kiosk printing prints with no window): the bill when it is requested, the receipt as soon as it is paid. Browser Button: the bill prints when it is requested, the receipt with the Print Receipt button. No Printing: nothing prints by itself; the Print Receipt button still prints. Every way prints all the copies below, each with its label."
   },
   {
    "fieldname": "cashier_printer",
    "fieldtype": "Link",
    "options": "Network Printer Settings",
-   "label": "Cashier Printer"
+   "label": "Cashier Printer",
+   "depends_on": "eval:doc.cashier_print_method=='Server Printer'",
+   "mandatory_depends_on": "eval:doc.cashier_print_method=='Server Printer'"
   },
   {
    "default": "0",
    "fieldname": "print_bill_on_printer",
    "fieldtype": "Check",
    "label": "Print the Bill on the Cashier Printer",
-   "depends_on": "cashier_printer"
+   "depends_on": "eval:doc.cashier_print_method=='Server Printer' && doc.cashier_printer"
   },
   {
    "default": "0",
    "fieldname": "print_receipt_on_printer",
    "fieldtype": "Check",
    "label": "Print the Receipt after Payment",
-   "depends_on": "cashier_printer"
+   "depends_on": "eval:doc.cashier_print_method=='Server Printer' && doc.cashier_printer"
   },
   {
    "fieldname": "column_break_printing",
@@ -346,22 +357,22 @@
    "fieldtype": "Table",
    "options": "Resto Print Copy",
    "label": "Bill Copies",
-   "depends_on": "print_bill_on_printer",
-   "description": "One row per copy. No rows: one copy."
+   "depends_on": "eval:doc.cashier_print_method!='No Printing'",
+   "description": "One row per copy, each printed with its label. No rows: one copy."
   },
   {
    "fieldname": "receipt_copies",
    "fieldtype": "Table",
    "options": "Resto Print Copy",
    "label": "Receipt Copies",
-   "depends_on": "print_receipt_on_printer",
-   "description": "One row per copy. No rows: one copy."
+   "depends_on": "eval:doc.cashier_print_method!='No Printing'",
+   "description": "One row per copy, each printed with its label. No rows: one copy."
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-22 22:00:00.000000",
+ "modified": "2026-11-24 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

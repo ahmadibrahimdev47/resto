@@ -513,7 +513,8 @@ class RestoFloor {
 		if (act === "bill") {
 			const bill = await call("request_bill", { order: o.name }, true);
 			if (bill && bill.on_printer) frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
-			else window.open(frappe.urllib.get_full_url(`/printview?doctype=Resto%20Order&name=${encodeURIComponent(o.name)}&format=Resto%20Pre-Bill&no_letterhead=1&trigger_print=1`));
+			else if (bill && bill.pages && bill.pages.length) resto.print_pages(bill.pages);
+			else frappe.show_alert({ message: __("Bill requested"), indicator: "green" });
 			return this.load_order(o.name);
 		}
 		if (act === "pay") return this.pay();
@@ -784,24 +785,30 @@ class RestoFloor {
 						true
 					);
 					d.hide();
+					const print_receipt = async () => {
+						if (r.receipt_mode === "server") {
+							await frappe.xcall("resto.resto.printing.reprint", { doctype: "Sales Invoice", name: r.sales_invoice });
+							return frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
+						}
+						const pages = await frappe.xcall("resto.resto.printing.receipt_pages", { sales_invoice: r.sales_invoice });
+						if (await resto.print_pages(pages)) {
+							await frappe.xcall("resto.resto.printing.receipt_printed", { sales_invoice: r.sales_invoice });
+						}
+					};
+					// Printed once by itself: a retried payment (same invoice) does not print it again.
+					const auto = r.receipt_mode === "auto" && !r.receipt_printed;
 					frappe.msgprint({
 						title: __("Paid"),
 						indicator: "green",
 						message: `${__("Invoice")} <a href="/app/sales-invoice/${esc(r.sales_invoice)}">${esc(r.sales_invoice)}</a><br>
 							${r.change_amount ? `<b>${__("Change", null, "Resto")}: ${money(r.change_amount)}</b>` : ""}`,
 						primary_action: {
-							// With a cashier printer the receipt already printed (all copies); this prints it again.
-							label: r.receipt_on_printer ? __("Print Again") : __("Print Receipt"),
-							action: () =>
-								r.receipt_on_printer
-									? frappe.call({
-											method: "resto.resto.printing.reprint",
-											args: { doctype: "Sales Invoice", name: r.sales_invoice },
-											callback: () => frappe.show_alert({ message: __("Sent to printer"), indicator: "green" }),
-									  })
-									: window.open(frappe.urllib.get_full_url(`/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(r.sales_invoice)}${r.print_format ? "&format=" + encodeURIComponent(r.print_format) : ""}&trigger_print=1`)),
+							// The receipt printed by itself (cashier printer, or this browser): this prints it again.
+							label: r.receipt_mode === "server" || r.receipt_mode === "auto" || r.receipt_printed ? __("Print Again") : __("Print Receipt"),
+							action: () => print_receipt(),
 						},
 					});
+					if (auto) print_receipt();
 					if (r.status === "Paid") this.close_order();
 					else this.load_order(o.name);
 				} finally {

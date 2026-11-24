@@ -210,6 +210,13 @@ class SetupCheck:
 		for st in stations:
 			if st.auto_print and not st.printer:
 				self.warn(area, _("Station {0} prints automatically but has no printer").format(st.name))
+		from resto.resto.kitchen import print_alerts
+
+		alerts = print_alerts()
+		for name in alerts["no_screen"]:
+			self.warn(area, _("No kitchen screen prints automatically for station {0} now").format(name))
+		if alerts["unprinted"]:
+			self.warn(area, _("{0} kitchen tickets are not printed").format(len(alerts["unprinted"])))
 		self.ok(area, _("{0} kitchen stations").format(len(stations)))
 
 	def check_users(self):

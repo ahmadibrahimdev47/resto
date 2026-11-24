@@ -81,6 +81,18 @@ SALES_INVOICE_FIELDS = {
 			"read_only": 1,
 			"no_copy": 1,
 		},
+		# Set once the receipt printed (on the cashier printer, or by the cashier browser), so a
+		# retried payment never prints it twice; Print Again still prints it.
+		{
+			"fieldname": "resto_receipt_printed",
+			"fieldtype": "Check",
+			"label": "Receipt Printed",
+			"insert_after": "resto_guests",
+			"read_only": 1,
+			"no_copy": 1,
+			"allow_on_submit": 1,
+			"print_hide": 1,
+		},
 	],
 	# The sides a dish was served with when they differ from its recipe (resto/resto/sides.py).
 	# Copied to a return, which takes back what was served.

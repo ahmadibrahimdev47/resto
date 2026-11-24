@@ -672,8 +672,11 @@ def request_bill(order):
 	doc.bill_grand_total = preview["payable"]
 	doc.bill_details = json.dumps(preview, default=str, ensure_ascii=False)
 	_save(doc)
-	# With a cashier printer the bill prints there (all its copies); else the browser prints it.
-	preview["on_printer"] = printing.queue_bill(doc.name)
+	# The bill prints on the cashier printer, or the screen that asked for it prints its pages
+	# (all its copies, each with its label), or it is not printed (Resto Settings).
+	mode = printing.bill_mode()
+	preview["on_printer"] = printing.queue_bill(doc.name) if mode == "server" else False
+	preview["pages"] = printing.bill_pages(doc.name) if mode == "browser" else []
 	return preview
 
 
@@ -709,6 +712,10 @@ def _settle_result(doc, si):
 		"status": frappe.db.get_value("Resto Order", doc.name, "status"),
 		"print_format": frappe.db.get_value("POS Profile", doc.pos_profile, "print_format"),
 		"receipt_on_printer": printing.receipt_on_printer(),
+		# server / auto / button / none (printing.receipt_mode); auto prints it unless printed before
+		# (a retried payment returns the invoice already paid).
+		"receipt_mode": printing.receipt_mode(),
+		"receipt_printed": cint(frappe.db.get_value("Sales Invoice", si.name, "resto_receipt_printed")),
 	}
 
 
