@@ -176,7 +176,12 @@ class RestoFloor {
 				${__("Takeaway & Delivery")} <span class="rf-count">${this.floor.orders.length}</span></button>`
 		);
 		this.$tabs.html(this.shift_bar() + this.kitchen_print_alert() + tabs.join(""));
-		this.$tabs.find("[data-shift]").on("click", (e) => ($(e.currentTarget).attr("data-shift") === "open" ? this.open_shift() : this.close_shift()));
+		this.$tabs.find("[data-shift]").on("click", (e) => {
+			const act = $(e.currentTarget).attr("data-shift");
+			if (act === "open") this.open_shift();
+			else if (act === "expense") this.drawer_expense();
+			else this.close_shift();
+		});
 		this.$tabs.find("button[data-hall]").on("click", (e) => {
 			this.hall = $(e.currentTarget).attr("data-hall");
 			localStorage.setItem("resto_floor_hall", this.hall);
@@ -403,7 +408,7 @@ class RestoFloor {
 		d.fields_dict.phone.$input.focus();
 	}
 
-	// ------------------------------------------------------------------ shift (POSNext)
+	// ------------------------------------------------------------------ shift (Resto Shift, D-203)
 
 	shift_bar() {
 		const s = this.floor.shift;
@@ -415,6 +420,7 @@ class RestoFloor {
 		}
 		if (s.shift) {
 			return `<div class="rf-shift rf-shift-open">✓ ${__("Shift open since {0}", [esc(frappe.datetime.str_to_user(s.since))])}
+				<button class="btn btn-xs btn-default" data-shift="expense">${__("Drawer Expense")}</button>
 				<button class="btn btn-xs btn-default" data-shift="close">${__("Close Shift")}</button></div>`;
 		}
 		return `<div class="rf-shift rf-shift-none">${s.required ? __("No shift open: bills cannot be settled") : __("No shift open")}
@@ -427,7 +433,7 @@ class RestoFloor {
 			frappe.msgprint(__("You already have an open shift: {0}", [esc(data.open_shift)]));
 			return this.refresh();
 		}
-		// As POSNext's opening: the profile, the cashier and now, then the opening balance of each method.
+		// The profile, the cashier and now, then the opening balance of each method.
 		const ro = (fieldname, label, value, fieldtype = "Data") => ({ fieldname, label, fieldtype, default: value, read_only: 1 });
 		const d = new frappe.ui.Dialog({
 			title: __("Open Shift"),
@@ -474,7 +480,7 @@ class RestoFloor {
 		}
 	}
 
-	// The shift's figures as POSNext's closing screen shows them: sales, returns, expenses, collected and
+	// The shift's figures: sales, returns, expenses, collected and
 	// on account, taxes, the invoices, and per payment method opening, expected, counted and difference.
 	// entry: the counted amounts are inputs (data-m); otherwise the closed shift's report.
 	shift_report(r, entry) {
@@ -506,7 +512,7 @@ class RestoFloor {
 				${metric(__("Net Sales"), money(s.net_sales), __("After returns"))}
 				${metric(__("Collected"), money(s.collected), __("Money taken"))}
 				${s.outstanding > 0.005 ? metric(__("On Account"), money(s.outstanding), __("Not collected")) : ""}
-				${s.expenses_count ? metric(__("Net Cash Impact"), money(s.net_cash), __("Sales - Returns - Expenses")) : ""}
+				${s.expenses_count ? metric(__("Net Cash Impact"), money(s.net_cash), __("Collected - Expenses")) : ""}
 				${metric(__("Tax Collected"), money(s.tax_total))}
 			</div>`);
 			const inv = (r.invoices || [])
@@ -560,6 +566,35 @@ class RestoFloor {
 		return parts.join("");
 	}
 
+	// Money paid out of the drawer: a Journal Entry from the payment method's account; the shift's
+	// expected amount goes down by it.
+	async drawer_expense() {
+		const data = await frappe.xcall("resto.resto.shift.expense_accounts");
+		const d = new frappe.ui.Dialog({
+			title: __("Drawer Expense"),
+			fields: [
+				{ fieldname: "mode_of_payment", fieldtype: "Select", label: __("Paid From"), options: data.modes.join("\n"), default: data.modes[0], reqd: 1 },
+				{
+					fieldname: "expense_account",
+					fieldtype: "Select",
+					label: __("Expense Account"),
+					options: [{ value: "", label: "" }, ...data.accounts.map((a) => ({ value: a.name, label: a.account_name }))],
+					reqd: 1,
+				},
+				{ fieldname: "amount", fieldtype: "Currency", label: __("Amount"), reqd: 1 },
+				{ fieldname: "remarks", fieldtype: "Data", label: __("For What"), reqd: 1 },
+			],
+			primary_action_label: __("Save"),
+			primary_action: (v) =>
+				this.shift_busy(d, async () => {
+					const je = await frappe.xcall("resto.resto.shift.add_expense", v);
+					d.hide();
+					frappe.show_alert({ message: __("Expense recorded: {0}", [je]), indicator: "green" });
+				}),
+		});
+		d.show();
+	}
+
 	async close_shift() {
 		const data = await frappe.xcall("resto.resto.shift.closing_data");
 		const d = new frappe.ui.Dialog({ title: __("Close Shift"), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
@@ -570,7 +605,7 @@ class RestoFloor {
 				? `<span class="text-success">✓ ${__("Balanced")}</span>`
 				: `<span class="${n < 0 ? "text-danger" : "text-warning"}">${n < 0 ? __("Short {0}", [money(-n)]) : __("Over {0}", [money(n)])}</span>`;
 		const counted = () => data.rows.map((r, i) => $w.find(`[data-m="${i}"]`).val());
-		// The difference as the cashier types, unless POSNext counts blind.
+		// The difference as the cashier types, unless the count is blind (Restaurant Settings).
 		$w.find("[data-m]").on("input", () => {
 			if (data.blind) return;
 			const vals = counted();

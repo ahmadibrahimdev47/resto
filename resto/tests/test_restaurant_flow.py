@@ -103,6 +103,12 @@ class TestRestaurantFlow(IntegrationTestCase):
 			# A short payment without asking for it is still refused.
 			self.assertRaises(frappe.ValidationError, floor.settle, order, pay, None, bill["payable"])
 
+			# A cashier gives credit only to a customer with a credit limit.
+			frappe.set_user("cashier@resto.test")
+			self.assertRaises(frappe.ValidationError, floor.settle, order, pay, None, bill["payable"], None, 1)
+			frappe.set_user("Administrator")
+			self.assertEqual(bill["on_account_customer_name"], "Credit Guest")
+
 			r = floor.settle(order, pay, None, bill["payable"], None, 1)
 			si = frappe.get_doc("Sales Invoice", r["sales_invoice"])
 			owed = flt(bill["payable"]) - 30
@@ -357,31 +363,6 @@ class TestRestaurantFlow(IntegrationTestCase):
 		self.assertAlmostEqual(si.net_total, 80 + 20, 2)
 		self.assertTrue(frappe.db.exists("Resto Kitchen Ticket", {"resto_order": order}))
 
-	def test_posnext_shift_required(self):
-		if "pos_next" not in frappe.get_installed_apps():
-			return
-		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 1)
-		frappe.clear_document_cache("Resto Settings", "Resto Settings")
-		order = self.new_dine_in("T6")
-		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
-		floor.send_to_kitchen(order)
-		self.assertRaises(frappe.ValidationError, self.pay_all, order)
-
-		shift = frappe.get_doc(
-			{
-				"doctype": "POS Opening Shift",
-				"period_start_date": frappe.utils.now_datetime(),
-				"company": fx.COMPANY,
-				"pos_profile": fx.PROFILE,
-				"user": "Administrator",
-				"balance_details": [{"mode_of_payment": "Cash", "amount": 0}],
-			}
-		)
-		shift.insert(ignore_permissions=True)
-		shift.submit()
-		result, _ = self.pay_all(order)
-		self.assertEqual(frappe.db.get_value("Sales Invoice", result["sales_invoice"], "posa_pos_opening_shift"), shift.name)
-
 	# ------------------------------------------------------------------ prep and waste
 
 	def test_prep_makes_prepared_stock_from_bom(self):
@@ -602,19 +583,6 @@ class TestRestaurantFlow(IntegrationTestCase):
 		copy.amended_from = si.name
 		copy.resto_order = order
 		self.assertRaises(frappe.ValidationError, copy.insert)
-
-	def test_closing_shift_must_list_floor_bills(self):
-		if not frappe.get_meta("Sales Invoice").has_field("posa_pos_opening_shift"):
-			return
-		order = self.new_dine_in("T1")
-		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
-		floor.send_to_kitchen(order)
-		result, _ = self.pay_all(order)
-		frappe.db.set_value("Sales Invoice", result["sales_invoice"], "posa_pos_opening_shift", "TEST-SHIFT")
-		closing = frappe._dict(pos_opening_shift="TEST-SHIFT", pos_transactions=[])
-		self.assertRaises(frappe.ValidationError, billing.validate_closing_shift, closing)
-		closing.pos_transactions = [frappe._dict(sales_invoice=result["sales_invoice"])]
-		billing.validate_closing_shift(closing)
 
 	def test_reports_leave_out_opening_stock(self):
 		from resto.resto import report_utils

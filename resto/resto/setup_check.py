@@ -8,7 +8,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-from resto.resto.utils import CASHIER, KITCHEN, MANAGER, WAITER, get_settings, posnext_installed, require_role
+from resto.resto.utils import CASHIER, KITCHEN, MANAGER, WAITER, get_settings, require_role
 
 
 @frappe.whitelist()
@@ -167,11 +167,11 @@ class SetupCheck:
 			)
 		elif inclusive:
 			self.ok(area, _("Menu prices include tax"))
-		if posnext_installed():
-			if not s.require_pos_shift:
-				self.warn(area, _("Bills can be settled without a POSNext shift; the shift closing will not count them"))
-			# A cashier opens the shift from the floor screen; POSNext allows it to the profile's users only.
-			users = set(frappe.get_all("POS Profile User", {"parent": p.name, "parenttype": "POS Profile"}, pluck="user"))
+		if not s.require_pos_shift:
+			self.warn(area, _("Bills can be settled without an open shift; no shift closing will count them"))
+		# A POS Profile that lists its users lets only them open a shift on it.
+		users = set(frappe.get_all("POS Profile User", {"parent": p.name, "parenttype": "POS Profile"}, pluck="user"))
+		if users:
 			cashiers = set(
 				frappe.get_all("Has Role", {"role": "Resto Cashier", "parenttype": "User"}, pluck="parent")
 			) - {"Administrator"}
@@ -179,6 +179,10 @@ class SetupCheck:
 			missing = sorted(enabled - users)
 			if missing:
 				self.warn(area, _("Cashiers who cannot open a shift (not users of POS Profile {0}): {1}").format(p.name, short(missing)))
+		# Each payment method needs its account: the shift's drawer expenses are paid from it.
+		for m in frappe.get_all("POS Payment Method", {"parent": p.name, "parenttype": "POS Profile"}, pluck="mode_of_payment"):
+			if not frappe.db.get_value("Mode of Payment Account", {"parent": m, "company": p.company}, "default_account"):
+				self.error(area, _("Payment method {0} has no account for company {1}").format(m, p.company))
 		if not self.results or all(r["area"] != area or r["level"] == "ok" for r in self.results):
 			self.ok(area, _("POS Profile {0} is ready").format(p.name))
 

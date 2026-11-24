@@ -1,4 +1,4 @@
-"""Customers made and found at the counter, and the cashier's POSNext shift from the floor screen.
+"""Customers made and found at the counter, and the cashier's shift (Resto Shift) from the floor screen.
 
 bench --site test.resto run-tests --module resto.tests.test_floor_customers_shift
 """
@@ -8,6 +8,7 @@ import random
 
 import frappe
 from frappe.tests import IntegrationTestCase
+from frappe.utils import flt
 
 from resto.resto import billing, floor, shift
 from resto.tests import fixtures as fx
@@ -99,52 +100,122 @@ class TestFloorCustomers(IntegrationTestCase):
 
 
 class TestFloorShift(IntegrationTestCase):
+	"""Resto's own shift (D-203): opened and closed on the floor, counting its own invoices."""
+
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
 		fx.ensure_setup()
 
 	def setUp(self):
-		if "pos_next" not in frappe.get_installed_apps():
-			self.skipTest("POSNext is not installed")
 		frappe.set_user("Administrator")
-		if not frappe.db.exists("POS Profile User", {"parent": fx.PROFILE, "parenttype": "POS Profile", "user": CASHIER}):
+		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 0)
+		frappe.db.set_single_value("Resto Settings", "blind_shift_count", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		# A POS Profile that lists its users lets only them open a shift.
+		if frappe.db.exists("POS Profile User", {"parent": fx.PROFILE, "parenttype": "POS Profile"}) and not frappe.db.exists(
+			"POS Profile User", {"parent": fx.PROFILE, "parenttype": "POS Profile", "user": CASHIER}
+		):
 			frappe.get_doc(
 				{"doctype": "POS Profile User", "parent": fx.PROFILE, "parenttype": "POS Profile", "parentfield": "applicable_for_users", "user": CASHIER}
 			).db_insert()
 		# A shift a test before left open.
-		frappe.db.sql("update `tabPOS Opening Shift` set status = 'Closed' where user = %s and status = 'Open'", CASHIER)
+		frappe.db.sql("update `tabResto Shift` set status = 'Closed' where status = 'Open'")
 		frappe.set_user(CASHIER)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 
-	def test_open_and_close_the_shift_from_the_floor(self):
+	def takeaway(self, qty=1):
+		order = floor.create_order(order_type="Takeaway")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": qty}]))
+		return order, floor.get_bill(order)
+
+	def test_open_bill_expense_and_close(self):
 		self.assertFalse(floor.get_floor()["shift"]["shift"])
-		modes = shift.opening_data()["modes"]
-		self.assertIn("Cash", modes)
+		self.assertIn("Cash", shift.opening_data()["modes"])
 		name = shift.open_shift(json.dumps({"Cash": 150}))
 		self.assertEqual(billing.get_open_shift(CASHIER, fx.PROFILE), name)
 		self.assertEqual(floor.get_floor()["shift"]["shift"], name)
+		# One shift per cashier.
 		self.assertRaises(frappe.ValidationError, shift.open_shift, json.dumps({"Cash": 0}))
 
+		# A bill paid in cash with change, one by card.
+		order, bill = self.takeaway()
+		paid = floor.settle(order, json.dumps([{"mode_of_payment": "Cash", "amount": bill["payable"] + 50}]), None, bill["payable"])
+		self.assertEqual(frappe.db.get_value("Sales Invoice", paid["sales_invoice"], "resto_shift"), name)
+		self.assertAlmostEqual(flt(paid["change_amount"]), 50, 2)
+		order2, bill2 = self.takeaway(2)
+		floor.settle(order2, json.dumps([{"mode_of_payment": "Card", "amount": bill2["payable"]}]), None, bill2["payable"])
+
+		# Money paid out of the drawer: a Journal Entry from the cash account.
+		account = frappe.db.get_value("Account", {"company": fx.COMPANY, "root_type": "Expense", "is_group": 0, "disabled": 0})
+		self.assertRaises(frappe.ValidationError, shift.add_expense, "Cash", account, 100000, "Too much")
+		je = shift.add_expense("Cash", account, 20, "Ice")
+		self.assertEqual(frappe.db.get_value("Journal Entry", je, "docstatus"), 1)
+		cash_account = frappe.db.get_value("Mode of Payment Account", {"parent": "Cash", "company": fx.COMPANY}, "default_account")
+		self.assertAlmostEqual(
+			flt(frappe.db.get_value("Journal Entry Account", {"parent": je, "account": cash_account}, "credit_in_account_currency")), 20, 2
+		)
+
 		data = shift.closing_data()
-		cash = next(r for r in data["rows"] if r["mode_of_payment"] == "Cash")
-		if not data["blind"]:
-			self.assertEqual(cash["expected_amount"], 150)
+		rows = {r["mode_of_payment"]: r for r in data["rows"]}
+		self.assertAlmostEqual(rows["Cash"]["expected_amount"], 150 + bill["payable"] - 20, 2)
+		self.assertAlmostEqual(rows["Card"]["expected_amount"], bill2["payable"], 2)
+		self.assertEqual(data["summary"]["sales_count"], 2)
+		self.assertAlmostEqual(data["summary"]["gross_sales"], bill["payable"] + bill2["payable"], 2)
+		self.assertAlmostEqual(data["summary"]["expenses_total"], 20, 2)
 		# Every payment method must be counted.
-		if len(data["rows"]) > 1:
-			self.assertRaises(frappe.ValidationError, shift.close_shift, json.dumps({"Cash": 150}))
-		result = shift.close_shift(json.dumps({r["mode_of_payment"]: (140 if r["mode_of_payment"] == "Cash" else r.get("expected_amount") or 0) for r in data["rows"]}))
-		row = next(r for r in result["rows"] if r["mode_of_payment"] == "Cash")
-		self.assertEqual((row["opening_amount"], row["expected_amount"], row["closing_amount"], row["difference"]), (150, 150, 140, -10))
-		self.assertEqual(frappe.db.get_value("POS Closing Shift", result["closing"], "docstatus"), 1)
+		self.assertRaises(frappe.ValidationError, shift.close_shift, json.dumps({"Cash": 150}))
+		counted = {"Cash": rows["Cash"]["expected_amount"] - 10, "Card": rows["Card"]["expected_amount"]}
+		result = shift.close_shift(json.dumps(counted))
+		doc = frappe.get_doc("Resto Shift", result["closing"])
+		self.assertEqual(doc.status, "Closed")
+		cash = next(r for r in doc.payments if r.mode_of_payment == "Cash")
+		self.assertAlmostEqual(flt(cash.difference), -10, 2)
+		self.assertAlmostEqual(flt(doc.total_difference), -10, 2)
+		self.assertEqual(len(doc.invoices), 2)
 		self.assertFalse(billing.get_open_shift(CASHIER, fx.PROFILE))
-		# Closed once: a second close (a double tap) finds no open shift.
-		self.assertRaises(frappe.ValidationError, shift.close_shift, json.dumps({"Cash": 140}))
+		# Closed once: a second close (a double tap) finds no open shift; it cannot be edited by hand.
+		self.assertRaises(frappe.ValidationError, shift.close_shift, json.dumps(counted))
+		frappe.set_user("Administrator")
+		doc.remarks = "x"
+		self.assertRaises(frappe.ValidationError, doc.save)
+
+	def test_a_bill_needs_an_open_shift_when_required(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 1)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.set_user(CASHIER)
+		order, bill = self.takeaway()
+		pay = json.dumps([{"mode_of_payment": "Cash", "amount": bill["payable"]}])
+		self.assertRaises(frappe.ValidationError, floor.settle, order, pay, None, bill["payable"])
+		name = shift.open_shift(json.dumps({"Cash": 0}))
+		r = floor.settle(order, pay, None, bill["payable"])
+		self.assertEqual(frappe.db.get_value("Sales Invoice", r["sales_invoice"], "resto_shift"), name)
+		data = shift.closing_data()
+		shift.close_shift(json.dumps({x["mode_of_payment"]: x["expected_amount"] for x in data["rows"]}))
+		order2, bill2 = self.takeaway()
+		self.assertRaises(
+			frappe.ValidationError, floor.settle, order2, json.dumps([{"mode_of_payment": "Cash", "amount": bill2["payable"]}]), None, bill2["payable"]
+		)
 
 	def test_a_negative_opening_is_refused(self):
 		self.assertRaises(frappe.ValidationError, shift.open_shift, json.dumps({"Cash": -5}))
+
+	def test_blind_count_hides_what_is_expected(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_single_value("Resto Settings", "blind_shift_count", 1)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.set_user(CASHIER)
+		shift.open_shift(json.dumps({"Cash": 10}))
+		data = shift.closing_data()
+		self.assertTrue(data["blind"])
+		self.assertNotIn("expected_amount", data["rows"][0])
+		result = shift.close_shift(json.dumps({r["mode_of_payment"]: 0 for r in data["rows"]}))
+		self.assertAlmostEqual(next(r for r in result["rows"] if r["mode_of_payment"] == "Cash")["difference"], -10, 2)
 
 
 class TestSameDishTappedAgain(IntegrationTestCase):

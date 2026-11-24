@@ -63,17 +63,13 @@ def _period(filters):
 	"""(start, end) datetimes: the shift's, or the date range's."""
 	if filters.get("shift"):
 		shift = frappe.db.get_value(
-			"POS Opening Shift", filters.shift, ["period_start_date", "pos_profile", "name"], as_dict=True
+			"Resto Shift", filters.shift, ["opening_time", "closing_time", "pos_profile", "name"], as_dict=True
 		)
 		if not shift:
 			frappe.throw(_("Shift {0} was not found").format(filters.shift))
-		end = None
-		if frappe.db.exists("DocType", "POS Closing Shift"):
-			end = frappe.db.get_value(
-				"POS Closing Shift", {"pos_opening_shift": shift.name, "docstatus": 1}, "period_end_date"
-			)
 		filters.pos_profile = filters.get("pos_profile") or shift.pos_profile
-		return get_datetime(shift.period_start_date), get_datetime(end) if end else now_datetime()
+		end = shift.closing_time
+		return get_datetime(shift.opening_time), get_datetime(end) if end else now_datetime()
 	return get_datetime(getdate(filters.from_date)), get_datetime(f"{getdate(filters.to_date)} 23:59:59.999999")
 
 

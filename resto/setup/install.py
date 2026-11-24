@@ -38,6 +38,19 @@ CUSTOMER_FIELDS = {
 
 SALES_INVOICE_FIELDS = {
 	"Sales Invoice": [
+		# The cashier's shift the bill was settled in (D-203): its closing counts this invoice.
+		{
+			"fieldname": "resto_shift",
+			"fieldtype": "Link",
+			"label": "Restaurant Shift",
+			"options": "Resto Shift",
+			"insert_after": "pos_profile",
+			"read_only": 1,
+			"no_copy": 1,
+			"print_hide": 1,
+			"search_index": 1,
+			"in_standard_filter": 1,
+		},
 		{
 			"fieldname": "resto_section",
 			"fieldtype": "Section Break",
@@ -218,25 +231,6 @@ def grant_standard_permissions():
 			for right in rights:
 				if not row.get(right):
 					update_permission_property(doctype, role, 0, right, 1, validate=False)
-	grant_shift_permissions()
-
-
-def grant_shift_permissions():
-	"""The cashier opens and closes their own POSNext shift from the floor (D-199): POSNext's closing
-	saves the opening shift with the user's rights, so the cashier needs read, write and submit on
-	their own (if owner) opening shifts. A rule the site already has is only completed."""
-	from frappe.permissions import add_permission, update_permission_property
-
-	doctype = "POS Opening Shift"
-	if not frappe.db.exists("DocType", doctype) or not frappe.db.exists("Role", CASHIER):
-		return
-	if not frappe.db.exists("Custom DocPerm", {"parent": doctype, "role": CASHIER, "permlevel": 0}):
-		add_permission(doctype, CASHIER, 0, "read")
-		update_permission_property(doctype, CASHIER, 0, "if_owner", 1, validate=False)
-	row = frappe.db.get_value("Custom DocPerm", {"parent": doctype, "role": CASHIER, "permlevel": 0}, ["read", "write", "submit"], as_dict=True)
-	for right in ("read", "write", "submit"):
-		if not row.get(right):
-			update_permission_property(doctype, CASHIER, 0, right, 1, validate=False)
 
 
 def set_new_setting_defaults():

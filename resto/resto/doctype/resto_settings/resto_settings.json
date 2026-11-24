@@ -25,6 +25,7 @@
   "pos_section",
   "pos_profile",
   "require_pos_shift",
+  "blind_shift_count",
   "allow_side_changes",
   "charge_extra_sides",
   "column_break_pos",
@@ -179,8 +180,15 @@
    "default": "1",
    "fieldname": "require_pos_shift",
    "fieldtype": "Check",
-   "label": "Require an Open POSNext Shift",
-   "description": "The cashier must open a shift in POSNext before settling a bill, so the shift closing counts it."
+   "label": "Require an Open Shift",
+   "description": "The cashier opens a shift on the floor screen (Open Shift) before settling a bill, so the shift closing counts it."
+  },
+  {
+   "default": "0",
+   "fieldname": "blind_shift_count",
+   "fieldtype": "Check",
+   "label": "Blind Shift Count",
+   "description": "When closing a shift the cashier counts the drawer without seeing the expected amounts; they are shown after the shift is closed."
   },
   {
    "default": "0",
@@ -381,7 +389,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-24 14:00:00.000000",
+ "modified": "2026-11-25 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

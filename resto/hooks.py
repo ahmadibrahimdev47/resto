@@ -31,12 +31,10 @@ add_to_apps_screen = [
 		"has_permission": "resto.check_app_permission",
 	}
 ]
-# Frappe v16 shows only the first add_to_apps_screen entry of each app, so the POSNext
-# cashier screen (/pos) cannot get its own icon from here.
 
 # Design rules (see README):
 # - No override_doctype_class, no override_whitelisted_methods, no monkey patches.
-#   POSNext already overrides Sales Invoice and packed-item code; we must not collide.
+#   Resto keeps its own shift (Resto Shift, D-203); POSNext is not needed.
 # - Custom fields we add to standard doctypes are prefixed with "resto_".
 
 after_install = "resto.setup.install.after_install"
@@ -57,10 +55,6 @@ doc_events = {
 		"before_submit": "resto.resto.billing.before_sales_invoice_submit",
 		"before_cancel": "resto.resto.billing.before_sales_invoice_cancel",
 		"on_cancel": "resto.resto.billing.on_sales_invoice_cancel",
-	},
-	# POSNext shift closing must include every bill settled on the floor.
-	"POS Closing Shift": {
-		"validate": "resto.resto.billing.validate_closing_shift",
 	},
 }
 

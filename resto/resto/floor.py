@@ -1078,7 +1078,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 	# A retried click after the last payment closed the order gets the same invoice back.
 	doc = _get_order(order, statuses=None if request_id else ACTIVE)
 	if doc.status not in ACTIVE:
-		return _settle_result(doc, billing.settle(doc, [], request_id=request_id))
+		return _settle_result(doc, billing.settle(doc, _loads(payments, []), request_id=request_id))
 	if cint(on_account):
 		billing.check_on_account(doc)  # refused before anything goes to the kitchen
 	if doc.order_type != "Dine In" and any(d.kitchen_status == "Not Sent" for d in doc.active_lines()):

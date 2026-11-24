@@ -28,7 +28,7 @@ frappe.query_reports["Resto Kitchen vs Invoices"] = {
 			fieldname: "shift",
 			label: __("Shift"),
 			fieldtype: "Link",
-			options: "POS Opening Shift",
+			options: "Resto Shift",
 		},
 		{
 			fieldname: "cashier",

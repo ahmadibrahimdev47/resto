@@ -338,8 +338,20 @@ def check_on_account(order):
 	profile = frappe.get_cached_doc("POS Profile", order.pos_profile)
 	if not cint(profile.get("allow_partial_payment")):
 		frappe.throw(_("POS Profile {0} does not allow partial payment").format(frappe.bold(order.pos_profile)))
-	if not on_account_customer(order):
+	customer = on_account_customer(order)
+	if not customer:
 		frappe.throw(_("Choose the customer who owes the rest first (Guests and Customer): not the walk-in customer"))
+	# A cashier gives credit only to a customer the manager gave a credit limit (ERPNext checks the
+	# limit itself on submit); otherwise cash taken could be booked as owed and the drawer still balance.
+	if not has_role():
+		from erpnext.selling.doctype.customer.customer import get_credit_limit
+
+		if flt(get_credit_limit(customer, order.company)) <= 0:
+			frappe.throw(
+				_("Customer {0} has no credit limit: only a Resto Manager can leave a bill on their account, or the manager sets the customer's credit limit").format(
+					frappe.bold(order.customer_name or customer)
+				)
+			)
 
 
 def bill_preview(order, lines=None):
@@ -380,7 +392,10 @@ def bill_preview(order, lines=None):
 		"currency": si.currency,
 		"allow_partial_payment": cint(frappe.get_cached_value("POS Profile", order.pos_profile, "allow_partial_payment")),
 		"on_account_customer": on_account_customer(order),
-		"on_account_customer_name": order.customer_name if on_account_customer(order) else None,
+		# The debtor's own name, as the receipt prints it (the order's typed name may differ).
+		"on_account_customer_name": frappe.db.get_value("Customer", on_account_customer(order), "customer_name")
+		if on_account_customer(order)
+		else None,
 		"payment_modes": [
 			{"mode_of_payment": p.mode_of_payment, "type": p.type, "default": cint(p.default)}
 			for p in si.payments
@@ -391,14 +406,17 @@ def bill_preview(order, lines=None):
 # --------------------------------------------------------------------------- settle
 
 
-def get_open_shift(user, pos_profile):
-	"""The user's open POSNext shift for this POS Profile, if POSNext is installed."""
-	if not posnext_installed() or not frappe.db.exists("DocType", "POS Opening Shift"):
-		return None
-	filters = {"user": user, "pos_profile": pos_profile, "docstatus": 1, "status": "Open"}
-	if frappe.get_meta("POS Opening Shift").has_field("pos_closing_shift"):
-		filters["pos_closing_shift"] = ("is", "not set")
-	return frappe.db.get_value("POS Opening Shift", filters, "name", order_by="period_start_date desc")
+def get_open_shift(user, pos_profile, lock=False):
+	"""The user's open Resto Shift on this POS Profile (D-203), or None."""
+	from resto.resto.shift import open_shift_of
+
+	return open_shift_of(user, pos_profile, lock=lock)
+
+
+def _sent_total(payments):
+	if isinstance(payments, str):
+		payments = json.loads(payments)
+	return sum(flt(p.get("amount")) for p in payments or [])
 
 
 def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0):
@@ -414,18 +432,21 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 	if request_id:
 		done = next((d for d in order.invoices if d.request_id == request_id and not d.cancelled), None)
 		if done:
-			return frappe.get_doc("Sales Invoice", done.sales_invoice)
+			si = frappe.get_doc("Sales Invoice", done.sales_invoice)
+			# The same click again, after a lost answer: the same payment, or it is not the same click.
+			if payments and abs(_sent_total(payments) - flt(si.paid_amount)) > 0.005:
+				frappe.throw(
+					_("This bill was already settled as invoice {0} with {1} paid; check it before taking another payment").format(
+						si.name, frappe.format(si.paid_amount, "Currency")
+					)
+				)
+			return si
 	if order.status not in ("Open", "Bill Requested"):
 		frappe.throw(_("Order {0} is {1}").format(order.name, _(order.status, context="Resto")))
-	shift = get_open_shift(frappe.session.user, order.pos_profile)
-	if shift:
-		# Locked, and read again: a shift being closed now finishes first (its closing counts what
-		# was billed on it), and a bill after that sees it closed.
-		# (A locking read sees the latest commit; a plain one would see this transaction's snapshot.)
-		state = frappe.db.get_value("POS Opening Shift", shift, ["status", "docstatus"], as_dict=True, for_update=True)
-		if not state or state.status != "Open" or state.docstatus != 1:
-			shift = None
-	if cint(settings.require_pos_shift) and posnext_installed() and not shift:
+	# Locked: a shift being closed now finishes first (its closing counts what was billed on it),
+	# and a bill after that sees it closed (a locking read sees the latest commit).
+	shift = get_open_shift(frappe.session.user, order.pos_profile, lock=True)
+	if cint(settings.require_pos_shift) and not shift:
 		frappe.throw(
 			_("Open your shift (Open Shift at the top of the floor screen) for POS Profile {0} before settling bills").format(
 				frappe.bold(order.pos_profile)
@@ -449,8 +470,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 			)
 		)
 	_set_payments(si, payments, on_account)
-	if shift and si.meta.has_field("posa_pos_opening_shift"):
-		si.posa_pos_opening_shift = shift
+	si.resto_shift = shift
 
 	si.flags.ignore_permissions = True
 	si.insert()
@@ -554,27 +574,10 @@ def validate_sales_invoice(doc, method=None):
 
 def before_sales_invoice_submit(doc, method=None):
 	sides.check_invoice(doc)
-
-
-def validate_closing_shift(doc, method=None):
-	"""POSNext lists the shift's invoices when its closing dialog opens. A bill settled on the floor
-	after that would be in no closing at all, so the closing must be opened again."""
-	shift = doc.get("pos_opening_shift")
-	if not shift or not frappe.get_meta("Sales Invoice").has_field("posa_pos_opening_shift"):
-		return
-	listed = {d.get("sales_invoice") for d in doc.get("pos_transactions") or []}
-	floor = frappe.get_all(
-		"Sales Invoice",
-		filters={"posa_pos_opening_shift": shift, "docstatus": 1, "resto_order": ("is", "set")},
-		pluck="name",
-	)
-	missing = [n for n in floor if n not in listed]
-	if missing:
-		frappe.throw(
-			_("Restaurant bills settled after this closing was opened are missing from it: {0}. Close it and open the shift closing again.").format(
-				", ".join(missing)
-			)
-		)
+	# A POS bill made at the desk by a cashier with an open shift is in that shift too: its money
+	# is in the same drawer.
+	if cint(doc.is_pos) and not doc.get("resto_shift") and doc.pos_profile and doc.meta.has_field("resto_shift"):
+		doc.resto_shift = get_open_shift(frappe.session.user, doc.pos_profile, lock=True)
 
 
 def on_sales_invoice_cancel(doc, method=None):
