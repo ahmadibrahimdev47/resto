@@ -622,18 +622,30 @@ def set_delivery(order, delivery_status=None, driver=None, delivery_fee=None):
 	return _save(doc).name
 
 
+# The cashier or the kitchen may post waste for a dish voided after sending (a cancelled order too) this
+# long after its void ticket; a manager any time.
+COOKED_WASTE_HOURS = 12
+
+
 @frappe.whitelist(methods=["POST"])
-def cancel_order(order, reason):
-	"""Cancel an order. With sent items this needs a manager and the kitchen gets void tickets."""
+def cancel_order(order, reason, cooked=None):
+	"""Cancel an order. With sent items this needs a manager and the kitchen gets void tickets.
+
+	cooked: the sent lines the kitchen already made (JSON list of line names): their ingredients are
+	posted as waste, as for a void after cooking; the others stay in stock."""
 	require_role(WAITER, CASHIER)
 	if not (reason or "").strip():
 		frappe.throw(_("Enter a reason"))
+	reason = reason.strip()
 	doc = _get_order(order)
 	if any(not d.cancelled for d in doc.invoices):
 		frappe.throw(_("Part of this order is paid; it cannot be cancelled"))
 	sent = [d for d in doc.items if d.kitchen_status not in ("Not Sent", "Void")]
 	if sent:
 		require_role(MANAGER)
+	cooked = set(_loads(cooked, []) or [])
+	if cooked - {d.name for d in sent}:
+		frappe.throw(_("Only items sent to the kitchen can be marked as cooked"))
 	kitchen.void_lines(doc, sent, reason)
 	for d in doc.items:
 		if d.kitchen_status == "Not Sent":
@@ -648,7 +660,44 @@ def cancel_order(order, reason):
 	_save(doc)
 	if doc.reservation:
 		frappe.db.set_value("Resto Reservation", doc.reservation, "status", "Cancelled")
+	for d in sent:
+		if d.name in cooked:
+			_waste_for_void(doc, d, reason)
 	return doc.name
+
+
+@frappe.whitelist(methods=["POST"])
+def post_cooked_waste(order, lines):
+	"""Waste for dishes the kitchen made that were voided after sending without it (the order cancelled
+	without ticking them, or a void answered "not cooked"), from the order (cashier, manager) or the void
+	ticket on the kitchen screen. Each line once. The cashier and the kitchen: within COOKED_WASTE_HOURS
+	of its void ticket; a manager any time."""
+	require_role(CASHIER, KITCHEN)
+	names = set(_loads(lines, []) or [])
+	if not names:
+		frappe.throw(_("Choose the dishes that were cooked"))
+	doc = frappe.get_doc("Resto Order", order, for_update=True)
+	manager = has_role()
+	rows = [d for d in doc.items if d.name in names]
+	if len(rows) != len(names):
+		frappe.throw(_("Some of these dishes are not on order {0}").format(doc.name))
+	since = add_to_date(now_datetime(), hours=-COOKED_WASTE_HOURS)
+	for d in rows:
+		if not (d.ticket and d.kitchen_status == "Void"):
+			frappe.throw(_("{0} was not voided after it was sent to the kitchen").format(frappe.bold(d.item_name)))
+		# A locking read: a second press at the same moment sees the waste the first one posted.
+		posted = frappe.db.get_value("Resto Order Item", d.name, "void_waste", for_update=True)
+		if posted:
+			frappe.throw(_("Waste {0} is already posted for {1}").format(posted, frappe.bold(d.item_name)))
+		if not manager:
+			voided_at = kitchen.void_sent_at(d.name)
+			if not voided_at or get_datetime(voided_at) < since:
+				frappe.throw(
+					_("{0} was voided more than {1} hours ago: ask a manager").format(frappe.bold(d.item_name), COOKED_WASTE_HOURS)
+				)
+	for d in rows:
+		_waste_for_void(doc, d, d.void_reason or doc.cancel_reason or "")
+	return {d.name: frappe.db.get_value("Resto Order Item", d.name, "void_waste") for d in rows}
 
 
 # --------------------------------------------------------------------------- bill

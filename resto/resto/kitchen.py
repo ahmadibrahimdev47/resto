@@ -321,11 +321,22 @@ def get_tickets(station=None, include_done_minutes=15):
 		for d in frappe.get_all(
 			"Resto Kitchen Ticket Item",
 			filters={"parent": ("in", [t.name for t in tickets]), "parenttype": "Resto Kitchen Ticket"},
-			fields=["parent", "item_name", "qty", "modifiers_text", "sides_text", "notes", "course", "voided"],
+			fields=["parent", "item_name", "qty", "modifiers_text", "sides_text", "notes", "course", "voided", "order_item"],
 			order_by="idx asc",
 		):
 			items.setdefault(d.parent, []).append(d)
 
+	# Void tickets: which of their dishes have no waste posted yet (the kitchen can post it if cooked).
+	void_lines = [d.order_item for t in tickets if t.ticket_type == "Void" for d in items.get(t.name, []) if d.order_item]
+	no_waste = set()
+	if void_lines:
+		no_waste = set(
+			frappe.get_all(
+				"Resto Order Item",
+				filters={"name": ("in", void_lines), "kitchen_status": "Void", "void_waste": ("is", "not set")},
+				pluck="name",
+			)
+		)
 	result = []
 	for t in tickets:
 		t.items = items.get(t.name, [])
@@ -354,6 +365,8 @@ def get_tickets(station=None, include_done_minutes=15):
 						"notes": d.notes,
 						"course": d.course,
 						"voided": d.voided,
+						"order_item": d.order_item,
+						"waste_open": 1 if d.order_item in no_waste else 0,
 					}
 					for d in t.items
 				],
@@ -545,6 +558,16 @@ def _original_on_paper(void_ticket):
 			(tuple(originals),),
 		)[0][0]
 	)
+
+
+def void_sent_at(order_item):
+	"""When the void ticket of an order line was sent (None when it has none)."""
+	return frappe.db.sql(
+		"""select max(t.sent_at) from `tabResto Kitchen Ticket Item` ti
+		join `tabResto Kitchen Ticket` t on t.name = ti.parent
+		where t.ticket_type = 'Void' and ti.order_item = %s""",
+		order_item,
+	)[0][0]
 
 
 def _printer_key(station):

@@ -32,6 +32,7 @@ class RestoKitchen {
 		this._claim_poll = setInterval(() => this.print_stations.length && !this.paused && this.claim_prints(), 10000);
 		this.page.add_inner_button(__("Refresh"), () => this.refresh());
 		// Only a kitchen user prints automatically (the server takes the tickets for that role only).
+		this.can_post_waste = ["Resto Kitchen", "Resto Cashier", "Resto Manager", "System Manager"].some((r) => frappe.user.has_role(r));
 		this.can_autoprint = frappe.user.has_role("Resto Kitchen") || frappe.user.has_role("Resto Manager") || frappe.session.user === "Administrator";
 		if (!this.can_autoprint) this.print_stations = [];
 		if (this.can_autoprint) {
@@ -152,6 +153,7 @@ class RestoKitchen {
 						<div class="rk-sub">${isVoid ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${esc(t.waiter || "")} · ${__(t.status, null, "Resto")} ${paper}</div>
 						<ul>${items}</ul>
 						<div class="rk-actions">${btn}
+							${isVoid && this.can_post_waste && (t.items || []).some((d) => d.waste_open) ? `<button class="btn btn-warning btn-sm" data-waste="1">${__("Cooked: Post as Waste")}</button>` : ""}
 							<button class="btn btn-default btn-sm" data-print="1">${t.printed ? __("Reprint") : __("Print", null, "Resto")}</button></div>
 					</div>`;
 				})
@@ -164,6 +166,11 @@ class RestoKitchen {
 				args: { ticket: name, status: $(e.currentTarget).attr("data-s") },
 				callback: () => this.refresh(),
 			});
+		});
+		this.$board.find("[data-waste]").on("click", (e) => {
+			const name = $(e.currentTarget).closest(".rk-ticket").attr("data-name");
+			const t = (this.tickets || []).find((x) => x.name === name);
+			if (t) this.post_waste(t);
 		});
 		this.$board.find("[data-print]").on("click", async (e) => {
 			const btn = $(e.currentTarget);
@@ -283,6 +290,29 @@ class RestoKitchen {
 			);
 		}
 		this.$alerts.html(parts.join(""));
+	}
+
+	post_waste(t) {
+		// A cancelled dish the kitchen had already made: its ingredients are posted as waste.
+		const open = (t.items || []).filter((d) => d.waste_open && d.order_item);
+		const d = new frappe.ui.Dialog({
+			title: __("Cooked: Post as Waste"),
+			fields: [
+				{ fieldname: "help", fieldtype: "HTML", options: `<p class="text-muted">${__("Tick the dishes the kitchen already made: their ingredients are posted as waste.")}</p>` },
+				...open.map((r, i) => ({ fieldname: "l_" + i, fieldtype: "Check", default: 1, label: `${frappe.utils.escape_html(r.item_name)} × ${r.qty}` })),
+			],
+			primary_action_label: __("Post Waste"),
+			primary_action: async (v) => {
+				const lines = open.filter((r, i) => v["l_" + i]).map((r) => r.order_item);
+				if (!lines.length) return frappe.msgprint(__("Choose the dishes that were cooked"));
+				d.hide();
+				const posted = await frappe.xcall("resto.resto.floor.post_cooked_waste", { order: t.order, lines: JSON.stringify(lines) });
+				// A waste that could not be posted was already shown in orange.
+				if (Object.values(posted || {}).every(Boolean)) frappe.show_alert({ message: __("Waste posted"), indicator: "green" });
+				this.refresh();
+			},
+		});
+		d.show();
 	}
 
 	async claim_prints() {

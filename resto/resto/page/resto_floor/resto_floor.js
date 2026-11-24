@@ -833,9 +833,35 @@ class RestoFloor {
 
 	cancel() {
 		const o = this.order;
+		const sent = (o.items || []).filter((d) => !["Not Sent", "Void"].includes(d.kitchen_status));
+		if (sent.length && !this.floor.roles.manager) {
+			frappe.msgprint(__("Only a manager can cancel an order sent to the kitchen"));
+			return;
+		}
+		const fields = [{ fieldname: "reason", fieldtype: "Small Text", label: __("Cancel Reason"), reqd: 1 }];
+		if (sent.length) {
+			// What the kitchen already made is posted as waste; what it did not make stays in stock.
+			fields.push({
+				fieldname: "cooked_help",
+				fieldtype: "HTML",
+				options: `<p><b>${__("Already cooked?")}</b> <span class="text-muted">${__("Tick the dishes the kitchen already made: their ingredients are posted as waste.")}</span></p>`,
+			});
+			sent.forEach((d) =>
+				fields.push({
+					fieldname: "c_" + d.name,
+					fieldtype: "Check",
+					label: `${esc(d.item_name)} × ${d.qty} (${esc(__(d.kitchen_status, null, "Resto"))})`,
+					default: ["In Progress", "Ready", "Served"].includes(d.kitchen_status) ? 1 : 0,
+				})
+			);
+		}
 		frappe.prompt(
-			[{ fieldname: "reason", fieldtype: "Small Text", label: __("Cancel Reason"), reqd: 1 }],
-			async (v) => { await call("cancel_order", { order: o.name, reason: v.reason }, true); this.close_order(); },
+			fields,
+			async (v) => {
+				const cooked = sent.filter((d) => v["c_" + d.name]).map((d) => d.name);
+				await call("cancel_order", { order: o.name, reason: v.reason, cooked: JSON.stringify(cooked) }, true);
+				this.close_order();
+			},
 			__("Cancel Order"),
 			__("Cancel Order")
 		);
