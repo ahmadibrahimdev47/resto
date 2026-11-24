@@ -339,7 +339,8 @@ def get_tickets(station=None, include_done_minutes=15):
 		)
 	result = []
 	for t in tickets:
-		t.items = items.get(t.name, [])
+		# Not t.items: on a frappe._dict that is the dict method.
+		rows = items.get(t.name, [])
 		result.append(
 			{
 				"name": t.name,
@@ -368,7 +369,7 @@ def get_tickets(station=None, include_done_minutes=15):
 						"order_item": d.order_item,
 						"waste_open": 1 if d.order_item in no_waste else 0,
 					}
-					for d in t.items
+					for d in rows
 				],
 			}
 		)

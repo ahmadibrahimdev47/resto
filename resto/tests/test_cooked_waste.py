@@ -146,7 +146,8 @@ class TestCookedWaste(IntegrationTestCase):
 		doc = frappe.get_doc("Resto Waste", self.waste_of(line))
 		self.assertEqual((doc.resto_order, doc.order_item), (order, line))
 		doc.cancel()
-		amended = frappe.copy_doc(doc)
+		# As Amend does: the stock entry and the like are not copied.
+		amended = frappe.copy_doc(doc, ignore_no_copy=False)
 		amended.amended_from = doc.name
 		amended.docstatus = 0
 		for row in amended.items:
