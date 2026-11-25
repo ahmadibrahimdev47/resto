@@ -39,12 +39,14 @@ class TestOfflinePrint(IntegrationTestCase):
 		return frappe.get_doc("Resto Order", order).items
 
 	def test_only_the_printed_dishes_are_recorded_and_not_printed_again(self):
-		# Two dishes printed on the screen; a third added meanwhile on another screen.
-		order = self.order_with("one", "two", "other screen")
+		# A dish added on another screen while this one was offline; this screen's two dishes reach the
+		# server when its connection is back, after it (the newest are the ones it printed).
+		order = self.order_with("other screen")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1, "notes": n} for n in ("one", "two")]))
 		view = floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 2}), view=1, op="offlineSend1")
 		self.assertEqual(view["name"], order)
 		status = [d.kitchen_status for d in self.lines(order)]
-		self.assertEqual(status, ["Sent", "Sent", "Not Sent"])
+		self.assertEqual(status, ["Not Sent", "Sent", "Sent"])
 		tickets = {d.ticket for d in self.lines(order) if d.ticket}
 		self.assertEqual(len(tickets), 1)
 		for t in tickets:
@@ -52,13 +54,13 @@ class TestOfflinePrint(IntegrationTestCase):
 
 		# Sent again (the answer was lost): nothing more is recorded.
 		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 2}), view=1, op="offlineSend1")
-		self.assertEqual([d.kitchen_status for d in self.lines(order)], ["Sent", "Sent", "Not Sent"])
+		self.assertEqual([d.kitchen_status for d in self.lines(order)], ["Not Sent", "Sent", "Sent"])
 		self.assertEqual(frappe.db.count("Resto Kitchen Ticket", {"resto_order": order}), 1)
 
 		# The third goes the usual way, printed by its station.
 		floor.send_to_kitchen(order)
 		self.assertEqual([d.kitchen_status for d in self.lines(order)], ["Sent", "Sent", "Sent"])
-		last = self.lines(order)[2].ticket
+		last = self.lines(order)[0].ticket
 		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", last, "printed"), 0)
 
 	def test_a_plain_line_bigger_than_printed_is_split(self):
@@ -71,10 +73,10 @@ class TestOfflinePrint(IntegrationTestCase):
 		self.assertEqual(frappe.db.get_value("Resto Order", order, "net_total"), before, "the bill is unchanged")
 
 	def test_the_lines_the_device_printed_are_matched_first(self):
-		# A plain line from another screen, then the line this device printed (with a note).
+		# The line this device printed (with a note), then a newer plain line from another screen.
 		order = floor.create_order(order_type="Takeaway", customer_name="Offline Guest")
-		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
 		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1, "notes": "mine"}]))
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
 		mine = next(d.name for d in self.lines(order) if d.notes == "mine")
 		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 1}), op="offlineSend7", lines=json.dumps([mine]))
 		self.assertEqual({d.notes or "": d.kitchen_status for d in self.lines(order)}, {"": "Not Sent", "mine": "Sent"})
@@ -107,6 +109,8 @@ class TestOfflinePrint(IntegrationTestCase):
 
 	def test_recorded_at_the_time_it_was_printed(self):
 		order = self.order_with("one")
+		# Opened before it was printed (a time before the order opened is not taken).
+		frappe.db.set_value("Resto Order", order, "opened_at", add_to_date(now_datetime(), minutes=-30))
 		at = add_to_date(now_datetime(), minutes=-5)
 		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 1}), op="offlineSend5", printed_at=str(at))
 		ticket = self.lines(order)[0].ticket

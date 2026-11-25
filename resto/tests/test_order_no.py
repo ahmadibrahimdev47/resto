@@ -58,7 +58,7 @@ class TestOrderNo(IntegrationTestCase):
 		tickets = tickets_of(order)
 		self.assertEqual([t.ticket_type for t in tickets], ["Order", "Order", "Void"])
 		self.assertEqual({t.order_no for t in tickets}, {no})
-		self.assertEqual([t.send_round for t in tickets], [1, 2, None])
+		self.assertEqual([t.send_round for t in tickets], [1, 2, 0])  # an Int column: none is 0
 		self.assertEqual(frappe.db.get_value("Resto Order", order, "send_rounds"), 2)
 
 		# The kitchen screen gets them too.
