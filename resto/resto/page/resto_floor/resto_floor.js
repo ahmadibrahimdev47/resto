@@ -261,9 +261,11 @@ class RestoFloor {
 			this.$body.html(`<p class="text-muted">${__("No tables in this hall yet.")}</p>`);
 			return;
 		}
+		// The grid follows the page direction: in Arabic table 1 is on the right, and column 1 of a
+		// placed table is the right-hand column (D-209).
 		const cards = hall.tables.map((t) => this.table_card(t));
 		this.$body.html(
-			`<div class="rf-grid" dir="ltr" style="grid-template-columns: repeat(${hall.grid_columns}, minmax(120px, 1fr))">${cards.join("")}</div>
+			`<div class="rf-grid" style="grid-template-columns: repeat(${hall.grid_columns}, minmax(120px, 1fr))">${cards.join("")}</div>
 			<div class="rf-legend">
 				<span class="rf-dot free"></span>${__("Free", null, "Resto")}
 				<span class="rf-dot occupied"></span>${__("Occupied")}
