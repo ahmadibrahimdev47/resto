@@ -64,6 +64,8 @@ def send_lines(order, course=None, printed=None):
 		lines = chosen
 	if not lines:
 		return []
+	# One send of the order to the kitchen, whatever its stations: 1, then 2 for the first addition...
+	order.send_rounds = cint(order.get("send_rounds")) + 1
 
 	by_station = {}
 	for d in lines:
@@ -146,6 +148,9 @@ def _make_ticket(order, station, ticket_type, rows, now, printed=False):
 			"sent_at": now,
 			# Order tickets only: a void refers to the number of the ticket it cancels.
 			"daily_no": _daily_no(station, now) if ticket_type == "Order" else None,
+			# The order's number on every ticket of it (D-221), and which send this is (not on a void).
+			"order_no": order.get("order_no"),
+			"send_round": cint(order.get("send_rounds")) or None if ticket_type == "Order" else None,
 		}
 	)
 	for d in rows:
@@ -193,32 +198,58 @@ def _warn_if_nobody_prints(station):
 	)
 
 
-def _daily_no(station, now):
-	"""The next ticket number of the station in this business day (Resto Settings "Business Day Starts
-	At"), to match paper with the screen and the receipt.
-
-	An atomic counter in the cache, not a read of the tickets: two sends at the same moment never share
-	a number, and a number never locks a row or holds up a send or a payment. The counter starts from
-	the tickets of the day when the cache has none (a restart). A send that fails leaves a gap. Without
-	the cache the ticket simply has no number."""
+def business_day_start(now):
+	"""When the business day of a moment began (Resto Settings "Business Day Starts At")."""
 	from resto.resto.demand import day_start_hour
 
+	now = get_datetime(now)
 	start = get_datetime(getdate(now)).replace(hour=day_start_hour())
-	if now < start:
-		start = add_to_date(start, days=-1)
-	key = frappe.cache.make_key(f"resto_kds_no:{station}:{start.date()}")
+	return add_to_date(start, days=-1) if now < start else start
+
+
+def _day_counter(key, last_sql, args):
+	"""The next number of a counter of the business day.
+
+	An atomic counter in the cache, not a read of the documents: two at the same moment never share a
+	number, and a number never locks a row or holds up a send or a payment. The counter starts from the
+	day's documents when the cache has none (a restart). A failure leaves a gap."""
+	key = frappe.cache.make_key(key)
+	if frappe.cache.get(key) is None:
+		last = frappe.db.sql(last_sql, args)[0][0]
+		# Only the first of two at the same moment sets it.
+		frappe.cache.set(key, cint(last), ex=DAILY_NO_KEEP_SECONDS, nx=True)
+	return cint(frappe.cache.incr(key))
+
+
+def _daily_no(station, now):
+	"""The next ticket number of the station in this business day, kept with the ticket (the order's
+	number is the one shown, D-221). Without the cache the ticket simply has no number."""
+	start = business_day_start(now)
 	try:
-		if frappe.cache.get(key) is None:
-			last = frappe.db.sql(
-				"""select ifnull(max(daily_no), 0) from `tabResto Kitchen Ticket`
-				where station = %s and sent_at >= %s""",
-				(station, start),
-			)[0][0]
-			# Only the first of two sends at the same moment sets it.
-			frappe.cache.set(key, cint(last), ex=DAILY_NO_KEEP_SECONDS, nx=True)
-		return cint(frappe.cache.incr(key))
+		return _day_counter(
+			f"resto_kds_no:{station}:{start.date()}",
+			"select ifnull(max(daily_no), 0) from `tabResto Kitchen Ticket` where station = %s and sent_at >= %s",
+			(station, start),
+		)
 	except Exception:
 		frappe.log_error(title=_("Kitchen ticket number not given"))
+		return None
+
+
+def daily_order_no(now=None):
+	"""The next order number of the business day (D-221): 1 for the first order after the day starts.
+	It is given when the order is made, so it never changes once on paper. Without the cache the
+	order has no number and its papers show its system name."""
+	start = business_day_start(now or now_datetime())
+	try:
+		return _day_counter(
+			f"resto_order_no:{start.date()}",
+			"""select ifnull(max(order_no), 0) from `tabResto Order`
+			where opened_at >= %s and opened_at < %s""",
+			(start, add_to_date(start, days=1)),
+		)
+	except Exception:
+		frappe.log_error(title=_("Order number not given"))
 		return None
 
 
@@ -310,7 +341,7 @@ def get_tickets(station=None, include_done_minutes=15):
 	require_role(KITCHEN, WAITER, CASHIER)
 	fields = [
 		"name", "resto_order", "order_type", "resto_table", "station", "ticket_type", "status", "waiter",
-		"sent_at", "started_at", "ready_at", "served_at", "printed", "daily_no",
+		"sent_at", "started_at", "ready_at", "served_at", "printed", "daily_no", "order_no", "send_round",
 	]
 	cond = {"station": station} if station else {}
 	now = now_datetime()
@@ -373,6 +404,8 @@ def get_tickets(station=None, include_done_minutes=15):
 				"served_at": t.served_at,
 				"printed": cint(t.printed),
 				"daily_no": t.daily_no,
+				"order_no": t.order_no,
+				"send_round": t.send_round,
 				"items": [
 					{
 						"item_name": d.item_name,

@@ -127,6 +127,14 @@ class RestoKitchen {
 		});
 	}
 
+	// The order's number of the day, the same on every ticket of the order and on its bill (D-221), and
+	// which addition this is ("Addition 2" for the second send); older tickets keep the station number.
+	number(t) {
+		if (!t.order_no) return t.daily_no ? `<span class="rk-no">#${t.daily_no}</span> ` : "";
+		const round = cint(t.send_round) > 1 ? ` <span class="rk-round">${__("Addition {0}", [t.send_round])}</span>` : "";
+		return `<span class="rk-no">${__("Order {0}", [t.order_no], "Resto")}</span>${round} `;
+	}
+
 	render() {
 		const esc = frappe.utils.escape_html;
 		this.render_alerts();
@@ -165,7 +173,7 @@ class RestoKitchen {
 								? `<button class="btn btn-danger btn-sm" data-s="Served">${__("Seen", null, "Resto")}</button>`
 								: `<button class="btn btn-primary btn-sm" data-s="${next[t.status]}">${label[t.status]}</button>`;
 					return `<div class="rk-ticket s-${t.status.replace(/ /g, "")} ${isVoid ? "void" : ""} ${m >= 20 ? "late" : m >= 10 ? "warn" : ""}" data-name="${esc(t.name)}">
-						<div class="rk-head"><b>${t.daily_no ? `<span class="rk-no">#${t.daily_no}</span> ` : ""}${where}</b><span data-since="${t.sent_at}">${m}′</span></div>
+						<div class="rk-head"><b>${this.number(t)}${where}</b><span data-since="${t.sent_at}">${m}′</span></div>
 						<div class="rk-sub">${isVoid ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${esc(t.waiter || "")} · ${__(t.status, null, "Resto")} ${paper}</div>
 						<ul>${items}</ul>
 						<div class="rk-actions">${btn}
@@ -309,7 +317,7 @@ class RestoKitchen {
 			const list = al.unprinted
 				.map((t) => {
 					const where = t.resto_table ? __("Table {0}", [esc(t.resto_table)], "Resto") : `${__(t.order_type, null, "Resto")} ${esc(t.resto_order || "")}`;
-					return `${esc(t.station)}${t.daily_no ? " #" + t.daily_no : ""} (${where}${t.ticket_type === "Void" ? " · " + __("VOID") : ""})`;
+					return `${esc(t.station)} ${t.order_no ? __("Order {0}", [t.order_no], "Resto") : t.daily_no ? "#" + t.daily_no : ""} (${where}${t.ticket_type === "Void" ? " · " + __("VOID") : ""})`;
 				})
 				.join("، ");
 			parts.push(
@@ -446,7 +454,7 @@ class RestoKitchen {
 		.rk-note { font-size:13px; color:var(--red-600, #e53e3e); font-weight:600; }
 		.rk-sides { font-size:14px; font-weight:700; color:var(--orange-600, #c05621); }
 		.rk-course { font-size:11px; background:var(--gray-100); border-radius:6px; padding:0 6px; margin-inline-start:4px; }
-		.rk-actions { display:flex; gap:6px; } .rk-saving { opacity:.75; } .rk-wait { align-self:center; font-size:13px; color:#555; } .rk-busy { cursor:progress; opacity:.7; }
+		.rk-actions { display:flex; gap:6px; } .rk-saving { opacity:.75; } .rk-round { background:#111; color:#fff; border-radius:6px; padding:0 6px; font-size:13px; } .rk-wait { align-self:center; font-size:13px; color:#555; } .rk-busy { cursor:progress; opacity:.7; }
 		.rk-no { font-size:20px; font-weight:800; }
 		.rk-printed { color:var(--green-600, #2f855a); margin-inline-start:4px; }
 		.rk-unprinted { color:var(--red-600, #e53e3e); font-weight:700; margin-inline-start:4px; }

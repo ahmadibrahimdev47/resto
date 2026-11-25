@@ -8,6 +8,7 @@
  "engine": "InnoDB",
  "field_order": [
   "naming_series",
+  "order_no",
   "title",
   "order_type",
   "resto_table",
@@ -55,6 +56,7 @@
   "merged_into",
   "rebill",
   "table_freed",
+  "send_rounds",
   "column_break_7",
   "notes",
   "print_sides",
@@ -414,13 +416,33 @@
    "read_only": 1,
    "no_copy": 1,
    "description": "The ids of the floor screen's last changes, so a change sent again after the connection dropped is applied once."
+  },
+  {
+   "fieldname": "order_no",
+   "fieldtype": "Int",
+   "label": "Order No.",
+   "read_only": 1,
+   "no_copy": 1,
+   "bold": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1,
+   "description": "The order's number in its business day (Resto Settings: Business Day Starts At), printed big on every kitchen ticket, the bill and the receipt."
+  },
+  {
+   "fieldname": "send_rounds",
+   "fieldtype": "Int",
+   "label": "Kitchen Sends",
+   "read_only": 1,
+   "no_copy": 1,
+   "hidden": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-25 23:30:00.000000",
+ "modified": "2026-11-25 23:45:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",
@@ -481,5 +503,5 @@
  "states": [],
  "track_changes": 1,
  "title_field": "title",
- "search_fields": "order_type,resto_table,customer_name,status"
+ "search_fields": "order_no,order_type,resto_table,customer_name,status"
 }

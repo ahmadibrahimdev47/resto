@@ -116,6 +116,7 @@ def get_floor():
 			"delivery_status",
 			"bill_grand_total",
 			"rebill",
+			"order_no",
 		],
 		order_by="opened_at asc",
 	)

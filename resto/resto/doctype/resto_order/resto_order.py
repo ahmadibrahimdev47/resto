@@ -29,6 +29,9 @@ SERVER_HEADER_FIELDS = (
 	"company",
 	"pos_profile",
 	"rebill",
+	"order_no",
+	"send_rounds",
+	"table_freed",
 )
 # Changes that make a printed bill wrong.
 BILL_FIELDS = ("discount_amount", "service_charge_percent", "delivery_fee", "customer", "net_total")
@@ -60,6 +63,10 @@ class RestoOrder(Document):
 			self.delivery_fee = flt(settings.delivery_fee)
 		if not self.waiter:
 			self.waiter = frappe.session.user
+		# Its number in the business day (D-221), the big number on every paper of the order.
+		from resto.resto.kitchen import daily_order_no
+
+		self.order_no = daily_order_no(self.opened_at)
 
 	def validate(self):
 		self.before_doc = self.get_doc_before_save() if not self.is_new() else None

@@ -1063,7 +1063,7 @@ class RestoFloor {
 		const kind = o.rebill ? "rebill" : o.order_type === "Delivery" ? "delivery" : "takeaway";
 		const who = [esc(o.customer_name || __("Walk-in", null, "Resto")), o.phone ? `<bdi dir="ltr">${esc(o.phone)}</bdi>` : ""].filter(Boolean).join(" · ");
 		return `<button class="rf-orow ${o.status === "Bill Requested" ? "bill" : ""}" data-order="${esc(o.name)}">
-			<div class="rf-orow1"><span class="rf-st k-${kind}">${__(o.order_type, null, "Resto")}</span><b>${esc(o.name)}</b>
+			<div class="rf-orow1"><span class="rf-st k-${kind}">${__(o.order_type, null, "Resto")}</span><b>${o.order_no ? __("Order {0}", [o.order_no], "Resto") : esc(o.name)}</b>${o.order_no ? `<small class="rf-muted">${esc(o.name)}</small>` : ""}
 				<span class="rf-spacer"></span><b>${money(o.bill_grand_total || o.net_total)}</b></div>
 			<div class="rf-orow2"><span>${who}</span>
 				${o.delivery_status ? `<span>· ${__(o.delivery_status, null, "Resto")}</span>` : ""}
@@ -1677,7 +1677,9 @@ class RestoFloor {
 	}
 
 	order_title(o) {
-		const head = o.order_type === "Dine In" ? __("Table {0}", [esc(o.resto_table)], "Resto") : __(o.order_type, null, "Resto");
+		const where = o.order_type === "Dine In" ? __("Table {0}", [esc(o.resto_table)], "Resto") : __(o.order_type, null, "Resto");
+		// The order's number of the day first, as on its kitchen tickets and bill (D-221).
+		const head = o.order_no ? `<span class="rf-ono">${__("Order {0}", [o.order_no], "Resto")}</span> · ${where}` : where;
 		const sub = [esc(o.name)];
 		if (o.order_type === "Dine In") sub.push(__("{0} guests", [o.guests]));
 		if (o.opened_at) sub.push(__("for {0}", [dur(minutes_since(o.opened_at))]));
@@ -2551,7 +2553,8 @@ class RestoFloor {
 
 	paper_head(o) {
 		const where = o.resto_table ? `${__("Table", null, "Resto")} ${esc(o.resto_table)}` : esc(__(o.order_type));
-		return `<div class="m s"><span>${esc(o.name)}</span><span>${where}</span></div>
+		return `${o.order_no ? `<div class="big" style="text-align:center;font-size:22px">${__("Order {0}", [o.order_no], "Resto")}</div>` : ""}
+			<div class="m s"><span>${esc(o.name)}</span><span>${where}</span></div>
 			<div class="m s"><span>${esc(frappe.datetime.str_to_user(frappe.datetime.now_datetime()))}</span><span>${esc((this.floor && this.floor.user_name) || frappe.session.user)}</span></div>`;
 	}
 
@@ -3362,7 +3365,7 @@ class RestoFloor {
 		.rf-legend i { width:12px; height:12px; border-radius:4px; display:inline-block; }
 		.rf-legend i.free { background:var(--rf-green-soft); border:2px solid var(--rf-green); } .rf-legend i.occupied { background:var(--rf-blue); }
 		.rf-tbl.paid { background:var(--rf-card); border:2px dashed var(--rf-green); } .rf-tbl.paid .rf-st { background:var(--rf-green); color:#fff; }
-		.rf-legend i.paid { border:2px dashed var(--rf-green); } .rf-pwarn { padding:6px 0; font-weight:700; }
+		.rf-ono { color:var(--rf-acc); } .rf-legend i.paid { border:2px dashed var(--rf-green); } .rf-pwarn { padding:6px 0; font-weight:700; }
 		.rf-legend i.bill { background:var(--rf-amber); } .rf-legend i.reserved { background:var(--rf-purple); }
 		.rf-orow { all:unset; box-sizing:border-box; cursor:pointer; display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-bottom:1px solid var(--rf-line2); }
 		.rf-orow1, .rf-orow2 { display:flex; align-items:center; gap:8px; }
