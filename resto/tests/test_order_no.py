@@ -52,6 +52,14 @@ class TestOrderNo(IntegrationTestCase):
 		floor.send_to_kitchen(order)
 		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1, "notes": "second"}]))
 		floor.send_to_kitchen(order)
+
+		# The kitchen screen shows the addition with the order's number (before the void below
+		# cancels that ticket, its only dish, and takes it off the board).
+		second = tickets_of(order)[1].name
+		shown = {t["name"]: t for t in kitchen.get_tickets()}
+		self.assertEqual(shown[second]["order_no"], no)
+		self.assertEqual(shown[second]["send_round"], 2)
+
 		line = next(d for d in frappe.get_doc("Resto Order", order).items if d.notes == "second")
 		floor.void_line(order, line.name, "Changed mind")
 
@@ -60,11 +68,7 @@ class TestOrderNo(IntegrationTestCase):
 		self.assertEqual({t.order_no for t in tickets}, {no})
 		self.assertEqual([t.send_round for t in tickets], [1, 2, 0])  # an Int column: none is 0
 		self.assertEqual(frappe.db.get_value("Resto Order", order, "send_rounds"), 2)
-
-		# The kitchen screen gets them too.
-		shown = {t["name"]: t for t in kitchen.get_tickets()}
-		self.assertEqual(shown[tickets[1].name]["order_no"], no)
-		self.assertEqual(shown[tickets[1].name]["send_round"], 2)
+		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", second, "status"), "Cancelled")
 
 	def test_the_next_order_gets_the_next_number(self):
 		first = frappe.db.get_value("Resto Order", self.order(), "order_no")
