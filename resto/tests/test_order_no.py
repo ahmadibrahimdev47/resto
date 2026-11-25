@@ -87,3 +87,48 @@ class TestOrderNo(IntegrationTestCase):
 			morning = datetime.datetime(2030, 3, 10, 6, 0)
 			self.assertEqual(kitchen.business_day_start(night), datetime.datetime(2030, 3, 9, 6, 0))
 			self.assertEqual(kitchen.business_day_start(morning), morning)
+
+
+class TestDayTickets(IntegrationTestCase):
+	"""The kitchen screen's Today's Tickets: found by the order's number or the table, brought back."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+
+	def setUp(self):
+		frappe.set_user("Administrator")
+		self._shift = frappe.db.get_single_value("Resto Settings", "require_pos_shift")
+		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+
+	def tearDown(self):
+		frappe.db.set_single_value("Resto Settings", "require_pos_shift", self._shift)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+
+	def test_found_by_number_filtered_by_status_and_brought_back(self):
+		order = floor.create_order(order_type="Takeaway", customer_name="Day Guest")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
+		floor.send_to_kitchen(order)
+		no = frappe.db.get_value("Resto Order", order, "order_no")
+		ticket = frappe.get_all("Resto Kitchen Ticket", filters={"resto_order": order}, pluck="name")[0]
+		kitchen.set_ticket_status(ticket, "Served")
+
+		found = kitchen.kds_day_tickets(search=str(no))["tickets"]
+		self.assertIn(ticket, [t.name for t in found])
+		self.assertEqual(next(t for t in found if t.name == ticket).dishes, ["1 × " + frappe.db.get_value("Item", "DISH-FRIES", "item_name")])
+		self.assertNotIn(ticket, [t.name for t in kitchen.kds_day_tickets(search=str(no), status="New")["tickets"]])
+
+		kitchen.kds_set_status(ticket, "New")
+		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", ticket, "status"), "New")
+		self.assertIn(ticket, [t["name"] for t in kitchen.get_tickets()])
+
+	def test_only_the_business_day(self):
+		order = floor.create_order(order_type="Takeaway", customer_name="Day Guest")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
+		floor.send_to_kitchen(order)
+		ticket = frappe.get_all("Resto Kitchen Ticket", filters={"resto_order": order}, pluck="name")[0]
+		frappe.db.set_value("Resto Kitchen Ticket", ticket, "sent_at", add_to_date(now_datetime(), days=-2))
+		no = frappe.db.get_value("Resto Order", order, "order_no")
+		self.assertNotIn(ticket, [t.name for t in kitchen.kds_day_tickets(search=str(no))["tickets"]])

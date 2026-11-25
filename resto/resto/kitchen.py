@@ -498,17 +498,18 @@ def kds_set_status(ticket, status):
 
 
 @frappe.whitelist(methods=["POST"])
-def kds_print(ticket):
+def kds_print(ticket, copy=0):
 	"""The Print button of a ticket, whatever the station's printing method: on the station's network
 	printer, or the pages for the browser to print (one per copy). A ticket printed before is marked
-	as a reprint, so the kitchen does not make it twice."""
+	as a reprint, so the kitchen does not make it twice; so is one printed from Today's Tickets (copy).
+	"""
 	require_role(KITCHEN, WAITER, CASHIER)
 	station = _ticket_station(ticket)
 	# Locked: a press on another device, or a screen printing automatically, waits and then sees a reprint.
 	printed, claimed = frappe.db.get_value(
 		"Resto Kitchen Ticket", ticket, ["printed", "print_claimed_at"], for_update=True
 	) or (0, None)
-	reprint = 1 if (cint(printed) or claimed) else 0
+	reprint = 1 if (cint(copy) or cint(printed) or claimed) else 0
 	if (station.print_method or BROWSER_BUTTON) == SERVER_PRINTER and station.printer:
 		frappe.enqueue(
 			"resto.resto.kitchen.print_ticket", ticket=ticket, reprint=reprint, queue="short", enqueue_after_commit=True
@@ -518,6 +519,56 @@ def kds_print(ticket):
 		result = {"pages": ticket_pages(ticket, station, reprint=reprint)}
 	frappe.db.set_value("Resto Kitchen Ticket", ticket, "print_claimed_at", now_datetime(), update_modified=False)
 	return result
+
+
+DAY_PAGE = 30
+
+
+@frappe.whitelist()
+def kds_day_tickets(station=None, search=None, status=None, start=0):
+	"""Today's tickets (the business day) of a station, or of all, newest first and a page at a time,
+	for the kitchen screen's "Today's Tickets": found by the order's number or the table, to print a
+	copy or bring back to the board."""
+	require_role(KITCHEN, WAITER, CASHIER)
+	filters = {"sent_at": (">=", business_day_start(now_datetime()))}
+	if station:
+		filters["station"] = station
+	if status in TICKET_STATUSES:
+		filters["status"] = status
+	or_filters = None
+	search = (search or "").strip().lstrip("#")
+	if search:
+		or_filters = {"resto_table": search}
+		if search.isdigit():
+			or_filters["order_no"] = cint(search)
+	tickets = frappe.get_all(
+		"Resto Kitchen Ticket",
+		filters=filters,
+		or_filters=or_filters,
+		fields=[
+			"name", "resto_order", "order_type", "resto_table", "station", "ticket_type", "status", "sent_at",
+			"served_at", "printed", "daily_no", "order_no", "send_round",
+		],
+		order_by="sent_at desc, name desc",
+		start=cint(start),
+		page_length=DAY_PAGE + 1,
+	)
+	more = len(tickets) > DAY_PAGE
+	tickets = tickets[:DAY_PAGE]
+	items = {}
+	if tickets:
+		for d in frappe.get_all(
+			"Resto Kitchen Ticket Item",
+			filters={"parent": ("in", [t.name for t in tickets]), "parenttype": "Resto Kitchen Ticket"},
+			fields=["parent", "item_name", "qty", "voided"],
+			order_by="idx asc",
+		):
+			items.setdefault(d.parent, []).append(f"{flt(d.qty):g} × {d.item_name}" + (f" ({_('VOID')})" if d.voided else ""))
+	for t in tickets:
+		t["table"] = t.pop("resto_table")
+		t["order"] = t.pop("resto_order")
+		t["dishes"] = items.get(t.name, [])
+	return {"tickets": tickets, "more": more}
 
 
 @frappe.whitelist(methods=["POST"])

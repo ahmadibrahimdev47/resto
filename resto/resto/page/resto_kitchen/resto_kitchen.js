@@ -40,6 +40,7 @@ class RestoKitchen {
 			this.$autoprint = this.page.add_inner_button(__("Auto Printing: Off"), () => this.toggle_autoprint());
 			this.show_autoprint();
 		}
+		this.page.add_inner_button(__("Today's Tickets"), () => this.day_tickets());
 		this.page.add_inner_button(__("Full Screen"), () => document.documentElement.requestFullscreen && document.documentElement.requestFullscreen());
 		this.station_field = this.page.add_field({
 			fieldname: "station",
@@ -212,24 +213,108 @@ class RestoKitchen {
 			const t = (this.tickets || []).find((x) => x.name === name);
 			if (t) this.post_waste(t);
 		});
-		this.$board.find("[data-print]").on("click", async (e) => {
+		this.$board.find("[data-print]").on("click", (e) => {
 			const btn = $(e.currentTarget);
-			if (btn.prop("disabled")) return;
-			btn.prop("disabled", true);
-			const name = btn.closest(".rk-ticket").attr("data-name");
-			try {
-				const res = (await frappe.xcall("resto.resto.kitchen.kds_print", { ticket: name })) || {};
-				if (res.server) return frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
-				resto.print_window_seen = resto.print_slow = false;
-				if (!(await resto.print_pages(res.pages || []))) return;
-				const confirm = () => frappe.xcall("resto.resto.kitchen.kds_printed", { ticket: name }).then(() => this.refresh());
-				// A print window can be cancelled: only the cook knows whether the paper came out.
-				if (resto.print_slow || resto.print_window_seen) frappe.confirm(__("Did the ticket come out of the printer?"), confirm);
-				else confirm();
-			} finally {
-				btn.prop("disabled", false);
-			}
+			this.print_ticket(btn.closest(".rk-ticket").attr("data-name"), 0, btn);
 		});
+	}
+
+	// A ticket printed on the station's printer, or by this browser. copy: marked as a copy (Today's
+	// Tickets), as a ticket printed before always is.
+	async print_ticket(name, copy, btn) {
+		if (btn && btn.prop("disabled")) return;
+		if (btn) btn.prop("disabled", true);
+		try {
+			const res = (await frappe.xcall("resto.resto.kitchen.kds_print", { ticket: name, copy: copy ? 1 : 0 })) || {};
+			if (res.server) return frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
+			resto.print_window_seen = resto.print_slow = false;
+			if (!(await resto.print_pages(res.pages || []))) return;
+			const confirm = () => frappe.xcall("resto.resto.kitchen.kds_printed", { ticket: name }).then(() => this.refresh());
+			// A print window can be cancelled: only the cook knows whether the paper came out.
+			if (resto.print_slow || resto.print_window_seen) frappe.confirm(__("Did the ticket come out of the printer?"), confirm);
+			else confirm();
+		} finally {
+			if (btn) btn.prop("disabled", false);
+		}
+	}
+
+	// Today's Tickets: every ticket of the business day of the station shown (or all), newest first,
+	// found by the order's number or the table; a copy printed, or brought back to the board.
+	day_tickets() {
+		const esc = frappe.utils.escape_html;
+		const statuses = ["New", "In Progress", "Ready", "Served", "Cancelled"];
+		const d = new frappe.ui.Dialog({
+			title: __("Today's Tickets"),
+			size: "large",
+			fields: [
+				{ fieldname: "search", fieldtype: "Data", label: __("Order No. or Table"), change: () => load(true) },
+				{ fieldtype: "Column Break" },
+				{
+					fieldname: "status",
+					fieldtype: "Select",
+					label: __("Status"),
+					options: [{ value: "", label: __("All") }, ...statuses.map((v) => ({ value: v, label: __(v, null, "Resto") }))],
+					change: () => load(true),
+				},
+				{ fieldtype: "Section Break" },
+				{ fieldname: "list", fieldtype: "HTML" },
+			],
+		});
+		const $list = d.fields_dict.list.$wrapper;
+		let rows = [];
+		let seq = 0;
+		const draw = (more) => {
+			if (!rows.length) return $list.html(`<div class="rk-empty">${__("No tickets")}</div>`);
+			$list.html(
+				`<div class="rk-day">${rows
+					.map((t) => {
+						const where = t.table ? __("Table {0}", [esc(t.table)], "Resto") : `${__(t.order_type, null, "Resto")} · ${esc(t.order || "")}`;
+						const back = !["New", "Cancelled"].includes(t.status);
+						return `<div class="rk-dayrow s-${t.status.replace(/ /g, "")}" data-name="${esc(t.name)}">
+							<div class="rk-daymain"><b>${this.number(t)}${where}</b>
+								<div class="rk-sub">${t.ticket_type === "Void" ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${__(t.status, null, "Resto")} · ${esc(frappe.datetime.str_to_user(t.sent_at).split(" ").pop() || "")}</div>
+								<div class="rk-daydish">${esc((t.dishes || []).join("، "))}</div></div>
+							<div class="rk-dayact"><button class="btn btn-default btn-sm" data-dprint>${__("Print", null, "Resto")}</button>
+								${back ? `<button class="btn btn-default btn-sm" data-dback>${__("Recall")}</button>` : ""}</div>
+						</div>`;
+					})
+					.join("")}</div>${more ? `<div class="text-center"><button class="btn btn-default btn-sm" data-dmore>${__("More")}</button></div>` : ""}`
+			);
+			$list.find("[data-dprint]").on("click", (e) => {
+				const btn = $(e.currentTarget);
+				this.print_ticket(btn.closest(".rk-dayrow").attr("data-name"), 1, btn);
+			});
+			$list.find("[data-dback]").on("click", (e) => {
+				const btn = $(e.currentTarget).prop("disabled", true);
+				frappe
+					.xcall("resto.resto.kitchen.kds_set_status", { ticket: btn.closest(".rk-dayrow").attr("data-name"), status: "New" })
+					.then(() => {
+						frappe.show_alert({ message: __("Back on the board"), indicator: "green" });
+						this.refresh();
+						load(true);
+					})
+					.catch(() => btn.prop("disabled", false));
+			});
+			$list.find("[data-dmore]").on("click", () => load(false));
+		};
+		const load = (fresh) => {
+			const mine = ++seq;
+			if (fresh) rows = [];
+			frappe
+				.xcall("resto.resto.kitchen.kds_day_tickets", {
+					station: this.station || null,
+					search: d.get_value("search") || "",
+					status: d.get_value("status") || "",
+					start: rows.length,
+				})
+				.then((r) => {
+					if (mine !== seq) return; // a newer search answered first
+					rows = rows.concat(r.tickets || []);
+					draw(r.more);
+				});
+		};
+		d.show();
+		load(true);
 	}
 
 	show_autoprint() {
@@ -456,6 +541,11 @@ class RestoKitchen {
 		.rk-course { font-size:11px; background:var(--gray-100); border-radius:6px; padding:0 6px; margin-inline-start:4px; }
 		.rk-actions { display:flex; gap:6px; } .rk-saving { opacity:.75; } .rk-round { background:#111; color:#fff; border-radius:6px; padding:0 6px; font-size:13px; } .rk-wait { align-self:center; font-size:13px; color:#555; } .rk-busy { cursor:progress; opacity:.7; }
 		.rk-no { font-size:20px; font-weight:800; }
+		.rk-day { display:flex; flex-direction:column; gap:6px; max-height:60vh; overflow:auto; margin-bottom:8px; }
+		.rk-dayrow { display:flex; gap:10px; align-items:center; justify-content:space-between; border:1px solid var(--gray-300, #ddd); border-inline-start:6px solid var(--gray-400, #bbb); border-radius:8px; padding:8px 10px; }
+		.rk-dayrow.s-New { border-inline-start-color:var(--blue-500, #3182ce); } .rk-dayrow.s-InProgress { border-inline-start-color:var(--orange-500, #dd6b20); }
+		.rk-dayrow.s-Ready { border-inline-start-color:var(--green-500, #38a169); } .rk-dayrow.s-Cancelled { opacity:.6; }
+		.rk-daydish { font-size:13px; } .rk-dayact { display:flex; gap:6px; flex-shrink:0; }
 		.rk-printed { color:var(--green-600, #2f855a); margin-inline-start:4px; }
 		.rk-unprinted { color:var(--red-600, #e53e3e); font-weight:700; margin-inline-start:4px; }
 		.rk-unprinted-muted { color:var(--text-muted, #8d99a6); margin-inline-start:4px; }
