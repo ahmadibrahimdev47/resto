@@ -180,6 +180,7 @@ class RestoFloor {
 			const act = $(e.currentTarget).attr("data-shift");
 			if (act === "open") this.open_shift();
 			else if (act === "expense") this.drawer_expense();
+			else if (act === "debt") this.collect_debt();
 			else this.close_shift();
 		});
 		this.$tabs.find("button[data-hall]").on("click", (e) => {
@@ -420,6 +421,7 @@ class RestoFloor {
 		}
 		if (s.shift) {
 			return `<div class="rf-shift rf-shift-open">✓ ${__("Shift open since {0}", [esc(frappe.datetime.str_to_user(s.since))])}
+				<button class="btn btn-xs btn-default" data-shift="debt">${__("Collect Debt")}</button>
 				<button class="btn btn-xs btn-default" data-shift="expense">${__("Drawer Expense")}</button>
 				<button class="btn btn-xs btn-default" data-shift="close">${__("Close Shift")}</button></div>`;
 		}
@@ -596,6 +598,47 @@ class RestoFloor {
 					frappe.show_alert({ message: __("Expense recorded: {0}", [je]), indicator: "green" });
 				}),
 		});
+		d.show();
+	}
+
+	// A customer pays what they owe (a bill left on account): a Payment Entry against their unpaid
+	// bills, oldest first, counted in this shift's drawer.
+	collect_debt() {
+		const request_id = frappe.utils.get_random(20);
+		let debt = null;
+		const d = new frappe.ui.Dialog({
+			title: __("Collect Debt"),
+			fields: [
+				{ fieldname: "customer", fieldtype: "Link", options: "Customer", label: __("Customer"), reqd: 1, onchange: () => load() },
+				{ fieldname: "owed", fieldtype: "HTML" },
+				{ fieldname: "amount", fieldtype: "Currency", label: __("Amount Paid"), reqd: 1 },
+				{ fieldname: "mode_of_payment", fieldtype: "Select", label: __("Mode of Payment"), reqd: 1 },
+			],
+			primary_action_label: __("Collect"),
+			primary_action: (v) =>
+				this.shift_busy(d, async () => {
+					const pe = await frappe.xcall("resto.resto.shift.collect_debt", { ...v, request_id });
+					d.hide();
+					frappe.show_alert({ message: __("Payment recorded: {0}", [pe]), indicator: "green" });
+				}),
+		});
+		const load = async () => {
+			const customer = d.get_value("customer");
+			if (!customer) return d.fields_dict.owed.$wrapper.html("");
+			debt = await frappe.xcall("resto.resto.shift.customer_debt", { customer });
+			if (customer !== d.get_value("customer")) return; // changed meanwhile
+			d.set_df_property("mode_of_payment", "options", debt.modes.join("\n"));
+			if (!d.get_value("mode_of_payment")) d.set_value("mode_of_payment", debt.modes[0]);
+			d.fields_dict.owed.$wrapper.html(
+				debt.total > 0.005
+					? `<p><b>${__("Owes {0}", [money(debt.total)])}</b></p>
+						<table class="table table-condensed">${debt.invoices
+							.map((i) => `<tr><td>${esc(frappe.datetime.str_to_user(i.posting_date))}</td><td>${esc(i.name)}</td><td class="rf-amt">${money(i.outstanding_amount)}</td></tr>`)
+							.join("")}</table>`
+					: `<p class="text-muted">${__("{0} owes nothing", [esc(debt.customer_name || customer)])}</p>`
+			);
+			d.set_value("amount", debt.total > 0.005 ? debt.total : 0);
+		};
 		d.show();
 	}
 

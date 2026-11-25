@@ -565,3 +565,111 @@ def check_cancel(doc, method=None):
 				doc.name, name
 			)
 		)
+
+
+# --------------------------------------------------------------------------- debts collected
+
+
+def _open_debts(customer, company):
+	"""The customer's unpaid bills, oldest first."""
+	return frappe.get_all(
+		"Sales Invoice",
+		filters={"customer": customer, "company": company, "docstatus": 1, "is_return": 0, "outstanding_amount": (">", 0)},
+		fields=["name", "posting_date", "outstanding_amount", "grand_total", "rounded_total"],
+		order_by="posting_date asc, creation asc",
+	)
+
+
+@frappe.whitelist()
+def customer_debt(customer):
+	"""What a customer owes, bill by bill, for the floor's Collect Debt dialog."""
+	require_role(CASHIER)
+	shift = _own_shift()
+	debts = _open_debts(customer, shift.company)
+	return {
+		"customer_name": frappe.db.get_value("Customer", customer, "customer_name"),
+		"total": flt(sum(flt(d.outstanding_amount) for d in debts), ACCOUNTS_PRECISION),
+		"invoices": [{"name": d.name, "posting_date": d.posting_date, "outstanding_amount": flt(d.outstanding_amount)} for d in debts],
+		"modes": [p.mode_of_payment for p in shift.payments],
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def collect_debt(customer, amount, mode_of_payment, request_id=None):
+	"""A customer pays (part of) what they owe to the cashier: a Payment Entry against their unpaid
+	bills, oldest first, linked to the cashier's shift (its drawer holds the money)."""
+	require_role(CASHIER)
+	shift = _own_shift(lock=True)
+	if request_id:
+		done = frappe.db.get_value("Payment Entry", {"resto_shift": shift.name, "reference_no": request_id, "docstatus": 1}, "name")
+		if done:
+			return done
+	amount = flt(amount, ACCOUNTS_PRECISION)
+	if amount <= 0:
+		frappe.throw(_("The amount must be more than zero"))
+	if mode_of_payment not in [p.mode_of_payment for p in shift.payments]:
+		frappe.throw(_("Payment method {0} is not in this shift").format(frappe.bold(mode_of_payment)))
+	# The customer's bills, locked: two collections of the same debt never both go through.
+	debts = _open_debts(customer, shift.company)
+	if debts:
+		frappe.db.sql(
+			"select name from `tabSales Invoice` where name in %s for update", ([d.name for d in debts],)
+		)
+		debts = _open_debts(customer, shift.company)
+	owed = flt(sum(flt(d.outstanding_amount) for d in debts), ACCOUNTS_PRECISION)
+	if amount > owed + 0.005:
+		frappe.throw(_("{0} owes {1} only").format(frappe.db.get_value("Customer", customer, "customer_name"), frappe.format(owed, "Currency")))
+
+	from erpnext.accounts.party import get_party_account
+
+	party_account = get_party_account("Customer", customer, shift.company)
+	cash_account = _mode_account(mode_of_payment, shift.company)
+	acc = lambda name: frappe.db.get_value("Account", name, ["account_currency", "account_type"], as_dict=True)  # noqa: E731
+	frm, to = acc(party_account), acc(cash_account)
+	pe = frappe.new_doc("Payment Entry")
+	pe.update(
+		{
+			"payment_type": "Receive",
+			"company": shift.company,
+			"posting_date": frappe.utils.nowdate(),
+			"mode_of_payment": mode_of_payment,
+			"party_type": "Customer",
+			"party": customer,
+			"party_account": party_account,
+			"paid_from": party_account,
+			# Given here, so ERPNext does not look the accounts up with the desk user's rights.
+			"paid_from_account_currency": frm.account_currency,
+			"paid_from_account_type": frm.account_type,
+			"paid_to": cash_account,
+			"paid_to_account_currency": to.account_currency,
+			"paid_to_account_type": to.account_type,
+			"paid_amount": amount,
+			"received_amount": amount,
+			"source_exchange_rate": 1,
+			"target_exchange_rate": 1,
+			"reference_no": request_id or shift.name,
+			"reference_date": frappe.utils.nowdate(),
+			"remarks": _("Debt collected in shift {0}").format(shift.name),
+			"resto_shift": shift.name,
+		}
+	)
+	left = amount
+	for d in debts:
+		if left <= 0.005:
+			break
+		part = min(left, flt(d.outstanding_amount))
+		pe.append(
+			"references",
+			{
+				"reference_doctype": "Sales Invoice",
+				"reference_name": d.name,
+				"total_amount": flt(d.rounded_total or d.grand_total),
+				"outstanding_amount": flt(d.outstanding_amount),
+				"allocated_amount": flt(part, ACCOUNTS_PRECISION),
+			},
+		)
+		left -= part
+	pe.flags.ignore_permissions = True
+	pe.insert()
+	pe.submit()
+	return pe.name

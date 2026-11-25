@@ -210,34 +210,35 @@ class TestFloorShift(IntegrationTestCase):
 		)
 
 	def test_a_debt_paid_to_the_cashier_is_in_the_drawer(self):
-		name = shift.open_shift(json.dumps({"Cash": 0}))
-		customer = frappe.db.get_value("Resto Order", floor.create_order(order_type="Takeaway", customer_name="Debtor", phone=f"0107{random.randint(1000000, 9999999)}", new_customer=1), "customer")
-		cash = frappe.db.get_value("Mode of Payment Account", {"parent": "Cash", "company": fx.COMPANY}, "default_account")
-		from erpnext.accounts.party import get_party_account
+		# A bill left partly on account (by the manager, who gives credit to any named customer).
+		frappe.set_user("Administrator")
+		frappe.db.set_value("POS Profile", fx.PROFILE, "allow_partial_payment", 1)
+		frappe.clear_document_cache("POS Profile", fx.PROFILE)
+		try:
+			order = floor.create_order(
+				order_type="Takeaway", customer_name="Debtor", phone=f"0107{random.randint(1000000, 9999999)}", new_customer=1
+			)
+			floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 2}]))
+			bill = floor.get_bill(order)
+			paid = floor.settle(order, json.dumps([{"mode_of_payment": "Cash", "amount": 10}]), None, bill["payable"], None, 1)
+		finally:
+			frappe.db.set_value("POS Profile", fx.PROFILE, "allow_partial_payment", 0)
+			frappe.clear_document_cache("POS Profile", fx.PROFILE)
+		customer = frappe.db.get_value("Resto Order", order, "customer")
+		owed = flt(bill["payable"]) - 10
 
-		pe = frappe.get_doc(
-			{
-				"doctype": "Payment Entry",
-				"payment_type": "Receive",
-				"company": fx.COMPANY,
-				"party_type": "Customer",
-				"party": customer,
-				"mode_of_payment": "Cash",
-				"paid_from": get_party_account("Customer", customer, fx.COMPANY),
-				"paid_to": cash,
-				"paid_amount": 35,
-				"received_amount": 35,
-				"reference_no": "debt",
-				"reference_date": frappe.utils.nowdate(),
-			}
-		)
-		pe.flags.ignore_permissions = True
-		pe.insert()
-		pe.submit()
-		self.assertEqual(pe.resto_shift, name)
+		# The cashier collects part of it on the floor, in their shift.
+		frappe.set_user(CASHIER)
+		name = shift.open_shift(json.dumps({"Cash": 0}))
+		self.assertAlmostEqual(shift.customer_debt(customer)["total"], owed, 2)
+		self.assertRaises(frappe.ValidationError, shift.collect_debt, customer, owed + 100, "Cash")
+		pe = shift.collect_debt(customer, 5, "Cash", "req-debt")
+		self.assertEqual(shift.collect_debt(customer, 5, "Cash", "req-debt"), pe)  # a retried click
+		self.assertEqual(frappe.db.get_value("Payment Entry", pe, ["resto_shift", "docstatus"]), (name, 1))
+		self.assertAlmostEqual(flt(frappe.db.get_value("Sales Invoice", paid["sales_invoice"], "outstanding_amount")), owed - 5, 2)
 		data = shift.closing_data()
-		self.assertAlmostEqual(next(r for r in data["rows"] if r["mode_of_payment"] == "Cash")["expected_amount"], 35, 2)
-		self.assertAlmostEqual(data["summary"]["debts_total"], 35, 2)
+		self.assertAlmostEqual(next(r for r in data["rows"] if r["mode_of_payment"] == "Cash")["expected_amount"], 5, 2)
+		self.assertAlmostEqual(data["summary"]["debts_total"], 5, 2)
 
 	def test_a_negative_opening_is_refused(self):
 		self.assertRaises(frappe.ValidationError, shift.open_shift, json.dumps({"Cash": -5}))
