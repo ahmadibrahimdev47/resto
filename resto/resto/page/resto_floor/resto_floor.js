@@ -109,6 +109,7 @@ const money = (v) => format_currency(v || 0);
 const svg = (d, fill) =>
 	`<svg viewBox="0 0 24 24" fill="${fill ? "currentColor" : "none"}" stroke="${fill ? "none" : "currentColor"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const ICON = {
+	lock: svg('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
 	bell: svg('<path d="M4 15h16"/><path d="M6 15a6 6 0 0 1 12 0"/><path d="M12 7V5"/><path d="M3 19h18"/>'),
 	clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
 	wifi: svg('<path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/>'),
@@ -189,6 +190,36 @@ class RestoFloor {
 		});
 		$(window).on("offline", () => this.set_offline(true));
 		if (outbox().length) this.drain();
+		this._last_act = Date.now();
+		// A touch on any tab of this browser counts: a floor tab left behind never locks the one in use.
+		const act = () => {
+			const now = Date.now();
+			this._last_act = now;
+			if (now - (this._act_saved || 0) < 5000) return;
+			this._act_saved = now;
+			try {
+				localStorage.setItem(`resto_floor_active|${frappe.session.user}`, String(now));
+			} catch (e) {
+				// this tab's own time only
+			}
+		};
+		["pointerdown", "keydown", "wheel", "touchstart"].forEach((t) => window.addEventListener(t, act, { capture: true, passive: true }));
+		// Locked, opened or signed out in another tab of this browser: the same here. A lock waits
+		// for a payment open here to finish (the clock shows it then).
+		window.addEventListener("storage", (e) => {
+			if (e.key !== this.lock_key()) return;
+			if (e.newValue === "out") window.location.href = "/login";
+			else if (this.lock_stored()) !this._paying && !this._settling && this.show_lock();
+			else if (this._locked && !e.newValue) this.unlock_done();
+		});
+		if (this.lock_stored()) this.show_lock();
+		else {
+			try {
+				localStorage.removeItem(this.lock_key()); // left by a session that ended
+			} catch (e) {
+				// nothing kept
+			}
+		}
 	}
 
 	make() {
@@ -213,10 +244,10 @@ class RestoFloor {
 		this.$body = $b.find(".rf-body");
 		this.$side = $b.find(".rf-side");
 		this.$order = $b.find(".rf-order");
-		this._clock = setInterval(() => this.tick(), 20000);
+		this._clock = setInterval(() => this.tick(), 15000);
 		// F4: the menu search (a barcode scanner types into it too).
 		$(document).on("keydown.resto_floor", (e) => {
-			if (e.key !== "F4" || !this.$order.is(":visible")) return;
+			if (e.key !== "F4" || this._locked || !this.$order.is(":visible")) return;
 			e.preventDefault();
 			this.$order.find(".rf-search").trigger("focus").select();
 		});
@@ -250,6 +281,7 @@ class RestoFloor {
 			this.$head.find("[data-shift]").on("click", (e) => this.shift_click($(e.currentTarget).attr("data-shift")));
 		});
 		this.tick();
+		if (this._locked) $(".rf-lock .rf-lock-brand").text(f.brand || "");
 	}
 
 	net_pill() {
@@ -271,6 +303,21 @@ class RestoFloor {
 		$(this.page.body).find(".rf-clock-t").text(text);
 		const s = this.floor && this.floor.shift;
 		if (s && s.shift && s.since) $(this.page.body).find(".rf-shift-t").text(__("Shift open for {0}", [dur(minutes_since(s.since))]));
+		// Left untouched (Resto Settings "Lock the Floor Screen After"): it locks itself. Not in the
+		// middle of a payment, and not while it could not be opened again (offline: the PIN is checked
+		// on the server) or while changes wait to be sent.
+		if (!this._locked && !this._paying && !this._settling && this.lock_stored()) return this.show_lock();
+		const m = this.floor && this.floor.screen_lock && cint(this.floor.lock_after_minutes);
+		let last = this._last_act;
+		try {
+			last = Math.max(last, cint(localStorage.getItem(`resto_floor_active|${frappe.session.user}`)));
+		} catch (e) {
+			// this tab's own time only
+		}
+		const idle = Date.now() - last > m * 60000;
+		if (m && idle && this.floor.has_pin && !this._locked && !this._settling && !this._paying && !this.offline && !outbox().length && $(this.wrapper).is(":visible")) {
+			this.lock();
+		}
 	}
 
 	schedule_refresh() {
@@ -295,6 +342,8 @@ class RestoFloor {
 			return;
 		}
 		if (this.offline) this.set_offline(false);
+		// The lock turned off in Resto Settings: a screen locked before opens.
+		if (this._locked && !this.floor.screen_lock) this.unlock_done();
 		if (outbox().length) this.drain();
 		this.render_floor();
 		if (this.order) this.reload_lines(this.order.name).catch(() => {});
@@ -336,11 +385,18 @@ class RestoFloor {
 	}
 
 	// A manager's PIN for approvals on a waiter's or cashier's screen (D-204).
-	set_my_pin() {
+	set_my_pin(then_lock) {
+		const manager = this.floor && this.floor.roles.manager;
+		const help = [
+			manager
+				? __("Typed on a waiter's or cashier's screen to approve a void after sending, a cancel, a discount above the limit, or a bill on account. 4 to 8 digits; keep it to yourself.")
+				: __("4 to 8 digits; keep it to yourself."),
+			__("It also opens this screen after it is locked."),
+		];
 		const d = new frappe.ui.Dialog({
-			title: __("My Approval PIN"),
+			title: then_lock ? __("Set Your PIN to Lock the Screen") : manager ? __("My Approval PIN") : __("My PIN"),
 			fields: [
-				{ fieldname: "help", fieldtype: "HTML", options: `<p class="text-muted">${__("Typed on a waiter's or cashier's screen to approve a void after sending, a cancel, a discount above the limit, or a bill on account. 4 to 8 digits; keep it to yourself.")}</p>` },
+				{ fieldname: "help", fieldtype: "HTML", options: `<p class="text-muted">${help.join(" ")}</p>` },
 				{ fieldname: "pin", fieldtype: "Password", label: __("New PIN"), reqd: 1 },
 				{ fieldname: "again", fieldtype: "Password", label: __("New PIN Again"), reqd: 1 },
 				{ fieldname: "password", fieldtype: "Password", label: __("Your Login Password"), reqd: 1 },
@@ -351,11 +407,260 @@ class RestoFloor {
 				await frappe.xcall("resto.resto.approval.set_my_pin", { pin: v.pin, password: v.password });
 				d.hide();
 				frappe.show_alert({ message: __("Your PIN is saved"), indicator: "green" });
+				if (this.floor) this.floor.has_pin = 1;
+				if (then_lock) this.lock();
 			},
 		});
 		d.show();
 		d.$wrapper.find("input[data-fieldname=pin], input[data-fieldname=again]").attr({ autocomplete: "new-password", inputmode: "numeric" });
 		d.$wrapper.find("input[data-fieldname=password]").attr({ autocomplete: "current-password" });
+	}
+
+	// ------------------------------------------------------------------ lock screen (D-216)
+
+	// The screen covers the page (and any window open on it) until its user types their own PIN,
+	// checked on the server. A curtain for a shared counter: the session stays signed in under it.
+	// Switch User signs out, and the next person signs in with their password.
+	lock_key() {
+		return `resto_floor_locked|${frappe.session.user}`;
+	}
+
+	// Kept with this session's token: a new sign-in (the password typed) is not asked for the PIN.
+	lock_stored() {
+		try {
+			return !!frappe.csrf_token && localStorage.getItem(this.lock_key()) === frappe.csrf_token;
+		} catch (e) {
+			return false;
+		}
+	}
+
+	async lock() {
+		if (this._locked || !this.floor || !this.floor.screen_lock) return;
+		if (!this.floor.has_pin) return this.set_my_pin(true);
+		if (this.offline || navigator.onLine === false) {
+			return frappe.msgprint(__("Not connected: the screen locks when the connection is back (its PIN is checked on the server)."));
+		}
+		if (!(await this.settled()) || this._locked) return;
+		try {
+			localStorage.setItem(this.lock_key(), frappe.csrf_token || "1"); // a reload keeps it locked
+		} catch (e) {
+			// private window: locked until a reload
+		}
+		this.show_lock();
+	}
+
+	show_lock() {
+		if (this._locked) return;
+		this._locked = true;
+		this._lock_focus = document.activeElement;
+		$(".resto-lock-hold").remove(); // the desk's cover while the floor loaded
+		this.flush_taps();
+		const f = this.floor || {};
+		const name = f.user_name || frappe.session.user_fullname || frappe.session.user;
+		let pin = "";
+		let busy = false;
+		let last_key = 0;
+		let burst = false;
+		let stamps = []; // when each digit came in
+		const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "back"];
+		const $l = $(`<div class="rf-root rf-lock" role="dialog" aria-modal="true" aria-label="${__("The screen is locked")}">
+			<div class="rf-lockbox">
+				<div class="rf-lockico">${ICON.lock}</div>
+				<b class="rf-lock-brand">${esc(f.brand || "")}</b>
+				<div class="rf-lock-user"><span class="rf-av">${esc((name || "?").trim().charAt(0))}</span><b>${esc(name)}</b></div>
+				<p class="rf-muted">${__("The screen is locked. Type your PIN to open it.")}</p>
+				<div class="rf-dots" dir="ltr"></div>
+				<p class="rf-lock-msg"></p>
+				<div class="rf-lockkeys">${keys
+					.map((k) => `<button class="rf-k" data-k="${k}">${k === "back" ? "⌫" : k === "clear" ? __("Clear") : k}</button>`)
+					.join("")}</div>
+				<button class="rf-btn rf-btn-p rf-lg rf-lock-open" data-l="open">${__("Open", null, "Resto Lock")}</button>
+				<button class="rf-btn rf-lock-sw" data-l="switch">${__("Switch User")}</button>
+			</div></div>`).appendTo(document.body);
+		// Everything else on the page is out of reach (clicks, focus, screen readers, find in page).
+		$(document.body)
+			.children()
+			.not($l)
+			.each((_, el) => {
+				if (!el.inert) {
+					el.inert = true;
+					el.setAttribute("data-rf-inert", "1");
+				}
+			});
+		const draw = () => {
+			$l.find(".rf-dots").html(Array.from({ length: Math.max(pin.length, 4) }, (_, i) => `<i class="${i < pin.length ? "on" : ""}"></i>`).join(""));
+			$l.find(".rf-lock-open").prop("disabled", busy || pin.length < 4);
+			$l.find(".rf-k, .rf-lock-sw").prop("disabled", busy);
+		};
+		const say = (msg) => $l.find(".rf-lock-msg").text(msg || "");
+		const leave = async (forced) => {
+			busy = true;
+			draw();
+			// Signed out on the server already (a locked PIN): the changes kept stay on this device for
+			// this user's next sign-in, never sent without a session.
+			const gone = await this.sign_out(say, forced);
+			if (!gone) {
+				busy = false;
+				draw();
+			}
+		};
+		const open = async () => {
+			if (busy || pin.length < 4) return;
+			stamps = [];
+			busy = true;
+			draw();
+			say(__("Checking…"));
+			let r;
+			try {
+				r = await Promise.race([
+					frappe.xcall("resto.resto.approval.unlock", { pin }),
+					new Promise((_, no) => setTimeout(() => no({ timeout: true }), 15000)),
+				]);
+			} catch (e) {
+				busy = false;
+				pin = "";
+				draw();
+				return say(
+					navigator.onLine === false || (e && e.timeout)
+						? __("The PIN is checked on the server: try again when connected.")
+						: __("The PIN could not be checked. Try again, or Switch User.")
+				);
+			}
+			if (!r) {
+				busy = false;
+				pin = "";
+				draw();
+				return say(__("The PIN could not be checked. Try again, or Switch User."));
+			}
+			if (r.ok) return this.unlock_done();
+			pin = "";
+			if (r.logout) {
+				say(r.message);
+				return setTimeout(() => leave(true), 1500);
+			}
+			busy = false;
+			draw();
+			say(r.message);
+		};
+		const key = (k) => {
+			if (busy) return;
+			if (k === "back") {
+				pin = pin.slice(0, -1);
+				stamps.pop();
+			} else if (k === "clear") {
+				pin = "";
+				stamps = [];
+			} else if (/^[0-9]$/.test(k) && pin.length < 8) {
+				pin += k;
+				stamps.push(Date.now());
+			} else return;
+			say("");
+			draw();
+		};
+		$l.on("click", "[data-k]", (e) => key($(e.currentTarget).attr("data-k")));
+		$l.on("click", "[data-l=open]", open);
+		$l.on("click", "[data-l=switch]", () => !busy && leave(false));
+		// The keyboard is the lock's while it is shown: nothing reaches the page or a window under it.
+		// Caught first, on the window, wherever the focus is. A barcode scan (keys a few ms apart) is
+		// not a PIN: it is dropped, and its Enter never spends a try.
+		this._lock_capture = (e) => {
+			if (!this._locked) return;
+			e.stopPropagation();
+			e.preventDefault();
+			const now = Date.now();
+			if (now - last_key > 300) burst = false; // a pause: a person again (a scan with no Enter)
+			else if (now - last_key < 30 && !burst) {
+				burst = true;
+				pin = ""; // the scan's first key came in as a digit
+				stamps = [];
+				say("");
+				draw();
+			}
+			last_key = now;
+			const k = String(e.key || "")
+				.replace(/[٠-٩]/g, (c) => String(c.charCodeAt(0) - 0x660))
+				.replace(/[۰-۹]/g, (c) => String(c.charCodeAt(0) - 0x6f0));
+			if (burst) {
+				if (k === "Enter") {
+					burst = false;
+					pin = "";
+					draw();
+				}
+				return;
+			}
+			// A slower scanner: a whole entry under 50 ms a key is not typed by a person.
+			if (k === "Enter" && stamps.length >= 4 && (stamps[stamps.length - 1] - stamps[0]) / (stamps.length - 1) < 50) key("clear");
+			else if (k === "Enter") open();
+			else if (k === "Backspace") key("back");
+			else if (k === "Escape") key("clear");
+			else key(k);
+		};
+		window.addEventListener("keydown", this._lock_capture, true);
+		draw();
+		$l.find(".rf-lockbox").attr("tabindex", -1).trigger("focus");
+	}
+
+	unlock_done() {
+		this._locked = false;
+		this._last_act = Date.now();
+		try {
+			localStorage.removeItem(this.lock_key());
+		} catch (e) {
+			// nothing kept
+		}
+		if (this._lock_capture) window.removeEventListener("keydown", this._lock_capture, true);
+		this._lock_capture = null;
+		$("[data-rf-inert]").each((_, el) => {
+			el.inert = false;
+			el.removeAttribute("data-rf-inert");
+		});
+		$(".rf-lock, .resto-lock-hold").remove();
+		// Back where the cashier was (the payment keypad, the menu search, a scanner's field).
+		const back = this._lock_focus;
+		this._lock_focus = null;
+		if (back && document.contains(back) && back.focus) back.focus();
+	}
+
+	// Signs out (Switch User, Log out, a locked PIN). The session ends on the server first, and the
+	// browser then leaves for the login page; until then nothing of the floor is open. Changes not sent
+	// yet go first (the kitchen and the bill never miss them); while they cannot be sent it waits.
+	// forced: the server ended the session already, so nothing more is sent. true: it signed out.
+	// A failure keeps everything as it was, with a message.
+	async sign_out(say, forced) {
+		if (this._signing_out) return false;
+		this._signing_out = true;
+		try {
+			if (!forced) {
+				await this.flush_taps();
+				await this.drain();
+				const n = outbox().length;
+				if (n) {
+					say(__("{0} change(s) are not sent yet: sign out when the connection is back.", [n]));
+					return false;
+				}
+				// Until the server answers, the session is alive: the curtain stays (a login page
+				// opened now would send the browser back into the floor, unlocked).
+				try {
+					await Promise.race([frappe.xcall("logout"), new Promise((_, no) => setTimeout(() => no({ timeout: true }), 15000))]);
+				} catch (e) {
+					say(
+						navigator.onLine === false || (e && e.timeout)
+							? __("Not connected: try again when the connection is back.")
+							: __("Could not sign out. Try again.")
+					);
+					return false;
+				}
+			}
+			try {
+				localStorage.setItem(this.lock_key(), "out"); // the other tabs go to the login page too
+			} catch (e) {
+				// this tab only
+			}
+			window.location.href = "/login";
+			return true;
+		} finally {
+			this._signing_out = false;
+		}
 	}
 
 	async print_receipt(sales_invoice, mode) {
@@ -956,7 +1261,10 @@ class RestoFloor {
 				acts.push([__("Collect Debt"), () => this.collect_debt()], [__("Drawer Expense"), () => this.drawer_expense()]);
 			}
 		}
+		// The lock screen only when Resto Settings turns it on (D-216); a manager's approval PIN always.
+		if (f.screen_lock) acts.push([`${ICON.lock}<span>${__("Lock Screen")}</span>`, () => this.lock()]);
 		if (r.manager) acts.push([__("My Approval PIN"), () => this.set_my_pin()]);
+		else if (f.screen_lock) acts.push([__("My PIN"), () => this.set_my_pin()]);
 		acts.push([__("Kitchen Display"), () => frappe.set_route("resto-kitchen")]);
 		if (r.cashier || r.manager) {
 			acts.push(s.shift ? [__("Close Shift"), () => this.close_shift()] : [__("Open Shift"), () => this.open_shift()]);
@@ -966,7 +1274,7 @@ class RestoFloor {
 			() =>
 				frappe.confirm(__("Log out of this device?"), async () => {
 					if (this.order && !(await this.settled())) return;
-					frappe.app.logout();
+					this.sign_out((msg) => frappe.msgprint(msg));
 				}),
 		]);
 		this.menu_dialog(`${esc(f.user_name)}${this.role_label() ? ` · ${esc(this.role_label())}` : ""}`, acts);
@@ -2534,6 +2842,8 @@ class RestoFloor {
 			e.preventDefault();
 		});
 		draw();
+		this._paying = true;
+		d.$wrapper.on("hidden.bs.modal", () => (this._paying = false));
 		d.show();
 		setTimeout(() => d.$wrapper.find(".modal-content").attr("tabindex", -1).trigger("focus"), 200);
 	}
@@ -2720,6 +3030,21 @@ class RestoFloor {
 		.rf-olist { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:12px; }
 		.rf-olist .rf-orow { background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; }
 		.rf-root.rf-mdlg { min-height:0; background:transparent; }
+		.rf-root.rf-lock { position:fixed; top:0; right:0; bottom:0; left:0; z-index:2147483000; min-height:0; display:flex; align-items:center; justify-content:center; padding:16px;
+			background:var(--rf-bg); overflow:auto; }
+		.rf-lockbox { width:min(380px, 100%); display:flex; flex-direction:column; align-items:center; gap:12px; text-align:center; outline:none; }
+		.rf-lockico { width:64px; height:64px; border-radius:20px; background:var(--rf-acc-soft); color:var(--rf-acc); display:flex; align-items:center; justify-content:center; }
+		.rf-lockico svg { width:30px; height:30px; }
+		.rf-lock-brand { font-size:15px; color:var(--rf-muted); }
+		.rf-lock-user { display:flex; align-items:center; gap:10px; font-size:20px; }
+		.rf-lock-user .rf-av { width:44px; height:44px; font-size:18px; }
+		.rf-dots { display:flex; gap:12px; justify-content:center; min-height:20px; }
+		.rf-dots i { width:16px; height:16px; border-radius:50%; border:2px solid var(--rf-ink2); display:inline-block; }
+		.rf-dots i.on { background:var(--rf-ink); border-color:var(--rf-ink); }
+		.rf-lock-msg { min-height:20px; margin:0; color:var(--rf-red-ink); font-weight:700; }
+		.rf-lockkeys { width:100%; display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; }
+		.rf-lockkeys .rf-k { height:60px; font-size:24px; }
+		.rf-lock-open, .rf-lock-sw { width:100%; }
 		.rf-menu-list { display:flex; flex-direction:column; gap:8px; }
 		.rf-menu-btn { width:100%; justify-content:flex-start; min-height:48px; }
 		.rf-menu-btn.rf-danger { color:var(--rf-red-ink); border-color:var(--rf-red-soft); margin-top:8px; }

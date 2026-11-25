@@ -34,6 +34,8 @@
   "charge_extra_sides",
   "column_break_pos",
   "screen_refresh_seconds",
+  "enable_screen_lock",
+  "lock_after_minutes",
   "reservation_hold_minutes",
   "business_day_start_hour",
   "service_section",
@@ -247,6 +249,21 @@
    "description": "Floor and kitchen screens also reload on this interval, in case live updates are off."
   },
   {
+   "default": "0",
+   "fieldname": "enable_screen_lock",
+   "fieldtype": "Check",
+   "label": "Enable Screen Lock",
+   "description": "Floor users can lock their screen and open it with their own PIN. Off: no Lock Screen, no locking by itself, and only managers set a PIN (for approvals)."
+  },
+  {
+   "default": "0",
+   "depends_on": "enable_screen_lock",
+   "fieldname": "lock_after_minutes",
+   "fieldtype": "Int",
+   "label": "Lock the Floor Screen After (Minutes)",
+   "description": "A floor screen left untouched this long locks itself; its user opens it with their own PIN (set from the floor's user menu). 0: it locks only from the user menu."
+  },
+  {
    "default": "30",
    "fieldname": "reservation_hold_minutes",
    "fieldtype": "Int",
@@ -419,7 +436,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-25 10:00:00.000000",
+ "modified": "2026-11-25 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

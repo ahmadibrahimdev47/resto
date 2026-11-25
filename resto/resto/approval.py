@@ -1,4 +1,4 @@
-"""Manager approval on the floor (D-204).
+"""Manager approval on the floor (D-204), and the floor's lock screen (D-216).
 
 A waiter or cashier needs a manager for a few actions: a void after the kitchen got the item, an
 order cancel with sent items, a discount above their limit (Resto Settings), and a bill left on the
@@ -6,6 +6,9 @@ account of a customer without a credit limit. The manager types their PIN on the
 checked inside the action's own call, so the approval is for that action and that amount only and is
 spent with it. Every approval and every wrong PIN is logged (Resto Approval Log). Five tries without
 the right PIN lock the manager's PIN for 15 minutes.
+
+Every floor user (waiter, cashier, host, manager) may set their own PIN the same way, to unlock the
+floor screen they locked (unlock). A manager's one PIN does both; only a manager's PIN approves.
 
 The tries are counted in Redis, before the PIN is checked: the count never depends on the failed
 request's database work (which is rolled back), and requests sent at the same moment all count.
@@ -20,7 +23,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, now_datetime
 
-from resto.resto.utils import CASHIER, MANAGER, WAITER, has_role, require_role
+from resto.resto.utils import CASHIER, HOST, MANAGER, WAITER, has_role, require_role
 
 MAX_TRIES = 5
 LOCK_MINUTES = 15
@@ -70,34 +73,38 @@ def is_approver(user):
 # --------------------------------------------------------------------------- tries (Redis)
 
 
-def _tries_key(user):
-	return frappe.cache.make_key(f"resto_pin_tries|{user}")
+# Approvals and the lock screen count their tries apart (kind): wrong tries at a locked screen never
+# block a manager's approvals, and a waiter mistyping the manager's PIN never locks the manager out.
+def _tries_key(user, kind="approve"):
+	return frappe.cache.make_key(f"resto_pin_tries|{user}" if kind == "approve" else f"resto_pin_tries|{kind}|{user}")
 
 
-def _lock_key(user):
-	return f"resto_pin_locked|{user}"
+def _lock_key(user, kind="approve"):
+	return f"resto_pin_locked|{user}" if kind == "approve" else f"resto_pin_locked|{kind}|{user}"
 
 
-def locked_until(user):
-	return frappe.cache.get_value(_lock_key(user))
+def locked_until(user, kind="approve"):
+	return frappe.cache.get_value(_lock_key(user, kind), expires=True)
 
 
-def _take_try(user):
-	"""Count one try before the PIN is checked; the fifth without the right PIN locks it."""
-	key = _tries_key(user)
+def _take_try(user, kind="approve"):
+	"""Count one try before the PIN is checked; the fifth without the right PIN locks it. The count
+	stays with the lock (it expires with it): requests sent at the same moment never start again at 1."""
+	key = _tries_key(user, kind)
 	tries = cint(frappe.cache.incr(key))
 	frappe.cache.expire(key, LOCK_MINUTES * 60)
 	if tries > MAX_TRIES:
 		until = str(add_to_date(now_datetime(), minutes=LOCK_MINUTES))
-		frappe.cache.set_value(_lock_key(user), until, expires_in_sec=LOCK_MINUTES * 60)
-		frappe.cache.delete(key)
+		frappe.cache.set_value(_lock_key(user, kind), until, expires_in_sec=LOCK_MINUTES * 60)
 		return tries, until
 	return tries, None
 
 
-def _clear_tries(user):
-	frappe.cache.delete(_tries_key(user))
-	frappe.cache.delete_value(_lock_key(user))
+def _clear_tries(user, kind=None):
+	"""A right PIN clears its own count; a new PIN (kind None) clears both, and their locks."""
+	for k in [kind] if kind else ["approve", "unlock"]:
+		frappe.cache.delete(_tries_key(user, k))
+		frappe.cache.delete_value(_lock_key(user, k))
 
 
 # --------------------------------------------------------------------------- log
@@ -176,13 +183,10 @@ def approve(action, reference, amount=0, approver=None, pin=None, details=None):
 	if not typed or not _matches(typed, stored):
 		_log_failure(label, reference, amount, approver, "Refused", details)
 		if tries >= MAX_TRIES:
-			frappe.cache.set_value(
-				_lock_key(approver), str(add_to_date(now_datetime(), minutes=LOCK_MINUTES)), expires_in_sec=LOCK_MINUTES * 60
-			)
-			frappe.cache.delete(_tries_key(approver))
+			_lock_pin(approver)
 			frappe.throw(_("Wrong PIN. It is locked for {0} minutes").format(LOCK_MINUTES), ApprovalRequired)
 		frappe.throw(_("Wrong PIN ({0} of {1} tries)").format(tries, MAX_TRIES), ApprovalRequired)
-	_clear_tries(approver)
+	_clear_tries(approver, "approve")
 	_log(label, reference, amount, approver, "Approved", details)
 	cache[key] = approver
 	return approver
@@ -205,17 +209,28 @@ def approvers():
 
 @frappe.whitelist(methods=["POST"])
 def set_my_pin(pin, password=None):
-	"""A manager sets (or changes) their own approval PIN, 4 to 8 digits, after typing their login
-	password: someone at a manager's open screen cannot plant a PIN they know."""
-	require_role(MANAGER)
+	"""A floor user sets (or changes) their own PIN, 4 to 8 digits, after typing their login password:
+	someone at an open screen cannot plant a PIN they know. A manager's PIN also approves (D-204);
+	everyone's unlocks their floor screen (D-216). With the screen lock off (Resto Settings), only a
+	manager has one."""
+	require_role(WAITER, CASHIER, HOST)
+	if not has_role() and not _screen_lock():
+		frappe.throw(_("The screen lock is off in Resto Settings"))
 	user = frappe.session.user
 	if not frappe.flags.in_test or password:
 		from frappe.utils.password import check_password
 
+		# The login password is checked here: a few tries, then a wait, as at the login page.
+		key = frappe.cache.make_key(f"resto_pin_password_tries|{user}")
+		if cint(frappe.cache.get(key)) >= MAX_TRIES:
+			frappe.throw(_("Too many wrong passwords; try again in {0} minutes").format(LOCK_MINUTES), frappe.PermissionError)
 		try:
 			check_password(user, password or "")
 		except frappe.AuthenticationError:
+			frappe.cache.incr(key)
+			frappe.cache.expire(key, LOCK_MINUTES * 60)
 			frappe.throw(_("Your login password is not right"), frappe.PermissionError)
+		frappe.cache.delete(key)
 	pin = _digits(pin)
 	if not pin or not 4 <= len(pin) <= 8:
 		frappe.throw(_("The PIN is 4 to 8 digits"))
@@ -228,3 +243,63 @@ def set_my_pin(pin, password=None):
 	doc.save()
 	_clear_tries(user)  # a new PIN unlocks it
 	return True
+
+
+def _screen_lock():
+	from resto.resto.utils import get_settings
+
+	return bool(cint(get_settings().get("enable_screen_lock")))
+
+
+def has_pin(user=None):
+	return bool(frappe.db.exists("Resto Manager PIN", {"user": user or frappe.session.user}))
+
+
+def _lock_pin(user, kind="approve"):
+	frappe.cache.set_value(_lock_key(user, kind), str(add_to_date(now_datetime(), minutes=LOCK_MINUTES)), expires_in_sec=LOCK_MINUTES * 60)
+
+
+def _sign_out():
+	"""The lock screen's PIN is locked: the session ends here, not only on the screen that asked."""
+	if frappe.flags.in_test:
+		return
+	login_manager = getattr(frappe.local, "login_manager", None)
+	if login_manager:
+		login_manager.logout()
+
+
+def on_login(login_manager):
+	"""A sign-in with the password proves who is there: a lock screen PIN locked by wrong tries opens
+	again (else the next lock would sign this user out at once until the 15 minutes pass)."""
+	user = getattr(login_manager, "user", None)
+	if user and user != "Guest":
+		_clear_tries(user, "unlock")
+
+
+@frappe.whitelist(methods=["POST"])
+def unlock(pin):
+	"""The floor's lock screen (D-216): the user on it types their own PIN. Its tries count apart
+	from the approvals': five wrong ones lock it for 15 minutes and end the session here (the next
+	person signs in with their password). Answers, never throws: nothing to roll back."""
+	require_role(WAITER, CASHIER, HOST)
+	user = frappe.session.user
+	stored = frappe.db.get_value("Resto Manager PIN", {"user": user}, "pin_hash")
+	if not stored:
+		_sign_out()  # the PIN was removed while the screen was locked: the password again
+		return {"ok": 0, "logout": 1, "message": _("You have no PIN: sign in again with your password")}
+	if locked_until(user, "unlock"):
+		_sign_out()
+		return {"ok": 0, "logout": 1, "message": _("Your PIN is locked after {0} wrong tries: sign in again with your password").format(MAX_TRIES)}
+	tries, locked = _take_try(user, "unlock")
+	if locked:
+		_sign_out()
+		return {"ok": 0, "logout": 1, "message": _("Wrong PIN. It is locked for {0} minutes").format(LOCK_MINUTES)}
+	typed = _digits(pin)
+	if not typed or not _matches(typed, stored):
+		if tries >= MAX_TRIES:
+			_lock_pin(user, "unlock")
+			_sign_out()
+			return {"ok": 0, "logout": 1, "message": _("Wrong PIN. It is locked for {0} minutes").format(LOCK_MINUTES)}
+		return {"ok": 0, "message": _("Wrong PIN ({0} of {1} tries)").format(tries, MAX_TRIES)}
+	_clear_tries(user, "unlock")
+	return {"ok": 1}

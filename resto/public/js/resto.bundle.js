@@ -280,3 +280,34 @@ resto.cooked_values = (rows, v, key) => {
 	});
 	return out;
 };
+
+// A floor screen locked in this session (D-216) stays locked on every desk page: a reload or the
+// back button on another page, or a lock from another tab, covers the page and goes back to the floor,
+// which shows the lock. A sign-out in another tab sends this one to the login page.
+resto.lock_key = () => `resto_floor_locked|${frappe.session.user}`;
+resto.lock_hold = function () {
+	let v = null;
+	try {
+		v = localStorage.getItem(resto.lock_key());
+	} catch (e) {
+		return;
+	}
+	if (!v || v !== frappe.csrf_token) return;
+	const route = (frappe.get_route && frappe.get_route()) || [];
+	if (route[0] === "resto-floor") return; // the floor shows its lock itself (after a payment open)
+	if (!$(".resto-lock-hold").length) {
+		$('<div class="resto-lock-hold"></div>')
+			.css({ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, zIndex: 2147482999, background: "var(--bg-color, #fff)" })
+			.appendTo(document.body);
+	}
+	frappe.set_route("resto-floor");
+};
+$(document).on("app_ready", () => {
+	resto.lock_hold();
+	if (frappe.router && frappe.router.on) frappe.router.on("change", resto.lock_hold);
+	window.addEventListener("storage", (e) => {
+		if (e.key !== resto.lock_key()) return;
+		if (e.newValue === "out") window.location.href = "/login";
+		else resto.lock_hold();
+	});
+});

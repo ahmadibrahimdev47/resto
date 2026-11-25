@@ -459,6 +459,57 @@ class TestManagerApproval(IntegrationTestCase):
 		floor.cancel_order(order, "Guest left", None, MANAGER_USER, "5678")
 		self.assertEqual(frappe.db.get_value("Resto Order", order, "status"), "Cancelled")
 
+	def test_the_lock_screen_opens_with_the_users_own_pin(self):
+		"""D-216: any floor user sets their own PIN and opens their locked screen with it; five wrong
+		tries lock it and send them to sign in again; a waiter's PIN never approves."""
+
+		def reset():
+			approval._clear_tries(WAITER_USER)
+
+		def screen_lock(on):
+			frappe.db.set_single_value("Resto Settings", "enable_screen_lock", on)
+			frappe.clear_document_cache("Resto Settings", "Resto Settings")
+
+		reset()
+		self.addCleanup(reset)
+		frappe.db.delete("Resto Manager PIN", {"user": WAITER_USER})
+		order, line = self.sent_order()
+		# Off (the default): no lock, and only a manager sets a PIN.
+		screen_lock(0)
+		frappe.set_user(WAITER_USER)
+		self.assertFalse(floor.get_floor()["screen_lock"])
+		self.assertRaises(frappe.ValidationError, approval.set_my_pin, "2468")
+		frappe.set_user(MANAGER_USER)
+		approval.set_my_pin("4321")
+		frappe.set_user("Administrator")
+		screen_lock(1)
+		self.addCleanup(screen_lock, 0)
+		frappe.set_user(WAITER_USER)
+		self.assertTrue(floor.get_floor()["screen_lock"])
+		self.assertFalse(floor.get_floor()["has_pin"])
+		self.assertTrue(approval.unlock("1234")["logout"])  # no PIN: the password again
+		approval.set_my_pin("2468")
+		self.assertTrue(floor.get_floor()["has_pin"])
+		wrong = approval.unlock("1111")
+		self.assertFalse(wrong["ok"])
+		self.assertFalse(wrong.get("logout"))
+		self.assertTrue(approval.unlock("٢٤٦٨")["ok"])  # typed on an Arabic keypad; the tries start again
+		frappe.set_user("cashier@resto.test")
+		self.assertRaises(approval.ApprovalRequired, floor.void_line, order, line, "Wrong dish", 0, WAITER_USER, "2468")
+		frappe.set_user(WAITER_USER)
+		for _i in range(approval.MAX_TRIES - 1):
+			self.assertFalse(approval.unlock("0000").get("logout"))
+		self.assertTrue(approval.unlock("0000")["logout"])
+		self.assertTrue(approval.unlock("2468")["logout"])  # locked: even the right PIN
+		# Counted apart: the lock screen's tries never lock approvals.
+		self.assertTrue(approval.locked_until(WAITER_USER, "unlock"))
+		self.assertFalse(approval.locked_until(WAITER_USER))
+		# signing in again with the password opens it
+		approval.on_login(frappe._dict(user=WAITER_USER))
+		self.assertFalse(approval.locked_until(WAITER_USER, "unlock"))
+		self.assertTrue(approval.unlock("2468")["ok"])
+		frappe.set_user("Administrator")
+
 	def test_a_discount_above_the_cashiers_limit(self):
 		order = floor.create_order(order_type="Takeaway", customer_name="PIN Discount")
 		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 10}]))  # 400

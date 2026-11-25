@@ -65,6 +65,9 @@ doc_events = {
 }
 
 # Recipe costs follow purchase prices: refresh them every night.
+# A password sign-in opens a lock screen PIN locked by wrong tries (D-216).
+on_login = "resto.resto.approval.on_login"
+
 scheduler_events = {"daily": ["resto.api.refresh_recipe_costs"]}
 
 # The shift print format reads the items sold and the debts collected (D-206).

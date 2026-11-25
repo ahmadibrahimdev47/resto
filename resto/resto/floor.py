@@ -206,6 +206,11 @@ def get_floor():
 		"user_name": frappe.utils.get_fullname(),
 		"reservations_today": frappe.db.count("Resto Reservation", {"reservation_date": nowdate(), "status": "Booked"}),
 		"tax_added": _tax_added(settings.pos_profile),
+		# The lock screen (D-216), when Resto Settings turns it on: whether the user has a PIN to open
+		# it, and the idle minutes before it locks by itself.
+		"screen_lock": cint(settings.get("enable_screen_lock")),
+		"has_pin": approval.has_pin(),
+		"lock_after_minutes": max(cint(settings.get("lock_after_minutes")), 0) if cint(settings.get("enable_screen_lock")) else 0,
 	}
 
 
