@@ -1,5 +1,7 @@
 """Kitchen tickets: sending order lines to stations, voids, statuses and printing."""
 
+import json
+
 import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, getdate, now_datetime
@@ -41,12 +43,14 @@ TRANSITIONS = {
 }
 
 
-def send_lines(order, course=None, printed=None):
+def send_lines(order, course=None, printed=None, at=None):
 	"""Send unsent lines (not held, or of the fired course) to their stations.
 
 	printed: {item: qty} printed by a floor screen without a connection (D-219): only unsent lines
 	within those quantities are sent (a line another screen added meanwhile stays unsent), and
-	their tickets are marked printed, so no printer prints them again.
+	their tickets are marked printed, so no printer prints them again. A plain line (nothing of its
+	own) with more dishes than printed is split: the printed part is sent, the rest stays unsent.
+	What was printed but not found is left in order.flags.resto_printed_left. at: when it was sent.
 
 	Returns the created tickets. The caller saves the order.
 	"""
@@ -58,9 +62,26 @@ def send_lines(order, course=None, printed=None):
 	if printed is not None:
 		left, chosen = dict(printed), []
 		for d in lines:
-			if flt(left.get(d.item_code)) >= flt(d.qty) - 1e-9:
-				left[d.item_code] = flt(left[d.item_code]) - flt(d.qty)
+			have = flt(left.get(d.item_code))
+			if have >= flt(d.qty) - 1e-9:
+				left[d.item_code] = have - flt(d.qty)
 				chosen.append(d)
+			elif have > 1e-9 and _plain(d):
+				# The same dish tapped again (here or on another screen) after the paper was printed.
+				order.append(
+					"items",
+					{
+						"item_code": d.item_code,
+						"qty": flt(d.qty) - have,
+						"modifiers": "[]",
+						"kitchen_status": "Not Sent",
+						"billed_qty": 0,
+					},
+				)
+				d.qty = have
+				left[d.item_code] = 0
+				chosen.append(d)
+		order.flags.resto_printed_left = left
 		lines = chosen
 	if not lines:
 		return []
@@ -76,7 +97,7 @@ def send_lines(order, course=None, printed=None):
 			)
 		by_station.setdefault(station, []).append(d)
 
-	now = now_datetime()
+	now = at or now_datetime()
 	tickets = []
 	for station, rows in sorted(by_station.items()):
 		ticket = _make_ticket(order, station, "Order", rows, now, printed=printed is not None)
@@ -88,6 +109,19 @@ def send_lines(order, course=None, printed=None):
 			d.sent_at = now
 		tickets.append(ticket)
 	return tickets
+
+
+def _plain(d):
+	"""A line with nothing of its own (options, note, course, hold, sides), so it may be split."""
+	return not (
+		json.loads(d.modifiers or "[]")
+		or (d.notes or "").strip()
+		or d.course
+		or cint(d.hold)
+		or d.get("sides")
+		or d.get("sides_extras")
+		or flt(d.billed_qty)
+	)
 
 
 def void_line(order, line, reason):

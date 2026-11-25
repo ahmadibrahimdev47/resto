@@ -8,7 +8,7 @@ const vm = require("node:vm");
 const SOURCE = fs.readFileSync(path.join(__dirname, "../../resto/page/resto_floor/resto_floor.js"), "utf8");
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
-// server(): what the server answers the next call: "ok", "refuse", "silent" (no answer), or an
+// server(method, args): what the server answers the call: "ok", "refuse", "silent" (no answer), or an
 // HTTP status of a failure that is not a refusal (0: no answer at all).
 function load(server, printer = () => true) {
 	const store = new Map();
@@ -75,7 +75,7 @@ function load(server, printer = () => true) {
 			call: (opts) => {
 				seen.calls.push({ method: opts.method.split(".").pop(), args: opts.args });
 				const req = { status: 200, responseJSON: {} };
-				const answer = server();
+				const answer = server(opts.method.split(".").pop(), opts.args);
 				setTimeout(() => {
 					if (answer === "ok" || (answer && typeof answer === "object")) {
 						opts.callback({ message: answer === "ok" ? null : answer.message });
@@ -94,8 +94,8 @@ function load(server, printer = () => true) {
 		},
 	};
 	vm.createContext(ctx);
-	vm.runInContext(`${SOURCE}\nthis.__t = { RestoFloor, outbox, set_outbox, round_money };`, ctx);
-	const { RestoFloor, outbox, set_outbox, round_money } = ctx.__t;
+	vm.runInContext(`${SOURCE}\nthis.__t = { RestoFloor, outbox, set_outbox, round_money, sys_round };`, ctx);
+	const { RestoFloor, outbox, set_outbox, round_money, sys_round } = ctx.__t;
 	const floor = Object.create(RestoFloor.prototype);
 	Object.assign(floor, { page: { body: {} }, wrapper: {}, order: null, floor: null, offline: false, _gen: 0 });
 	floor.reload_lines = () => Promise.resolve();
@@ -107,7 +107,7 @@ function load(server, printer = () => true) {
 		clearTimeout(floor._tap_timer);
 		floor.drain = () => Promise.resolve();
 	};
-	return { floor, outbox, set_outbox, round_money, seen, done };
+	return { floor, outbox, set_outbox, round_money, sys_round, seen, done };
 }
 
 

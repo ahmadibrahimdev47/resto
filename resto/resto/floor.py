@@ -278,6 +278,14 @@ def _bill_rules(settings):
 		"disable_rounded_total": cint(profile.get("disable_rounded_total")),
 		"smallest_fraction": flt(frappe.get_cached_value("Currency", currency, "smallest_currency_fraction_value")) if currency else 0,
 		"currency": currency,
+		# Frappe's rounding (System Settings), and whether the bill uses what the device does not work
+		# out (item tax templates, a tax per item quantity, tax rounded row by row): then an estimate.
+		"rounding_method": frappe.get_system_settings("rounding_method") or "Banker's Rounding",
+		"exact": int(
+			not any(t.charge_type not in ("Actual", "On Net Total", "On Previous Row Amount", "On Previous Row Total") for t in taxes)
+			and not cint(frappe.db.get_single_value("Accounts Settings", "round_row_wise_tax"))
+			and not frappe.db.exists("Item Tax", {"parenttype": ("in", ("Item", "Item Group"))})
+		),
 	}
 
 
@@ -774,24 +782,62 @@ def remove_line(order, line, view=0, op=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def send_to_kitchen(order, printed=None, view=0, op=None):
+def send_to_kitchen(order, printed=None, view=0, op=None, printed_at=None):
 	"""printed: {item: qty} a floor screen printed itself while it had no connection (D-219), sent
-	from its outbox once the connection is back (op: a retry records nothing twice). Only those
-	dishes are recorded as sent, and their tickets are not printed again."""
+	from its outbox once the connection is back. Only those dishes are recorded as sent, at the time
+	they were printed (printed_at), and their tickets are not printed again. op: the send's id, so a
+	send that reached the server before its answer was lost is not recorded twice (the floor prints
+	it on the device then, with the same id)."""
 	require_role(WAITER, CASHIER)
-	shift.require_ordering()
+	if printed is None:
+		# What was printed on paper is recorded even if the shift closed meanwhile: it was cooked.
+		shift.require_ordering()
+	doc, done = _get_order_once(order, op) if op else (_get_order(order), False)
+	if done:
+		return _order_view(doc) if cint(view) else []
 	if printed is not None:
-		doc, done = _get_order_once(order, op)
-		if done:
-			return _order_view(doc) if cint(view) else []
 		data = _loads(printed, {})
 		budget = {k: flt(v) for k, v in (data if isinstance(data, dict) else {}).items() if flt(v) > 0}
-		tickets = kitchen.send_lines(doc, printed=budget)
+		tickets = kitchen.send_lines(doc, printed=budget, at=_printed_at(doc, printed_at))
 	else:
-		doc = _get_order(order)
 		tickets = kitchen.send_lines(doc)
 	_save(doc)
+	if printed is not None:
+		_note_printed_here(doc, tickets, budget)
 	return _order_view(doc) if cint(view) else [t.name for t in tickets]
+
+
+def _printed_at(order, printed_at):
+	"""When a device printed the kitchen ticket, as it said, within the order's life and not later than now."""
+	now = now_datetime()
+	try:
+		at = get_datetime(printed_at) if printed_at else None
+	except Exception:
+		at = None
+	if not at or at > now or (order.opened_at and at < get_datetime(order.opened_at)):
+		return now
+	return at
+
+
+def _note_printed_here(order, tickets, budget):
+	"""What a device printed without a connection, on the order's timeline: what was recorded, and what
+	was printed but not found unsent here (taken off or sent meanwhile on another screen): the kitchen
+	may have made it, so the cashier checks it."""
+	order.add_comment(
+		"Info",
+		_("Kitchen ticket printed on a device without a connection by {0}: {1}").format(
+			frappe.utils.get_fullname(frappe.session.user), ", ".join(tickets and [t.name for t in tickets] or ["-"])
+		),
+	)
+	left = {k: v for k, v in (order.flags.resto_printed_left or {}).items() if v > 1e-9}
+	if left:
+		names = {k: frappe.get_cached_value("Item", k, "item_name") or k for k in left}
+		order.add_comment(
+			"Info",
+			_("Printed for the kitchen on a device without a connection but not on the order: {0}. Check whether it was made.").format(
+				", ".join(f"{v:g} × {names[k]}" for k, v in left.items())
+			),
+		)
 
 
 @frappe.whitelist(methods=["POST"])

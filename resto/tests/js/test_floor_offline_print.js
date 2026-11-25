@@ -32,7 +32,7 @@ function order(extra) {
 function floor_with(server, o, bill_rules) {
 	const t = load(server);
 	t.floor.order = o;
-	t.floor.floor = { bill_rules, brand: "Test Kitchen", user_name: "Cashier" };
+	t.floor.floor = { bill_rules, brand: "Test Kitchen", user_name: "Cashier", roles: { cashier: 1 } };
 	return t;
 }
 
@@ -64,6 +64,7 @@ test("the server not answering: Send to Kitchen falls back to printing here", as
 	assert.equal(t.seen.printed.length, 1);
 	assert.equal(t.outbox().at(-1).method, "send_to_kitchen");
 	assert.deepEqual(JSON.parse(JSON.stringify(t.outbox().at(-1).args.printed)), { SOUP: 2 });
+	assert.equal(t.outbox().at(-1).op, t.seen.calls[0].args.op, "the same send's id: recorded once if the first one did arrive");
 });
 
 test("connected and nothing waiting: Send to Kitchen goes through the server, nothing printed here", async () => {
@@ -78,7 +79,7 @@ test("connected and nothing waiting: Send to Kitchen goes through the server, no
 test("a device that cannot print: nothing is recorded as sent", async () => {
 	const t = load(() => 0, () => false);
 	t.floor.order = order();
-	t.floor.floor = { bill_rules: rules() };
+	t.floor.floor = { bill_rules: rules(), roles: { cashier: 1 } };
 	t.floor.offline = true;
 	await t.floor.send_or_bill("send");
 	t.done();
@@ -141,7 +142,9 @@ test("offline bill: prices that include tax add nothing; no rounding when it is 
 });
 
 test("offline bill: printed here with its lines and total, marked as printed without a connection", async () => {
-	const t = floor_with(() => 0, order({ service_charge_percent: 12 }), rules());
+	const o = order({ service_charge_percent: 12 });
+	o.items[0].kitchen_status = "Sent";
+	const t = floor_with(() => 0, o, rules());
 	t.floor.offline = true;
 	await t.floor.send_or_bill("bill");
 	t.done();
@@ -162,4 +165,98 @@ test("rounding as Frappe: to whole units, a half to the even one; or to the curr
 	assert.equal(t.round_money(113.49, 0), 113);
 	assert.equal(t.round_money(113.37, 0.25), 113.25);
 	assert.equal(t.round_money(113.4, 0.25), 113.5);
+	assert.equal(t.round_money(112.5, 0, "Commercial Rounding"), 113);
+	assert.equal(t.sys_round(1.505, 2), 1.5, "10.75 × 14%: as Frappe's flt(v, 2)");
+	assert.equal(t.sys_round(1.515, 2), 1.52);
+	assert.equal(t.sys_round(1.505, 2, "Commercial Rounding"), 1.51);
+});
+
+test("sent, then the order could not be read again: nothing is printed here", async () => {
+	const t = floor_with((m) => (m === "send_to_kitchen" ? { message: ["KOT-1"] } : 0), order(), rules());
+	await t.floor.send_or_bill("send");
+	t.done();
+	assert.equal(t.seen.printed.length, 0);
+	assert.equal(t.outbox().length, 0);
+	assert.ok(t.seen.alerts.includes("Sent to {0} station(s)".replace("{0}", 1)));
+});
+
+test("the send's answer lost, but it reached the kitchen: not printed again here", async () => {
+	const sent = order();
+	sent.items[0] = { ...sent.items[0], kitchen_status: "Sent" };
+	const t = floor_with((m) => (m === "send_to_kitchen" ? 0 : m === "get_order" ? { message: sent } : 0), order(), rules());
+	await t.floor.send_or_bill("send");
+	t.done();
+	assert.equal(t.seen.printed.length, 0);
+	assert.equal(t.outbox().length, 0);
+	assert.ok(t.seen.alerts.includes("Sent to the kitchen"));
+});
+
+test("a device that does not print (a waiter's tablet): nothing marked sent, nothing recorded", async () => {
+	const t = floor_with(() => 0, order(), rules());
+	t.floor.floor.roles = { cashier: 0 };
+	t.floor.offline = true;
+	await t.floor.send_or_bill("send");
+	await t.floor.send_or_bill("bill");
+	t.done();
+	assert.equal(t.seen.printed.length, 0);
+	assert.equal(t.outbox().length, 0);
+	assert.equal(t.floor.order.items[0].kitchen_status, "Not Sent");
+	assert.equal(t.seen.msgs.length, 2);
+});
+
+test("Discard keeps what was printed for the kitchen", async () => {
+	const t = floor_with(() => 503, order(), rules());
+	t.floor.offline = true;
+	t.set_outbox([{ op: "a1", method: "add_items", args: { order: "ORD-9", items: [] }, label: "2 × Soup", at: Date.now() - 600000 }]);
+	await t.floor.send_or_bill("send");
+	t.set_outbox([...t.outbox(), { op: "u1", method: "update_line", args: { order: "ORD-7", line: "X", step: 1 }, label: "+1 × Tea", at: Date.now() - 600000 }]);
+	t.floor.offline = false;
+	t.floor.show_pending();
+	t.seen.dialogs.at(-1).opts.secondary_action();
+	t.done();
+	assert.deepEqual(
+		Array.from(t.outbox(), (j) => j.method),
+		["add_items", "send_to_kitchen"]
+	);
+});
+
+test("taps wait while the kitchen ticket prints here", async () => {
+	let release;
+	const t = load(() => 0, () => new Promise((r) => (release = r)));
+	t.floor.order = order();
+	t.floor.floor = { bill_rules: rules(), roles: { cashier: 1 }, can_order: 1 };
+	t.floor.offline = true;
+	const sending = t.floor.send_or_bill("send");
+	await new Promise((r) => setTimeout(r, 5));
+	t.floor.tap_item({ item_code: "SOUP", item_name: "Soup", rate: 30 });
+	release(true);
+	await sending;
+	t.done();
+	assert.equal(t.floor.order.items[0].qty, 2, "the tap during printing was not taken");
+	assert.ok(t.seen.alerts.some((a) => String(a).startsWith("The kitchen ticket is printing")));
+});
+
+test("offline bill: what is not sent to the kitchen is sent or taken off first, as on the server", async () => {
+	const t = floor_with(() => 0, order(), rules());
+	t.floor.offline = true;
+	await t.floor.send_or_bill("bill");
+	t.done();
+	assert.equal(t.seen.printed.length, 0);
+	assert.match(t.seen.msgs[0], /Soup/);
+});
+
+test("offline bill: a percentage discount is of the food now on the order", () => {
+	// 10% of 100 = 10 (not the 5 saved before dishes were added on this device).
+	const t = floor_with(() => 0, order({ discount_percentage: 10, discount_amount: 5 }), rules({ taxes: [] }));
+	const b = t.floor.bill_on_device(t.floor.order);
+	t.done();
+	assert.equal(b.discount, 10);
+	assert.equal(b.payable, 90);
+});
+
+test("offline bill: rules the device does not work out make it an estimate", () => {
+	const t = floor_with(() => 0, order(), rules({ exact: 0 }));
+	const b = t.floor.bill_on_device(t.floor.order);
+	t.done();
+	assert.equal(b.estimate, true);
 });

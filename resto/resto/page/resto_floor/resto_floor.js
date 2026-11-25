@@ -45,7 +45,12 @@ function call(method, args, freeze, timeout) {
 				!["QueryDeadlockError", "QueryTimeoutError", "CSRFTokenError", "SessionExpired"].includes(exc);
 			done(reject, { network: !refused || !!expired, status });
 		};
-		if (timeout) timer = setTimeout(() => done(reject, { network: true, status: 0 }), timeout);
+		if (timeout)
+			timer = setTimeout(() => {
+				done(reject, { network: true, status: 0 });
+				// Given up: stopped here (the server may still finish it; an op makes a retry harmless).
+				if (req && typeof req.abort === "function") req.abort();
+			}, timeout);
 		req = frappe.call({
 			method: API + method,
 			args: args || {},
@@ -73,18 +78,29 @@ const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 
 // A total rounded as ERPNext rounds an invoice: to the currency's smallest fraction when it has
 // one, else to a whole unit (an exact half to the even one, as Frappe's default rounding).
-function round_money(value, fraction) {
+function round_money(value, fraction, method) {
 	const v = flt(value);
 	if (fraction > 0) {
 		const rem = Math.round((v % fraction) * 1e6) / 1e6;
 		const out = rem > fraction / 2 ? v + (fraction - rem) : v - rem;
-		return Math.round(out * 100) / 100;
+		return sys_round(out, 2, method);
 	}
-	const down = Math.floor(v);
-	const diff = Math.round((v - down) * 1e6) / 1e6;
-	if (diff > 0.5) return down + 1;
-	if (diff < 0.5) return down;
-	return down % 2 === 0 ? down : down + 1;
+	return sys_round(v, 0, method);
+}
+
+// Frappe's rounding to a number of places (System Settings "Rounding Method"): a half goes to the
+// even digit, or away from zero with Commercial Rounding.
+function sys_round(value, places, method) {
+	const m = Math.pow(10, places || 0);
+	const n = flt(value) * m;
+	const down = Math.floor(n);
+	const diff = Math.round((n - down) * 1e6) / 1e6;
+	let out;
+	if (diff > 0.5) out = down + 1;
+	else if (diff < 0.5) out = down;
+	else if (method === "Commercial Rounding") out = n >= 0 ? down + 1 : down;
+	else out = down % 2 === 0 ? down : down + 1;
+	return out / m;
 }
 
 // A manager's approval for what a waiter or cashier cannot do alone (D-204): a manager on this
@@ -1721,6 +1737,7 @@ class RestoFloor {
 	// in one call. The server stays the record (kitchen, other screens, a closed browser): its answer
 	// replaces what the screen guessed, and a refusal puts the server's order back.
 	tap_item(item) {
+		if (this._printing) return this.printing_wait();
 		if (!this.floor.can_order) return frappe.msgprint(esc(this.floor.no_order_reason));
 		const o = this.order;
 		const same = o.items.find((d) => d.item_code === item.item_code && plain_line(d));
@@ -1879,7 +1896,7 @@ class RestoFloor {
 		const rows = jobs
 			.map((j) => {
 				const mins = Math.max(0, Math.round((Date.now() - cint(j.at)) / 60000));
-				const what = j.label || (j.method === "remove_line" ? __("a line removed") : __("a quantity changed"));
+				const what = (j.label || (j.method === "remove_line" ? __("a line removed") : __("a quantity changed"))) + (j.kept ? ` (${__("printed for the kitchen, kept")})` : "");
 				return `<li>${__("Made {0} min ago on order {1} and not sent yet: {2}", [mins, esc((j.args || {}).order), esc(what)])}</li>`;
 			})
 			.join("");
@@ -1907,9 +1924,13 @@ class RestoFloor {
 				chose = true;
 				// The change on its way to the server now cannot be called back: it is not discarded.
 				const busy = this._sending_op;
-				const ops = new Set(jobs.map((j) => j.op).filter((op) => op !== busy));
+				// What was printed for the kitchen was cooked: it stays, to be billed.
+				const ops = new Set(jobs.filter((j) => !j.kept).map((j) => j.op).filter((op) => op !== busy));
 				set_outbox(outbox().filter((j) => !(j && ops.has(j.op))));
 				d.hide();
+				if (jobs.some((j) => j.kept)) {
+					frappe.show_alert({ message: __("The dishes printed for the kitchen are kept: they are sent when the connection is back."), indicator: "orange" }, 8);
+				}
 				if (busy && jobs.some((j) => j.op === busy)) {
 					frappe.show_alert({ message: __("A change already on its way to the server was not discarded"), indicator: "orange" });
 				}
@@ -2260,6 +2281,7 @@ class RestoFloor {
 					this.$order.find(`.rf-ln[data-line="${CSS.escape(line.name)}"] [data-q=trash]`).trigger($.Event("click", { rf_ok: true }))
 				);
 			}
+			if (this._printing) return this.printing_wait();
 			const step = q === "trash" ? -flt(line.qty) : parseInt(q);
 			if (line._pending) return this.step_pending(line, step); // no line on the server yet
 			if (step > 0 && !this.floor.can_order) return frappe.msgprint(esc(this.floor.no_order_reason));
@@ -2424,36 +2446,81 @@ class RestoFloor {
 		// Connected: what waits is sent first. Offline: the taps are kept with the rest, and nothing
 		// is asked now (the paper comes first).
 		await this.flush_taps(!this.offline);
+		// The send's id: the same send printed here after its answer was lost is not recorded twice.
+		const op = act === "send" ? frappe.utils.get_random(20) : null;
 		if (!outbox().length && !this.offline) {
 			try {
-				return await this.do_action(act, e);
+				return await this.do_action(act, e, op);
 			} catch (err) {
 				if (!(err && err.network)) throw err;
+				if (act === "send" && (await this.sent_meanwhile())) return;
 			}
 		}
-		return act === "send" ? this.send_here() : this.bill_here();
+		return act === "send" ? this.send_here(op) : this.bill_here();
+	}
+
+	// The send's answer was lost (a time limit, the connection dropping): it may have reached the
+	// kitchen. A short look first, so the kitchen does not get the same dishes twice.
+	async sent_meanwhile() {
+		const o = this.order;
+		const unsent = o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold && !d._pending);
+		if (!unsent.length) return false;
+		try {
+			const fresh = await call("get_order", { order: o.name }, false, 5000);
+			const still = new Set((fresh.items || []).filter((d) => d.kitchen_status === "Not Sent").map((d) => d.name));
+			if (unsent.some((d) => still.has(d.name))) return false;
+		} catch (e) {
+			return false;
+		}
+		frappe.show_alert({ message: __("Sent to the kitchen"), indicator: "green" });
+		this.reload_quietly(o.name);
+		return true;
+	}
+
+	// The order read again after a change the server took; a failure here changes nothing (the next
+	// refresh draws it).
+	reload_quietly(name) {
+		return Promise.resolve()
+			.then(() => this.load_order(name))
+			.catch(() => {});
+	}
+
+	printing_wait() {
+		frappe.show_alert({ message: __("The kitchen ticket is printing: add it in a moment."), indicator: "orange" });
 	}
 
 	// The kitchen ticket printed on this device. The server records it when the connection is back,
 	// for these dishes only and without printing it again (send_to_kitchen with printed).
-	async send_here() {
+	async send_here(op) {
 		const o = this.order;
 		const lines = o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold);
 		if (!lines.length) return frappe.show_alert({ message: __("Nothing new to send"), indicator: "blue" });
+		// A device that does not print (a waiter's tablet): nothing is marked sent, the kitchen gets nothing.
+		if (!this.prints_here()) {
+			return frappe.msgprint(__("No connection, and this device does not print. The dishes stay unsent: send them again once the connection is back, or print from the cashier's device."));
+		}
 		const printed = {};
 		lines.forEach((d) => (printed[d.item_code] = flt(printed[d.item_code]) + flt(d.qty)));
-		if (!(await resto.print_html(this.ticket_html(o, lines)))) {
+		const printed_at = frappe.datetime.now_datetime();
+		this._printing = true;
+		let ok = false;
+		try {
+			ok = await resto.print_html(this.ticket_html(o, lines));
+		} finally {
+			this._printing = false;
+		}
+		if (!ok) {
 			return frappe.msgprint(__("No connection, and this device could not print the kitchen ticket. Try again, or tell the kitchen."));
 		}
-		// The dishes went to the kitchen on paper: the changes that made them are sent, not offered
-		// for discarding (the order must bill what was cooked).
-		set_outbox(outbox().map((j) => (j && j.args && j.args.order === o.name ? { ...j, ok: 1 } : j)));
+		// The dishes went to the kitchen on paper: the changes that made them are sent, never
+		// discarded (the order must bill what was cooked).
+		set_outbox(outbox().map((j) => (j && j.args && j.args.order === o.name ? { ...j, ok: 1, kept: 1 } : j)));
 		const what = lines.map((d) => `${fmt_qty(d.qty)} × ${d.item_name}`).join("، ");
 		lines.forEach((d) => (d.kitchen_status = "Sent")); // as shown until the server answers
 		this._gen++;
 		this.render_lines();
 		frappe.show_alert({ message: __("No connection: the kitchen ticket was printed here. Hand it to the kitchen; it is recorded when the connection is back."), indicator: "orange" }, 10);
-		this.sync_call("send_to_kitchen", { order: o.name, printed }, __("Kitchen ticket printed on this device: {0}", [what]), { ok: 1 });
+		this.sync_call("send_to_kitchen", { order: o.name, printed, printed_at }, __("Kitchen ticket printed on this device: {0}", [what]), { ok: 1, kept: 1, ...(op ? { op } : {}) });
 	}
 
 	// The bill printed on this device, its total worked out here as the server does (Resto Settings,
@@ -2461,6 +2528,14 @@ class RestoFloor {
 	// requested" until the next bill through the server.
 	async bill_here() {
 		const o = this.order;
+		if (!this.prints_here()) {
+			return frappe.msgprint(__("No connection, and this device does not print bills. Print the bill from the cashier's device."));
+		}
+		// As the server's bill: what is not sent to the kitchen is sent or taken off first.
+		const unsent = o.items.filter((d) => d.kitchen_status === "Not Sent");
+		if (unsent.length) {
+			return frappe.msgprint(__("Send these items to the kitchen or remove them first: {0}", [esc(unsent.map((d) => d.item_name).join(", "))]));
+		}
 		const bill = this.bill_on_device(o);
 		if (!bill) return frappe.msgprint(__("Nothing left to bill on this order"));
 		if (!(await resto.print_html(this.bill_html(o, bill)))) {
@@ -2476,7 +2551,7 @@ class RestoFloor {
 	bill_on_device(o) {
 		const rules = (this.floor && this.floor.bill_rules) || null;
 		const r = rules || {};
-		const round2 = (v) => Math.round((flt(v) + Number.EPSILON) * 100) / 100;
+		const round2 = (v) => sys_round(v, 2, r.rounding_method);
 		const rows = o.items
 			.filter((d) => d.kitchen_status !== "Void" && flt(d.qty) - flt(d.billed_qty) > 1e-9)
 			.map((d) => {
@@ -2487,7 +2562,13 @@ class RestoFloor {
 		if (!rows.length) return null;
 		const food = round2(rows.reduce((s, x) => s + x.amount, 0));
 		const partial = flt(o.invoiced_total) > 0;
-		const discount = round2(Math.min(food, partial ? (flt(o.discount_amount) * food) / (flt(o.net_total) || food) : flt(o.discount_amount)));
+		// A percentage discount is of the food now on the order (dishes may have been added on this device).
+		const given = flt(o.discount_percentage)
+			? (flt(o.discount_percentage) * food) / 100
+			: partial
+			? (flt(o.discount_amount) * food) / (flt(o.net_total) || food)
+			: flt(o.discount_amount);
+		const discount = round2(Math.min(food, given));
 		const fee = o.order_type === "Delivery" && !partial ? flt(o.delivery_fee) : 0;
 		const pct = flt(o.service_charge_percent);
 		const net = round2(food + fee - discount);
@@ -2536,8 +2617,8 @@ class RestoFloor {
 				out.push({ description: t.description, amount, total, service: !!is_service(t) });
 			});
 		}
-		const payable = cint(r.disable_rounded_total) ? total : round_money(total, flt(r.smallest_fraction));
-		return { rows, food, discount, fee, taxes: out.filter((x) => x.amount), grand: total, payable, estimate: partial || !rules };
+		const payable = cint(r.disable_rounded_total) ? total : round_money(total, flt(r.smallest_fraction), r.rounding_method);
+		return { rows, food, discount, fee, taxes: out.filter((x) => x.amount), grand: total, payable, estimate: partial || !rules || r.exact === 0 };
 	}
 
 	paper(title, body) {
@@ -2552,7 +2633,7 @@ class RestoFloor {
 	}
 
 	paper_head(o) {
-		const where = o.resto_table ? `${__("Table", null, "Resto")} ${esc(o.resto_table)}` : esc(__(o.order_type));
+		const where = o.resto_table ? `${__("Table", null, "Resto")} ${esc(o.resto_table)}` : esc(__(o.order_type, null, "Resto"));
 		return `${o.order_no ? `<div class="big" style="text-align:center;font-size:22px">${__("Order {0}", [o.order_no], "Resto")}</div>` : ""}
 			<div class="m s"><span>${esc(o.name)}</span><span>${where}</span></div>
 			<div class="m s"><span>${esc(frappe.datetime.str_to_user(frappe.datetime.now_datetime()))}</span><span>${esc((this.floor && this.floor.user_name) || frappe.session.user)}</span></div>`;
@@ -2588,12 +2669,13 @@ class RestoFloor {
 		);
 	}
 
-	async do_action(act, e) {
+	async do_action(act, e, op) {
 		const o = this.order;
 		if (act === "send") {
-			const tickets = await call("send_to_kitchen", { order: o.name }, true, 15000);
+			const tickets = await call("send_to_kitchen", { order: o.name, op }, true, 15000);
 			frappe.show_alert({ message: tickets.length ? __("Sent to {0} station(s)", [tickets.length]) : __("Nothing new to send"), indicator: tickets.length ? "green" : "blue" });
-			return this.load_order(o.name);
+			// Sent: a reload that fails now is not a send to make again (the next refresh draws it).
+			return this.reload_quietly(o.name);
 		}
 		if (act === "fire") {
 			const held = [...new Set(o.items.filter((d) => d.hold && d.kitchen_status === "Not Sent").map((d) => d.course || ""))];
@@ -2626,7 +2708,7 @@ class RestoFloor {
 			} finally {
 				this._billing = false;
 			}
-			return this.load_order(o.name);
+			return this.reload_quietly(o.name);
 		}
 		if (act === "pay") return this.pay();
 		if (act === "more") return this.more_menu(e);

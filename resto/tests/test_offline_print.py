@@ -7,6 +7,7 @@ import json
 
 import frappe
 from frappe.tests import IntegrationTestCase
+from frappe.utils import add_to_date, get_datetime, now_datetime
 
 from resto.resto import floor
 from resto.tests import fixtures as fx
@@ -60,11 +61,37 @@ class TestOfflinePrint(IntegrationTestCase):
 		last = self.lines(order)[2].ticket
 		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", last, "printed"), 0)
 
-	def test_a_bigger_line_than_printed_is_left_unsent(self):
+	def test_a_plain_line_bigger_than_printed_is_split(self):
+		# Two printed; the same dish tapped once more meanwhile (the line went to 3).
 		order = floor.create_order(order_type="Takeaway", customer_name="Offline Guest")
 		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 3}]))
+		before = frappe.db.get_value("Resto Order", order, "net_total")
 		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 2}), op="offlineSend2")
-		self.assertEqual([d.kitchen_status for d in self.lines(order)], ["Not Sent"])
+		self.assertEqual([(d.qty, d.kitchen_status) for d in self.lines(order)], [(2, "Sent"), (1, "Not Sent")])
+		self.assertEqual(frappe.db.get_value("Resto Order", order, "net_total"), before, "the bill is unchanged")
+
+	def test_printed_but_not_on_the_order_is_noted_for_the_cashier(self):
+		order = self.order_with("one")
+		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 2}), op="offlineSend4")
+		notes = frappe.get_all(
+			"Comment", filters={"reference_doctype": "Resto Order", "reference_name": order}, pluck="content"
+		)
+		self.assertTrue(any("1 ×" in n for n in notes), notes)
+
+	def test_recorded_at_the_time_it_was_printed(self):
+		order = self.order_with("one")
+		at = add_to_date(now_datetime(), minutes=-5)
+		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 1}), op="offlineSend5", printed_at=str(at))
+		ticket = self.lines(order)[0].ticket
+		self.assertEqual(get_datetime(frappe.db.get_value("Resto Kitchen Ticket", ticket, "sent_at")).replace(microsecond=0), at.replace(microsecond=0))
+
+	def test_a_send_that_arrived_and_its_paper_printed_here_are_recorded_once(self):
+		order = self.order_with("one")
+		floor.send_to_kitchen(order, op="onlineSend6")  # its answer was lost
+		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 1}), op="onlineSend6")
+		self.assertEqual(frappe.db.count("Resto Kitchen Ticket", {"resto_order": order}), 1)
+		ticket = self.lines(order)[0].ticket
+		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", ticket, "printed"), 0)
 
 	def test_a_bad_printed_value_records_nothing(self):
 		order = self.order_with("one")
@@ -76,3 +103,5 @@ class TestOfflinePrint(IntegrationTestCase):
 		self.assertIn("taxes", rules)
 		self.assertIn("disable_rounded_total", rules)
 		self.assertIn("smallest_fraction", rules)
+		self.assertIn("rounding_method", rules)
+		self.assertIn(rules["exact"], (0, 1))
