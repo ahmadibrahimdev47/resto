@@ -120,9 +120,35 @@ class TestDayTickets(IntegrationTestCase):
 		self.assertEqual(next(t for t in found if t.name == ticket).dishes, ["1 × " + frappe.db.get_value("Item", "DISH-FRIES", "item_name")])
 		self.assertNotIn(ticket, [t.name for t in kitchen.kds_day_tickets(search=str(no), status="New")["tickets"]])
 
-		kitchen.kds_set_status(ticket, "New")
-		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", ticket, "status"), "New")
+		ready_at = frappe.db.get_value("Resto Kitchen Ticket", ticket, "ready_at")
+		kitchen.kds_recall(ticket)
+		back = frappe.db.get_value("Resto Kitchen Ticket", ticket, ["status", "ready_at", "recalled_at"], as_dict=True)
+		self.assertEqual(back.status, "New")
+		self.assertEqual(back.ready_at, ready_at, "the first ready time is kept for the kitchen times")
+		self.assertTrue(back.recalled_at)
 		self.assertIn(ticket, [t["name"] for t in kitchen.get_tickets()])
+
+	def test_a_paid_order_or_a_void_does_not_come_back(self):
+		order = floor.create_order(order_type="Takeaway", customer_name="Day Guest")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
+		floor.send_to_kitchen(order)
+		ticket = frappe.get_all("Resto Kitchen Ticket", filters={"resto_order": order}, pluck="name")[0]
+		kitchen.set_ticket_status(ticket, "Served")
+		frappe.db.set_value("Resto Order", order, "status", "Paid")
+		self.assertRaises(frappe.ValidationError, kitchen.kds_recall, ticket)
+		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", ticket, "status"), "Served")
+
+	def test_a_copy_leaves_the_printing_as_it_is(self):
+		order = floor.create_order(order_type="Takeaway", customer_name="Day Guest")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
+		floor.send_to_kitchen(order)
+		ticket = frappe.get_all("Resto Kitchen Ticket", filters={"resto_order": order}, pluck="name")[0]
+		frappe.db.set_value("Resto Kitchen Ticket", ticket, {"printed": 0, "print_claimed_at": None})
+		with patch("frappe.enqueue"):
+			kitchen.kds_print(ticket, copy=1)
+		self.assertEqual(
+			frappe.db.get_value("Resto Kitchen Ticket", ticket, ["printed", "print_claimed_at"]), (0, None)
+		)
 
 	def test_only_the_business_day(self):
 		order = floor.create_order(order_type="Takeaway", customer_name="Day Guest")

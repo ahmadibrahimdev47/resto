@@ -149,7 +149,8 @@ class RestoKitchen {
 			this.tickets
 				.map((t) => {
 					const where = t.table ? __("Table {0}", [esc(t.table)], "Resto") : `${__(t.order_type, null, "Resto")} · ${esc(t.order || "")}`;
-					const m = this.minutes(t.sent_at);
+					const since = t.recalled_at || t.sent_at; // brought back: timed from then
+					const m = this.minutes(since);
 					const items = t.items
 						.map(
 							(d) => `<li class="${d.voided ? "rk-voided" : ""}"><b>${d.qty} × ${esc(d.item_name)}</b>${d.voided ? ` <span class="rk-vtag">${__("VOID")}</span>` : ""}
@@ -174,7 +175,7 @@ class RestoKitchen {
 								? `<button class="btn btn-danger btn-sm" data-s="Served">${__("Seen", null, "Resto")}</button>`
 								: `<button class="btn btn-primary btn-sm" data-s="${next[t.status]}">${label[t.status]}</button>`;
 					return `<div class="rk-ticket s-${t.status.replace(/ /g, "")} ${isVoid ? "void" : ""} ${m >= 20 ? "late" : m >= 10 ? "warn" : ""}" data-name="${esc(t.name)}">
-						<div class="rk-head"><b>${this.number(t)}${where}</b><span data-since="${t.sent_at}">${m}′</span></div>
+						<div class="rk-head"><b>${this.number(t)}${where}</b><span data-since="${since}">${m}′</span></div>
 						<div class="rk-sub">${isVoid ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${esc(t.waiter || "")} · ${__(t.status, null, "Resto")} ${paper}</div>
 						<ul>${items}</ul>
 						<div class="rk-actions">${btn}
@@ -229,6 +230,7 @@ class RestoKitchen {
 			if (res.server) return frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
 			resto.print_window_seen = resto.print_slow = false;
 			if (!(await resto.print_pages(res.pages || []))) return;
+			if (res.copy) return; // a copy leaves the ticket's own printing as it is
 			const confirm = () => frappe.xcall("resto.resto.kitchen.kds_printed", { ticket: name }).then(() => this.refresh());
 			// A print window can be cancelled: only the cook knows whether the paper came out.
 			if (resto.print_slow || resto.print_window_seen) frappe.confirm(__("Did the ticket come out of the printer?"), confirm);
@@ -265,11 +267,12 @@ class RestoKitchen {
 		let seq = 0;
 		const draw = (more) => {
 			if (!rows.length) return $list.html(`<div class="rk-empty">${__("No tickets")}</div>`);
+			const top = $list.find(".rk-day").scrollTop() || 0; // More keeps the place in the list
 			$list.html(
 				`<div class="rk-day">${rows
 					.map((t) => {
 						const where = t.table ? __("Table {0}", [esc(t.table)], "Resto") : `${__(t.order_type, null, "Resto")} · ${esc(t.order || "")}`;
-						const back = !["New", "Cancelled"].includes(t.status);
+						const back = t.ticket_type === "Order" && !["New", "Cancelled"].includes(t.status);
 						return `<div class="rk-dayrow s-${t.status.replace(/ /g, "")}" data-name="${esc(t.name)}">
 							<div class="rk-daymain"><b>${this.number(t)}${where}</b>
 								<div class="rk-sub">${t.ticket_type === "Void" ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${__(t.status, null, "Resto")} · ${esc(frappe.datetime.str_to_user(t.sent_at).split(" ").pop() || "")}</div>
@@ -280,6 +283,7 @@ class RestoKitchen {
 					})
 					.join("")}</div>${more ? `<div class="text-center"><button class="btn btn-default btn-sm" data-dmore>${__("More")}</button></div>` : ""}`
 			);
+			$list.find(".rk-day").scrollTop(top);
 			$list.find("[data-dprint]").on("click", (e) => {
 				const btn = $(e.currentTarget);
 				this.print_ticket(btn.closest(".rk-dayrow").attr("data-name"), 1, btn);
@@ -287,7 +291,7 @@ class RestoKitchen {
 			$list.find("[data-dback]").on("click", (e) => {
 				const btn = $(e.currentTarget).prop("disabled", true);
 				frappe
-					.xcall("resto.resto.kitchen.kds_set_status", { ticket: btn.closest(".rk-dayrow").attr("data-name"), status: "New" })
+					.xcall("resto.resto.kitchen.kds_recall", { ticket: btn.closest(".rk-dayrow").attr("data-name") })
 					.then(() => {
 						frappe.show_alert({ message: __("Back on the board"), indicator: "green" });
 						this.refresh();
@@ -300,12 +304,15 @@ class RestoKitchen {
 		const load = (fresh) => {
 			const mine = ++seq;
 			if (fresh) rows = [];
+			const last = rows[rows.length - 1];
 			frappe
 				.xcall("resto.resto.kitchen.kds_day_tickets", {
 					station: this.station || null,
 					search: d.get_value("search") || "",
 					status: d.get_value("status") || "",
-					start: rows.length,
+					// The next page: before the last one shown (new tickets do not shift it).
+					before_at: last ? last.sent_at : null,
+					before_name: last ? last.name : null,
 				})
 				.then((r) => {
 					if (mine !== seq) return; // a newer search answered first

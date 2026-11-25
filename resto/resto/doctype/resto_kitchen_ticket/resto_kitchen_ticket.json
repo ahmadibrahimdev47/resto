@@ -27,6 +27,7 @@
   "column_break_2",
   "ready_at",
   "served_at",
+  "recalled_at",
   "items_section",
   "items"
  ],
@@ -167,6 +168,14 @@
    "label": "Served At"
   },
   {
+   "fieldname": "recalled_at",
+   "fieldtype": "Datetime",
+   "label": "Brought Back At",
+   "read_only": 1,
+   "no_copy": 1,
+   "description": "When the ticket was brought back to the kitchen board from Today's Tickets; its timer runs from then, and its first ready time is kept for the kitchen times."
+  },
+  {
    "fieldname": "items_section",
    "fieldtype": "Section Break",
    "label": "Items"
@@ -202,7 +211,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-25 23:45:00.000000",
+ "modified": "2026-11-26 02:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Kitchen Ticket",

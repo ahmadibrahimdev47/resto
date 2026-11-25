@@ -315,8 +315,9 @@ def _queue_print(ticket):
 		frappe.db.set_value("Resto Kitchen Ticket", ticket.name, "print_claimed_at", now_datetime(), update_modified=False)
 
 
-def print_ticket(ticket, reprint=0):
-	"""Background job: print a ticket on its station's network printer. Never raises."""
+def print_ticket(ticket, reprint=0, copy=0):
+	"""Background job: print a ticket on its station's network printer. Never raises. copy: a copy for
+	reference (Today's Tickets): marked so, and the ticket's print state is left as it is."""
 	from resto.resto import printing
 
 	doc = frappe.get_doc("Resto Kitchen Ticket", ticket)
@@ -332,14 +333,17 @@ def print_ticket(ticket, reprint=0):
 			station.printer,
 			station.print_format or "Resto Kitchen Ticket",
 			printing.copy_labels(station.copies),
-			extra={"resto_reprint": cint(reprint)},
+			extra={"resto_reprint": cint(reprint), "resto_copy": cint(copy)},
 		)
-		frappe.db.set_value("Resto Kitchen Ticket", doc.name, "printed", 1, update_modified=False)
+		if not cint(copy):
+			frappe.db.set_value("Resto Kitchen Ticket", doc.name, "printed", 1, update_modified=False)
 	except Exception:
 		frappe.log_error(title=_("Kitchen ticket {0} was not printed").format(doc.name))
 
 
-def set_ticket_status(ticket_name, status):
+def set_ticket_status(ticket_name, status, recall=False):
+	"""recall: brought back to the board from Today's Tickets (to New): the first ready time is kept
+	for the kitchen times, and the board's timer runs from now (recalled_at)."""
 	require_role(KITCHEN, WAITER, CASHIER)
 	if status not in TICKET_STATUSES:
 		frappe.throw(_("Unknown status {0}").format(status))
@@ -358,11 +362,14 @@ def set_ticket_status(ticket_name, status):
 		ticket.started_at = now
 	elif status == "Ready":
 		ticket.started_at = ticket.started_at or now
-		ticket.ready_at = ticket.ready_at if ticket.served_at else now
+		ticket.ready_at = ticket.ready_at if (ticket.served_at or ticket.recalled_at) and ticket.ready_at else now
 		ticket.served_at = None
 	elif status == "Served":
 		ticket.ready_at = ticket.ready_at or now
 		ticket.served_at = now
+	elif status == "New" and recall:
+		ticket.served_at = None
+		ticket.recalled_at = now
 	elif status == "New":
 		# Recall: back on the screen.
 		ticket.ready_at = ticket.served_at = None
@@ -388,6 +395,7 @@ def get_tickets(station=None, include_done_minutes=15):
 	fields = [
 		"name", "resto_order", "order_type", "resto_table", "station", "ticket_type", "status", "waiter",
 		"sent_at", "started_at", "ready_at", "served_at", "printed", "daily_no", "order_no", "send_round",
+		"recalled_at",
 	]
 	cond = {"station": station} if station else {}
 	now = now_datetime()
@@ -452,6 +460,7 @@ def get_tickets(station=None, include_done_minutes=15):
 				"daily_no": t.daily_no,
 				"order_no": t.order_no,
 				"send_round": t.send_round,
+				"recalled_at": t.recalled_at,
 				"items": [
 					{
 						"item_name": d.item_name,
@@ -509,7 +518,14 @@ def kds_print(ticket, copy=0):
 	printed, claimed = frappe.db.get_value(
 		"Resto Kitchen Ticket", ticket, ["printed", "print_claimed_at"], for_update=True
 	) or (0, None)
-	reprint = 1 if (cint(copy) or cint(printed) or claimed) else 0
+	if cint(copy):
+		# A copy for reference: marked so, and the ticket's own printing is left as it is (a ticket
+		# waiting for its paper still waits, and its alert stays).
+		if (station.print_method or BROWSER_BUTTON) == SERVER_PRINTER and station.printer:
+			frappe.enqueue("resto.resto.kitchen.print_ticket", ticket=ticket, copy=1, queue="short", enqueue_after_commit=True)
+			return {"server": 1}
+		return {"pages": ticket_pages(ticket, station, copy=1), "copy": 1}
+	reprint = 1 if (cint(printed) or claimed) else 0
 	if (station.print_method or BROWSER_BUTTON) == SERVER_PRINTER and station.printer:
 		frappe.enqueue(
 			"resto.resto.kitchen.print_ticket", ticket=ticket, reprint=reprint, queue="short", enqueue_after_commit=True
@@ -521,37 +537,65 @@ def kds_print(ticket, copy=0):
 	return result
 
 
+@frappe.whitelist(methods=["POST"])
+def kds_recall(ticket):
+	"""Today's Tickets: a ticket back on the board, to make again (a lost or wrong dish). Only for an
+	order still open: a paid or cancelled one is not brought back (its table would wait again)."""
+	require_role(KITCHEN, WAITER, CASHIER)
+	ticket_type, order = frappe.db.get_value("Resto Kitchen Ticket", ticket, ["ticket_type", "resto_order"]) or (None, None)
+	if ticket_type != "Order":
+		frappe.throw(_("Only an order ticket can come back to the board"))
+	status = frappe.db.get_value("Resto Order", order, "status") if order else None
+	if status not in ("Open", "Bill Requested"):
+		frappe.throw(
+			_("Order {0} is {1}: its ticket does not come back to the board. Add the dish to a new order.").format(
+				order, _(status or "", context="Resto")
+			)
+		)
+	set_ticket_status(ticket, "New", recall=True)
+	return "New"
+
+
 DAY_PAGE = 30
 
 
+DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+
+
 @frappe.whitelist()
-def kds_day_tickets(station=None, search=None, status=None, start=0):
-	"""Today's tickets (the business day) of a station, or of all, newest first and a page at a time,
-	for the kitchen screen's "Today's Tickets": found by the order's number or the table, to print a
-	copy or bring back to the board."""
+def kds_day_tickets(station=None, search=None, status=None, before_at=None, before_name=None):
+	"""Today's tickets (the business day) of a station, or of all, newest first and a page at a time
+	(the next page: those before the last one shown), for the kitchen screen's "Today's Tickets".
+	Found by the order's number, or the table ("5" finds T5 too, not 15)."""
 	require_role(KITCHEN, WAITER, CASHIER)
-	filters = {"sent_at": (">=", business_day_start(now_datetime()))}
+	cond = ["sent_at >= %(day)s"]
+	args = {"day": business_day_start(now_datetime())}
 	if station:
-		filters["station"] = station
+		cond.append("station = %(station)s")
+		args["station"] = station
 	if status in TICKET_STATUSES:
-		filters["status"] = status
-	or_filters = None
-	search = (search or "").strip().lstrip("#")
+		cond.append("status = %(status)s")
+		args["status"] = status
+	search = str(search or "").translate(DIGITS).replace("#", "").strip()
 	if search:
-		or_filters = {"resto_table": search}
-		if search.isdigit():
-			or_filters["order_no"] = cint(search)
-	tickets = frappe.get_all(
-		"Resto Kitchen Ticket",
-		filters=filters,
-		or_filters=or_filters,
-		fields=[
-			"name", "resto_order", "order_type", "resto_table", "station", "ticket_type", "status", "sent_at",
-			"served_at", "printed", "daily_no", "order_no", "send_round",
-		],
-		order_by="sent_at desc, name desc",
-		start=cint(start),
-		page_length=DAY_PAGE + 1,
+		args["s"] = search
+		if search.isascii() and search.isdigit():
+			args["no"] = cint(search)
+			args["re"] = f"(^|[^0-9]){search}$"
+			cond.append("(order_no = %(no)s or resto_table = %(s)s or resto_table regexp %(re)s)")
+		else:
+			args["like"] = "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+			cond.append("(resto_table = %(s)s or resto_table like %(like)s)")
+	if before_at and before_name:
+		cond.append("(sent_at < %(ba)s or (sent_at = %(ba)s and name < %(bn)s))")
+		args.update(ba=get_datetime(before_at), bn=before_name)
+	tickets = frappe.db.sql(
+		f"""select name, resto_order, order_type, resto_table, station, ticket_type, status, sent_at,
+			served_at, printed, daily_no, order_no, send_round
+		from `tabResto Kitchen Ticket` where {" and ".join(cond)}
+		order by sent_at desc, name desc limit {DAY_PAGE + 1}""",
+		args,
+		as_dict=True,
 	)
 	more = len(tickets) > DAY_PAGE
 	tickets = tickets[:DAY_PAGE]
@@ -760,7 +804,7 @@ def _ticket_station(ticket):
 	return frappe.get_cached_doc("Resto Kitchen Station", station)
 
 
-def ticket_pages(ticket, station, reprint=0):
+def ticket_pages(ticket, station, reprint=0, copy=0):
 	"""The ticket's print page once per copy of its station, each with its copy label, as the
 	browser prints them (the print format in its own language and direction)."""
 	from resto.resto import printing
@@ -774,6 +818,7 @@ def ticket_pages(ticket, station, reprint=0):
 			doc = frappe.get_doc("Resto Kitchen Ticket", ticket)
 			doc.resto_copy_label = label
 			doc.resto_reprint = cint(reprint)
+			doc.resto_copy = cint(copy)
 			html = frappe.get_print(
 				"Resto Kitchen Ticket", ticket, station.print_format or "Resto Kitchen Ticket", doc=doc, no_letterhead=1
 			)
