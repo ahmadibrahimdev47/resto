@@ -300,7 +300,7 @@ class RestoFloor {
 			<button class="rf-ib" data-h="refresh" title="${__("Refresh")}" aria-label="${__("Refresh")}">${ICON.refresh}</button>
 			<button class="rf-btn rf-userbtn" data-h="user"><span class="rf-av">${esc(initial)}</span>
 				<span class="rf-hide-sm">${esc(f.user_name)}${this.role_label() ? ` · ${esc(this.role_label())}` : ""}</span></button>`, () => {
-			this.$head.find("[data-h=refresh]").on("click", () => this.refresh());
+			this.$head.find("[data-h=refresh]").on("click", (e) => this.refresh_now($(e.currentTarget)));
 			this.$head.find("[data-h=user]").on("click", () => this.user_menu());
 			this.$head.find("[data-shift]").on("click", (e) => this.shift_click($(e.currentTarget).attr("data-shift")));
 		});
@@ -347,6 +347,21 @@ class RestoFloor {
 	schedule_refresh() {
 		clearTimeout(this._t);
 		this._t = setTimeout(() => this.refresh(), 400);
+	}
+
+	// The header's Refresh: the icon turns while the floor (and the open order) are read again, then
+	// a short "Updated"; with no connection the screen says so as usual.
+	async refresh_now($btn) {
+		if ($btn.prop("disabled")) return;
+		$btn.prop("disabled", true).addClass("rf-busy");
+		const was_offline = this.offline;
+		try {
+			await Promise.all([this.refresh(), this.order ? this.reload_lines(this.order.name).catch(() => {}) : null]);
+		} finally {
+			$btn.prop("disabled", false).removeClass("rf-busy");
+		}
+		if (!this.offline) frappe.show_alert({ message: __("Updated"), indicator: "green" }, 2);
+		else if (!was_offline) this.set_offline(true);
 	}
 
 	async refresh() {
@@ -1007,6 +1022,7 @@ class RestoFloor {
 				<span><i class="free"></i>${__("Free", null, "Resto")}</span>
 				<span><i class="occupied"></i>${__("Occupied")}</span>
 				<span><i class="bill"></i>${__("Bill Requested")}</span>
+				<span><i class="paid"></i>${__("Paid, Waiting for the Food")}</span>
 				<span><i class="reserved"></i>${__("Reserved")}</span>
 			</div>`, () =>
 			this.$body.find(".rf-tbl").on("click", (e) => {
@@ -1020,7 +1036,7 @@ class RestoFloor {
 	table_card(t) {
 		const o = t.order;
 		const pos = t.grid_row && t.grid_col ? `grid-row:${t.grid_row};grid-column:${t.grid_col};` : "";
-		const label = { free: __("Free", null, "Resto"), occupied: __("Occupied"), bill: __("Bill Requested"), reserved: __("Reserved") }[t.status];
+		const label = { free: __("Free", null, "Resto"), occupied: __("Occupied"), bill: __("Bill Requested"), reserved: __("Reserved"), paid: __("Paid, Waiting for the Food") }[t.status];
 		const seats = __("{0} seats", [t.seats || 0]);
 		let body;
 		if (o) {
@@ -1029,6 +1045,9 @@ class RestoFloor {
 				<div class="rf-tfoot"><b class="rf-tamt">${money(o.bill_grand_total || o.net_total)}</b><span class="rf-spacer"></span>
 					<span class="rf-tago">${__("for {0}", [dur(o.minutes)])}</span></div>
 				${o.ready_count ? `<span class="rf-ready">${__("Ready")} ${o.ready_count}</span>` : ""}`;
+		} else if (t.paid) {
+			body = `<span class="rf-tsub">${esc(t.paid.name)}</span>
+				<span class="rf-tfoot rf-unsent">${__("{0} dish(es) not out of the kitchen yet", [t.paid.waiting])}</span>`;
 		} else if (t.reservation) {
 			body = `<span class="rf-tsub">${seats}</span>
 				<span class="rf-tfoot rf-tres">${esc(t.reservation.customer_name)} · ${esc(hhmm(t.reservation.reservation_time))} · ${__("{0} guests", [t.reservation.guests])}</span>`;
@@ -1069,6 +1088,7 @@ class RestoFloor {
 
 	open_table(t) {
 		if (t.order) return this.load_order(t.order.name);
+		if (t.paid) return this.paid_table(t);
 		if (!this.floor.can_order) return frappe.msgprint(esc(this.floor.no_order_reason));
 		if (t.reservation) {
 			frappe.confirm(
@@ -1082,6 +1102,37 @@ class RestoFloor {
 			return;
 		}
 		this.ask_guests(t);
+	}
+
+	// A table paid while its food is still in the kitchen (D-220): it frees by itself once every dish
+	// is ready; the cashier may free it now, or seat new guests anyway.
+	paid_table(t) {
+		const r = this.floor.roles;
+		const d = new frappe.ui.Dialog({
+			title: `${__("Table {0}", [esc(t.name)], "Resto")} · ${__("Paid, Waiting for the Food")}`,
+			fields: [
+				{
+					fieldname: "html",
+					fieldtype: "HTML",
+					options: `<p>${__("Order {0} is paid, and {1} dish(es) are not out of the kitchen yet. The table frees by itself when they are ready.", [esc(t.paid.name), t.paid.waiting])}</p>`,
+				},
+			],
+		});
+		if (r.cashier || r.host || r.manager) {
+			d.set_primary_action(__("Free the Table"), async () => {
+				d.hide();
+				await call("free_table", { order: t.paid.name }, true);
+				this.refresh();
+			});
+		}
+		if (this.floor.can_order && (r.waiter || r.cashier || r.manager || r.host)) {
+			d.set_secondary_action_label(__("Seat New Guests"));
+			d.set_secondary_action(() => {
+				d.hide();
+				this.ask_guests(t);
+			});
+		}
+		d.show();
 	}
 
 	ask_guests(t) {
@@ -2153,7 +2204,15 @@ class RestoFloor {
 	render_lines() {
 		const o = this.order;
 		const manager = this.floor.roles.manager;
-		const in_kitchen = { Sent: __("In the Kitchen"), "In Progress": __("In the Kitchen") };
+		// Where each sent dish is (D-220): at the kitchen, its ticket printed, being made, ready.
+		const in_kitchen = (d) =>
+			d.kitchen_status === "Sent"
+				? d.printed
+					? `${__("Printed")} ✓`
+					: `${__("At the Kitchen")} ✓`
+				: d.kitchen_status === "In Progress"
+				? __("In Progress", null, "Resto")
+				: null;
 		const lines = o.items.map((d) => {
 			const sent = d.kitchen_status !== "Not Sent";
 			const voided = d.kitchen_status === "Void";
@@ -2170,7 +2229,7 @@ class RestoFloor {
 				? `<span class="rf-tag t-saving">${ICON.spin}${__("Saving…")}</span>`
 				: !sent
 				? `<span class="rf-tag t-new">${__("New", null, "Resto")}</span>`
-				: `<span class="rf-tag t-${slug}">${in_kitchen[d.kitchen_status] || __(d.kitchen_status, null, "Resto")}</span>`;
+				: `<span class="rf-tag t-${slug}">${in_kitchen(d) || __(d.kitchen_status, null, "Resto")}</span>`;
 			const tools = voided
 				? ""
 				: !sent
@@ -2933,6 +2992,7 @@ class RestoFloor {
 						</div>
 					</div>
 					${bill.on_account_customer ? `<label class="rf-onacc" style="display:none"><input type="checkbox"> <span>${__("Leave the rest on the account of {0}", [esc(bill.on_account_customer_name || bill.on_account_customer)])}</span></label>` : ""}
+					${o.order_type === "Dine In" && o.items.some((x) => !["Ready", "Served", "Void"].includes(x.kitchen_status)) ? `<div class="rf-warn rf-pwarn">⚠ ${__("Some dishes are not out of the kitchen yet: the table stays taken until they are ready.")}</div>` : ""}
 					<div class="rf-pnote rf-muted"></div>
 					<div class="rf-pacts">
 						<button class="rf-btn rf-lg" data-p="exact"><span>${__("Exact Amount in Cash")}</span><kbd dir="ltr">Enter</kbd></button>
@@ -2981,8 +3041,12 @@ class RestoFloor {
 			}
 			$w.find(".rf-pnote").text(note).toggleClass("rf-warn", unsure || over);
 			const done = $w.find(".rf-pdone");
+			// Saving: the button says so at once (a payment takes a moment on a small server).
+			done.toggleClass("rf-busy", !!this._settling);
 			done.html(
-				rest > EPS
+				this._settling
+					? `${ICON.spin}<span>${__("Saving…")}</span>`
+					: rest > EPS
 					? on_account ? __("Complete Payment · {0} on account", [money(rest)]) : __("Complete Payment · {0} left", [money(rest)])
 					: __("Complete Payment · Change {0}", [money(-rest)])
 			);
@@ -3039,7 +3103,7 @@ class RestoFloor {
 						on_account: owed ? 1 : 0,
 						...ok,
 					},
-					true,
+					false, // the button shows it is saving; the window is not greyed out
 					60000
 				);
 			} catch (e) {
@@ -3297,6 +3361,8 @@ class RestoFloor {
 		.rf-legend span { display:inline-flex; align-items:center; gap:6px; }
 		.rf-legend i { width:12px; height:12px; border-radius:4px; display:inline-block; }
 		.rf-legend i.free { background:var(--rf-green-soft); border:2px solid var(--rf-green); } .rf-legend i.occupied { background:var(--rf-blue); }
+		.rf-tbl.paid { background:var(--rf-card); border:2px dashed var(--rf-green); } .rf-tbl.paid .rf-st { background:var(--rf-green); color:#fff; }
+		.rf-legend i.paid { border:2px dashed var(--rf-green); } .rf-pwarn { padding:6px 0; font-weight:700; }
 		.rf-legend i.bill { background:var(--rf-amber); } .rf-legend i.reserved { background:var(--rf-purple); }
 		.rf-orow { all:unset; box-sizing:border-box; cursor:pointer; display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-bottom:1px solid var(--rf-line2); }
 		.rf-orow1, .rf-orow2 { display:flex; align-items:center; gap:8px; }
@@ -3388,6 +3454,7 @@ class RestoFloor {
 		.rf-tag.t-Void { background:var(--rf-red-soft); color:var(--rf-red-ink); }
 		.rf-tag.t-bill { background:var(--rf-amber-soft); color:var(--rf-amber-ink); vertical-align:middle; }
 		@keyframes rf-spin { to { transform:rotate(360deg); } }
+		.rf-busy svg { animation:rf-spin 1s linear infinite; } .rf-btn.rf-busy:disabled { opacity:.85; cursor:progress; }
 		.rf-hint { font-size:13px; color:var(--rf-muted); }
 		.rf-stp { display:flex; align-items:center; border:1px solid var(--rf-line); border-radius:10px; overflow:hidden; height:44px; }
 		.rf-stp button { width:44px; height:44px; border:0; background:var(--rf-card); color:var(--rf-ink); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }

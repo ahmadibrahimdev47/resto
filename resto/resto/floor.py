@@ -144,6 +144,7 @@ def get_floor():
 
 	# An order whose invoice was cancelled after the guests left is listed apart, not on the table.
 	by_table = {o.resto_table: o for o in orders if o.resto_table and not o.rebill}
+	paid_waiting = _paid_waiting(now)
 
 	reservations = frappe.get_all(
 		"Resto Reservation",
@@ -170,8 +171,11 @@ def get_floor():
 			order = by_table.get(t.name)
 			t.order = order
 			t.reservation = reserved.get(t.name)
+			t.paid = None if order else paid_waiting.get(t.name)
 			if order:
 				t.status = "bill" if order.status == "Bill Requested" else "occupied"
+			elif t.paid:
+				t.status = "paid"
 			elif t.reservation:
 				t.status = "reserved"
 			else:
@@ -215,6 +219,38 @@ def get_floor():
 		"has_pin": approval.has_pin(),
 		"lock_after_minutes": max(cint(settings.get("lock_after_minutes")), 0) if cint(settings.get("enable_screen_lock")) else 0,
 	}
+
+
+PAID_WAIT_HOURS = 12
+
+
+def _paid_waiting(now):
+	"""{table: order} of dine-in orders paid while a dish was still not out of the kitchen (D-220):
+	the table stays taken until every dish is ready or served, or the cashier frees it, so no one is
+	seated at a table still waiting for its food."""
+	rows = frappe.db.sql(
+		"""select o.name, o.resto_table, o.guests, o.closed_at,
+			sum(case when i.kitchen_status in ('Ready', 'Served', 'Void') then 0 else 1 end) as waiting
+		from `tabResto Order` o join `tabResto Order Item` i on i.parent = o.name and i.parenttype = 'Resto Order'
+		where o.status = 'Paid' and o.order_type = 'Dine In' and ifnull(o.resto_table, '') != ''
+			and ifnull(o.table_freed, 0) = 0 and o.opened_at >= %s
+		group by o.name having waiting > 0
+		order by o.opened_at asc""",
+		add_to_date(now, hours=-PAID_WAIT_HOURS),
+		as_dict=True,
+	)
+	return {r.resto_table: frappe._dict(name=r.name, guests=r.guests, waiting=cint(r.waiting)) for r in rows}
+
+
+@frappe.whitelist(methods=["POST"])
+def free_table(order):
+	"""The cashier frees the table of a paid dine-in order still waiting for its dishes (D-220)."""
+	require_role(CASHIER, HOST)
+	status, order_type = frappe.db.get_value("Resto Order", order, ["status", "order_type"]) or (None, None)
+	if status != "Paid" or order_type != "Dine In":
+		frappe.throw(_("Only the table of a paid dine-in order can be freed here"))
+	frappe.db.set_value("Resto Order", order, "table_freed", 1)
+	publish("order", order=order)
 
 
 def _bill_rules(settings):
@@ -342,9 +378,13 @@ def _order_view(doc):
 	data["invoiced_total"] = doc.invoiced_total()
 	# Which unsent lines can have their sides changed (Restaurant Settings and the dish's recipe).
 	data["sides_enabled"] = int(sides.enabled())
+	# Whether each sent line's kitchen ticket is on paper yet, for its status on the floor.
+	tickets = list({d.get("ticket") for d in data.get("items") or [] if d.get("ticket")})
+	printed = set(frappe.get_all("Resto Kitchen Ticket", filters={"name": ("in", tickets), "printed": 1}, pluck="name")) if tickets else set()
 	for d in data.get("items") or []:
 		d["has_sides"] = int(bool(data["sides_enabled"] and d.get("kitchen_status") == "Not Sent" and sides.slots(d.get("item_code"))))
 		d["extras_text"] = sides.extras_text(d)
+		d["printed"] = int(bool(d.get("ticket")) and d.get("ticket") in printed)
 	return data
 
 

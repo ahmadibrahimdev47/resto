@@ -30,7 +30,7 @@ class RestoKitchen {
 		this.paused = false;
 		// Printing goes on while another page of the system is shown on this computer.
 		this._claim_poll = setInterval(() => this.print_stations.length && !this.paused && this.claim_prints(), 10000);
-		this.page.add_inner_button(__("Refresh"), () => this.refresh());
+		this.$refresh = this.page.add_inner_button(__("Refresh"), () => this.refresh_now());
 		// Only a kitchen user prints automatically (the server takes the tickets for that role only).
 		this.can_autoprint = frappe.user.has_role("Resto Kitchen") || frappe.user.has_role("Resto Manager") || frappe.session.user === "Administrator";
 		// Waste for a cancelled dish already made, from its void ticket.
@@ -71,9 +71,24 @@ class RestoKitchen {
 		this.refresh();
 	}
 
+	// The Refresh button: busy while the tickets are read again, then a short "Updated".
+	async refresh_now() {
+		const $b = this.$refresh;
+		if ($b && $b.prop("disabled")) return;
+		if ($b) $b.prop("disabled", true).addClass("rk-busy");
+		try {
+			await this.refresh();
+			frappe.show_alert({ message: __("Updated"), indicator: "green" }, 2);
+		} catch (e) {
+			// the usual message says why
+		} finally {
+			if ($b) $b.prop("disabled", false).removeClass("rk-busy");
+		}
+	}
+
 	refresh() {
-		if (!$(this.wrapper).is(":visible")) return;
-		frappe.call({
+		if (!$(this.wrapper).is(":visible")) return Promise.resolve();
+		return frappe.call({
 			method: "resto.resto.kitchen.kds_data",
 			args: { station: this.station },
 			callback: (r) => {
@@ -160,13 +175,29 @@ class RestoKitchen {
 				})
 				.join("")
 		);
+		// Start, Ready, Served: the card moves at once and its buttons wait for the server; a refusal
+		// puts it back as it was.
 		this.$board.find("[data-s]").on("click", (e) => {
-			const name = $(e.currentTarget).closest(".rk-ticket").attr("data-name");
-			frappe.call({
-				method: "resto.resto.kitchen.kds_set_status",
-				args: { ticket: name, status: $(e.currentTarget).attr("data-s") },
-				callback: () => this.refresh(),
-			});
+			const $btn = $(e.currentTarget);
+			if ($btn.prop("disabled")) return;
+			const name = $btn.closest(".rk-ticket").attr("data-name");
+			const status = $btn.attr("data-s");
+			const t = (this.tickets || []).find((x) => x.name === name);
+			const was = t && t.status;
+			if (t) {
+				t.status = status;
+				this.render();
+			}
+			const $card = this.$board.find(`.rk-ticket[data-name="${CSS.escape(name)}"]`).addClass("rk-saving");
+			$card.find("button").prop("disabled", true);
+			$card.find(".rk-actions").prepend(`<span class="rk-wait">${__("Saving…")}</span>`);
+			frappe
+				.xcall("resto.resto.kitchen.kds_set_status", { ticket: name, status })
+				.then(() => this.refresh())
+				.catch(() => {
+					if (t && t.status === status) t.status = was;
+					this.render();
+				});
 		});
 		this.$board.find("[data-waste]").on("click", (e) => {
 			const name = $(e.currentTarget).closest(".rk-ticket").attr("data-name");
@@ -415,7 +446,7 @@ class RestoKitchen {
 		.rk-note { font-size:13px; color:var(--red-600, #e53e3e); font-weight:600; }
 		.rk-sides { font-size:14px; font-weight:700; color:var(--orange-600, #c05621); }
 		.rk-course { font-size:11px; background:var(--gray-100); border-radius:6px; padding:0 6px; margin-inline-start:4px; }
-		.rk-actions { display:flex; gap:6px; }
+		.rk-actions { display:flex; gap:6px; } .rk-saving { opacity:.75; } .rk-wait { align-self:center; font-size:13px; color:#555; } .rk-busy { cursor:progress; opacity:.7; }
 		.rk-no { font-size:20px; font-weight:800; }
 		.rk-printed { color:var(--green-600, #2f855a); margin-inline-start:4px; }
 		.rk-unprinted { color:var(--red-600, #e53e3e); font-weight:700; margin-inline-start:4px; }

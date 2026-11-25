@@ -54,6 +54,7 @@
   "reservation",
   "merged_into",
   "rebill",
+  "table_freed",
   "column_break_7",
   "notes",
   "print_sides",
@@ -375,6 +376,14 @@
    "description": "Its invoice was cancelled after the table was freed; bill it again from the floor list."
   },
   {
+   "fieldname": "table_freed",
+   "fieldtype": "Check",
+   "label": "Table Freed",
+   "read_only": 1,
+   "no_copy": 1,
+   "description": "A dine-in order paid before its dishes came out keeps its table until they are ready or the cashier frees it."
+  },
+  {
    "fieldname": "column_break_7",
    "fieldtype": "Column Break"
   },
@@ -411,7 +420,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-25 10:00:00.000000",
+ "modified": "2026-11-25 23:30:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",
