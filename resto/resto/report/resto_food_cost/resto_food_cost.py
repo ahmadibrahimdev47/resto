@@ -10,6 +10,7 @@ from resto.resto.report_utils import (
 	cost_by_invoice_row,
 	excluded_items,
 	other_food_costs,
+	packaging_cost,
 	pct,
 	prepare_filters,
 	recipe_costs,
@@ -80,6 +81,8 @@ def execute(filters=None):
 		{"label": _("Net Sales"), "value": sales, "datatype": "Currency", "indicator": "Blue"},
 		{"label": _("Recipe Food Cost %"), "value": pct(theo, sales), "datatype": "Percent"},
 		{"label": _("Cost of Food Sold"), "value": cogs, "datatype": "Currency"},
+		# Takeaway and delivery packaging (D-217): a cost of the bills, not of the food.
+		{"label": _("Packaging and Consumables"), "value": 0 if filters.get("item_group") else packaging_cost(filters), "datatype": "Currency"},
 		{"label": _("Waste"), "value": waste, "datatype": "Currency", "indicator": "Orange"},
 		{"label": _("Prep Adjustments"), "value": extra.prep, "datatype": "Currency"},
 		{"label": _("Stock Count Differences"), "value": counts, "datatype": "Currency",

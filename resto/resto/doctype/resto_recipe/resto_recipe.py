@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt, now_datetime
+from frappe.utils import cint, flt, now_datetime
 
 from resto.resto.costing import get_selling_rate, get_unit_cost
 from resto.resto.doctype.resto_settings.resto_settings import get_settings
@@ -51,10 +51,11 @@ class RestoRecipe(Document):
 			self.bom = None
 		else:
 			self.set("sides", [])
+			self.set("packaging", [])
 			self.product_bundle = None
 		self.uom = frappe.db.get_value("Item", self.item, "stock_uom")
-		# A side group belongs to a side (Served With), not to a main ingredient.
-		for row in self.items:
+		# A side group belongs to a side (Served With), not to a main ingredient or a box.
+		for row in [*self.items, *(self.get("packaging") or [])]:
 			row.side_group = None
 
 	def validate_item(self):
@@ -146,6 +147,18 @@ class RestoRecipe(Document):
 					frappe.throw(
 						_("{0}: ingredient {1} must be a stock item").format(label, frappe.bold(row.item_code))
 					)
+			elif row.parentfield == "packaging":
+				# Taken as its own bill line at no price (D-217, D-224): a stock item that can be on a
+				# bill, never a dish.
+				from resto.resto.packaging import item_problem
+
+				if row.is_sub_recipe or get_active_recipe(row.item_code, MENU):
+					frappe.throw(_("{0}: packaging {1} must be a stock item, not a menu dish").format(label, frappe.bold(row.item_code)))
+				problem = item_problem(row.item_code)
+				if problem:
+					frappe.throw(f"{label}: {problem}")
+				if not any(cint(row.get(f)) for f in ("dine_in", "takeaway", "delivery")):
+					frappe.throw(_("{0}: tick at least one order type that takes packaging {1}").format(label, frappe.bold(row.item_code)))
 			elif not item.is_stock_item and not row.is_sub_recipe:
 				# POSNext checks stock for every packed row, non-stock ones included, so a
 				# non-stock component would make every sale of this dish fail.
@@ -161,18 +174,24 @@ class RestoRecipe(Document):
 		memo = {}
 		main_cost = 0
 		total_cost = 0
+		packaging_cost = 0
 		for row in self.all_rows():
 			if not row.item_code:
 				row.rate = row.amount = 0
 				continue
 			row.rate = flt(get_unit_cost(row.item_code, memo, stack=(self.item,)))
 			row.amount = flt(row.rate * flt(row.stock_qty))
+			if row.parentfield == "packaging":
+				# Packaging (D-217): never in the dish cost or its food cost %.
+				packaging_cost += row.amount
+				continue
 			total_cost += row.amount
 			if row.parentfield == "items":
 				main_cost += row.amount
 
 		self.main_cost = main_cost
 		self.total_cost = total_cost
+		self.packaging_cost = packaging_cost
 		self.cost_per_unit = total_cost / flt(self.quantity or 1)
 
 		if self.recipe_type == MENU:
@@ -195,6 +214,7 @@ class RestoRecipe(Document):
 			{
 				"main_cost": self.main_cost,
 				"total_cost": self.total_cost,
+				"packaging_cost": self.packaging_cost,
 				"cost_per_unit": self.cost_per_unit,
 				"selling_rate": self.selling_rate,
 				"food_cost_percent": self.food_cost_percent,
@@ -328,7 +348,8 @@ class RestoRecipe(Document):
 			frappe.db.set_value("Item", self.item, "resto_needs_recipe", 1, update_modified=False)
 
 	def all_rows(self):
-		return list(self.get("items") or []) + list(self.get("sides") or [])
+		"""Every row: main ingredients, sides and packaging (only the first two are the dish)."""
+		return list(self.get("items") or []) + list(self.get("sides") or []) + list(self.get("packaging") or [])
 
 
 @frappe.whitelist(methods=["POST"])
@@ -350,6 +371,7 @@ def preview_cost(doc):
 	return {
 		"main_cost": doc.main_cost,
 		"total_cost": doc.total_cost,
+		"packaging_cost": doc.packaging_cost,
 		"cost_per_unit": doc.cost_per_unit,
 		"selling_rate": doc.selling_rate,
 		"food_cost_percent": doc.food_cost_percent,

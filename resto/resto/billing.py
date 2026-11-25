@@ -11,7 +11,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
-from resto.resto import sides
+from resto.resto import packaging, sides
 from resto.resto.utils import CASHIER, get_settings, has_role, publish, require_role
 
 EPS = 0.0000001
@@ -148,6 +148,13 @@ def build_invoice(order, lines=None):
 			frappe.throw(_("Set the Delivery Fee Item in Resto Settings first"))
 		_append_item(si, settings.delivery_fee_item, 1, delivery_fee, _("Delivery Fee"))
 		prices.append(delivery_fee)
+
+	# Packaging and automatic consumables (D-217, D-224): stock lines at no price, so the bill's
+	# cost of goods sold includes them; each on the order types ticked for it.
+	for item_code, qty, kind in packaging.lines(order, to_bill, active_invoices):
+		_append_item(si, item_code, qty, 0, sides._t("Packaging" if kind == packaging.DISH else "Consumables"))
+		si.items[-1].resto_packaging = kind
+		prices.append(0)
 
 	# ERPNext fills accounts, warehouse, cost center, payments and the tax template from the
 	# POS Profile.
@@ -377,6 +384,7 @@ def bill_preview(order, lines=None):
 				"amount": flt(d.qty) * flt(d.rate),
 			}
 			for d in si.items
+			if not d.get("resto_packaging")  # no price, not on the guest's bill (D-217)
 		],
 		"total": flt(si.total),
 		"discount": flt(si.discount_amount),
@@ -389,6 +397,8 @@ def bill_preview(order, lines=None):
 		"payable": payable,
 		"per_guest": flt(payable / guests, 2),
 		"guests": guests,
+		# Shown before the payment is taken; the bill itself is refused at settlement (D-224).
+		"stock_warning": packaging.check_stock(si, throw=False),
 		"currency": si.currency,
 		"allow_partial_payment": cint(frappe.get_cached_value("POS Profile", order.pos_profile, "allow_partial_payment")),
 		"on_account_customer": on_account_customer(order),
@@ -471,6 +481,8 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 		)
 
 	si = build_invoice(order, lines)
+	# A packaging or consumable short in stock is named now, before the payment (D-224).
+	packaging.check_stock(si)
 	unsent = [d.item_name for d in order.items if d.name in si.flags.resto_lines and d.kitchen_status == "Not Sent"]
 	if unsent:
 		# A bill for food the kitchen never got is almost always a mistake.

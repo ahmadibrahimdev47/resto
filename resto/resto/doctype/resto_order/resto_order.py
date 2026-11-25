@@ -30,6 +30,8 @@ SERVER_HEADER_FIELDS = (
 	"pos_profile",
 	"rebill",
 	"order_no",
+	# The cashier's extra packaging: only through set_extra_packaging (D-224)
+	"extra_packaging",
 	"send_rounds",
 	"table_freed",
 )
@@ -160,6 +162,13 @@ class RestoOrder(Document):
 			frappe.throw(_("Set a POS Profile or a Selling Price List in Resto Settings first"))
 
 	def validate_order_type(self):
+		if (
+			self.before_doc
+			and self.before_doc.order_type != self.order_type
+			and any(not cint(d.cancelled) for d in self.invoices)
+		):
+			# Packaging and consumables follow the order's type (D-224): a part already billed keeps it.
+			frappe.throw(_("Part of this order is billed: its order type cannot change any more"))
 		if self.order_type == "Dine In":
 			if not self.resto_table:
 				frappe.throw(_("Choose a table for a dine-in order"))

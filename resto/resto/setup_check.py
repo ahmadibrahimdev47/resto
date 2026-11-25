@@ -46,6 +46,8 @@ class SetupCheck:
 			self.check_menu,
 			self.check_prepared,
 			self.check_kitchen_stock,
+			self.check_packaging,
+			self.check_cash_purchase,
 			self.check_recipe_precision,
 			self.check_modifiers,
 			self.check_sides,
@@ -470,6 +472,85 @@ class SetupCheck:
 			)
 		else:
 			self.ok(area, _("All dish ingredients have stock in the kitchen"))
+
+	def check_packaging(self):
+		"""Packaging and automatic consumables (D-217, D-224): billable, in stock in the kitchen and
+		nowhere else, and the dishes without any."""
+		s = self.s
+		area = _("Packaging and Consumables")
+		dish_rows = frappe.db.sql(
+			"""select r.item dish, ri.item_code from `tabResto Recipe Item` ri
+			join `tabResto Recipe` r on r.name = ri.parent
+			where ri.parenttype = 'Resto Recipe' and ri.parentfield = 'packaging' and r.is_active = 1 and r.recipe_type = 'Menu Dish'""",
+			as_dict=True,
+		)
+		items = {r.item_code for r in dish_rows} | {r.item_code for r in s.get("consumables") or []}
+		used = frappe.db.sql(
+			"""select count(*) from `tabResto Order` where order_type in ('Takeaway', 'Delivery')
+			and opened_at >= %s""",
+			frappe.utils.add_days(frappe.utils.nowdate(), -30),
+		)[0][0]
+		if not items:
+			if used:
+				self.warn(
+					area,
+					_("Takeaway and delivery orders take no packaging: set Packaging on the menu dish recipes, and the Automatic Consumables in Resto Settings."),
+				)
+			return
+		from resto.resto.packaging import item_problem
+
+		if cint(frappe.db.get_single_value("Selling Settings", "validate_selling_price")):
+			self.error(
+				area,
+				_("Packaging and consumables are billed at no price, so their bills would fail: untick Validate Selling Price for Item Against Purchase Rate or Valuation Rate in Selling Settings."),
+			)
+		for code in sorted(items):
+			problem = item_problem(code)
+			if problem:
+				self.error(area, problem)
+		warehouse = s.kitchen_warehouse
+		if warehouse:
+			stock = frappe.db.sql(
+				"select item_code, warehouse, actual_qty from `tabBin` where item_code in %s and actual_qty != 0",
+				(list(items),),
+				as_dict=True,
+			)
+			in_kitchen = {r.item_code: flt(r.actual_qty) for r in stock if r.warehouse == warehouse}
+			empty = sorted(i for i in items if in_kitchen.get(i, 0) <= 0)
+			if empty:
+				self.warn(
+					area,
+					_("Packaging or consumables out of stock in the kitchen: {0}. Bills that take them are refused until they are received.").format(short(empty)),
+				)
+			elsewhere = sorted({f"{r.item_code} ({r.warehouse})" for r in stock if r.warehouse != warehouse and flt(r.actual_qty) > 0})
+			if elsewhere:
+				self.warn(
+					area,
+					_("Packaging and consumables are taken from the kitchen, but some are in stock in other warehouses: {0}. Receive them into the kitchen, or move them there with a Material Transfer.").format(short(elsewhere)),
+				)
+		with_packaging = {r.dish for r in dish_rows}
+		dishes = frappe.db.count("Resto Recipe", {"is_active": 1, "recipe_type": "Menu Dish"})
+		without = dishes - len(with_packaging)
+		if used and without > 0:
+			self.ok(area, _("{0} menu dishes have packaging; {1} have none (drinks or dishes sold without a box need none).").format(len(with_packaging), without))
+		else:
+			self.ok(area, _("{0} menu dishes have packaging").format(len(with_packaging)))
+
+	def check_cash_purchase(self):
+		"""Cash purchases from the drawer (D-225) are Purchase Invoices with no order or receipt before them."""
+		area = _("Cash Purchases")
+		need = [
+			label
+			for field, label in (("po_required", _("Purchase Order Required")), ("pr_required", _("Purchase Receipt Required")))
+			if frappe.db.get_single_value("Buying Settings", field) == "Yes"
+		]
+		if need:
+			self.warn(
+				area,
+				_("Buying Settings has {0} = Yes: cash purchases from the drawer are refused for suppliers not allowed to skip it. Set it to No, or tick the matching Allow on each supplier the cashier buys from.").format(" / ".join(need)),
+			)
+		else:
+			self.ok(area, _("Cash purchases from the drawer need no purchase order or receipt"))
 
 
 def short(names, limit=15):

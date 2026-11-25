@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 
 class RestoSettings(Document):
@@ -50,10 +50,33 @@ class RestoSettings(Document):
 				frappe.throw(_("{0} is not an expense account").format(frappe.bold(row.account)))
 
 		self.validate_food_cost_levels()
+		self.validate_consumables()
 		if not self.cashier_print_method:
 			self.cashier_print_method = "Server Printer" if self.cashier_printer else "Browser Button"
 		if self.cashier_print_method == "Server Printer" and not self.cashier_printer:
 			frappe.throw(_("Choose the cashier printer, or another printing method"))
+
+	def validate_consumables(self):
+		"""Automatic Consumables (D-224): each billed as its own stock line at no price, once per order
+		or per guest, on the order types ticked."""
+		from resto.resto.doctype.resto_recipe.resto_recipe import MENU, get_active_recipe
+		from resto.resto.packaging import TYPE_FLAG, item_problem
+
+		seen = set()
+		for row in self.get("consumables") or []:
+			label = _("Row {0} in {1}").format(row.idx, _("Automatic Consumables"))
+			if get_active_recipe(row.item_code, MENU):
+				frappe.throw(_("{0}: {1} must be a stock item, not a menu dish").format(label, frappe.bold(row.item_code)))
+			problem = item_problem(row.item_code)
+			if problem:
+				frappe.throw(f"{label}: {problem}")
+			if flt(row.qty) <= 0:
+				frappe.throw(_("{0}: quantity must be greater than zero").format(label))
+			if not any(cint(row.get(f)) for f in TYPE_FLAG.values()):
+				frappe.throw(_("{0}: tick at least one order type that takes {1}").format(label, frappe.bold(row.item_code)))
+			if row.item_code in seen:
+				frappe.throw(_("{0}: {1} is listed twice").format(label, frappe.bold(row.item_code)))
+			seen.add(row.item_code)
 
 	def validate_food_cost_levels(self):
 		from resto.resto.food_cost import STEP_FIELDS, STEPS

@@ -29,6 +29,7 @@
   "on_account",
   "tax_total",
   "expenses_total",
+  "purchases_total",
   "net_cash",
   "total_difference",
   "over_short_entry",
@@ -36,7 +37,8 @@
   "invoices",
   "taxes_section",
   "taxes",
-  "expenses"
+  "expenses",
+  "purchases"
  ],
  "fields": [
   {
@@ -198,6 +200,13 @@
    "read_only": 1
   },
   {
+   "fieldname": "purchases_total",
+   "fieldtype": "Currency",
+   "label": "Cash Purchases",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
    "fieldname": "net_cash",
    "fieldtype": "Currency",
    "label": "Net Cash Impact",
@@ -234,7 +243,7 @@
   {
    "fieldname": "taxes_section",
    "fieldtype": "Section Break",
-   "label": "Taxes and Expenses",
+   "label": "Taxes, Expenses and Purchases",
    "collapsible": 1
   },
   {
@@ -250,13 +259,20 @@
    "label": "Drawer Expenses",
    "options": "Resto Shift Expense",
    "read_only": 1
+  },
+  {
+   "fieldname": "purchases",
+   "fieldtype": "Table",
+   "label": "Cash Purchases",
+   "options": "Resto Shift Purchase",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-25 18:00:00.000000",
+ "modified": "2026-11-26 11:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Shift",

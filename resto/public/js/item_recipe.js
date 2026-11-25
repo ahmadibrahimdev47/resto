@@ -2,8 +2,14 @@
 // load and writes it back to the recipe when the item is saved (resto/resto/item_recipe.py).
 (() => {
 	const P = "resto_recipe_";
-	const TABLES = [P + "items", P + "sides"];
-	const COSTS = { total_cost: P + "total_cost", cost_per_unit: P + "cost_per_unit", selling_rate: P + "selling_rate", food_cost_percent: P + "food_cost_percent" };
+	const TABLES = [P + "items", P + "sides", P + "packaging"];
+	const COSTS = {
+		total_cost: P + "total_cost",
+		cost_per_unit: P + "cost_per_unit",
+		selling_rate: P + "selling_rate",
+		food_cost_percent: P + "food_cost_percent",
+		packaging_cost: P + "packaging_cost",
+	};
 	const PREPARED = "Prepared Ingredient";
 	const MENU = "Menu Dish";
 
@@ -28,6 +34,7 @@
 				quantity: frm.doc[P + "quantity"] || 1,
 				items: (frm.doc[P + "items"] || []).map(strip),
 				sides: frm.doc[P + "type"] === MENU ? (frm.doc[P + "sides"] || []).map(strip) : [],
+				packaging: frm.doc[P + "type"] === MENU ? (frm.doc[P + "packaging"] || []).map(strip) : [],
 			};
 			frappe.call({
 				method: "resto.resto.doctype.resto_recipe.resto_recipe.preview_cost",
@@ -79,6 +86,8 @@
 				return { filters };
 			};
 			TABLES.forEach((t) => frm.set_query("item_code", t, query));
+			// Packaging is taken as its own stock line at no price on the bill (D-217, D-224).
+			frm.set_query("item_code", P + "packaging", () => ({ filters: { disabled: 0, has_variants: 0, is_fixed_asset: 0, is_stock_item: 1, is_sales_item: 1 } }));
 		},
 		refresh: render,
 		has_variants: render,
@@ -90,9 +99,11 @@
 		},
 		[P + "type"](frm) {
 			mark_changed(frm);
-			if (frm.doc[P + "type"] !== MENU && (frm.doc[P + "sides"] || []).length) {
-				frm.clear_table(P + "sides");
-				frm.refresh_field(P + "sides");
+			for (const t of [P + "sides", P + "packaging"]) {
+				if (frm.doc[P + "type"] !== MENU && (frm.doc[t] || []).length) {
+					frm.clear_table(t);
+					frm.refresh_field(t);
+				}
 			}
 			preview(frm);
 		},
@@ -129,7 +140,21 @@
 		note(frm) {
 			if (frm.doctype === "Item") mark_changed(frm);
 		},
+		// The order types a packaging row is taken on, and a side's group, are part of the recipe too.
+		dine_in(frm) {
+			if (frm.doctype === "Item") mark_changed(frm);
+		},
+		takeaway(frm) {
+			if (frm.doctype === "Item") mark_changed(frm);
+		},
+		delivery(frm) {
+			if (frm.doctype === "Item") mark_changed(frm);
+		},
+		side_group(frm) {
+			if (frm.doctype === "Item") mark_changed(frm);
+		},
 		[P + "items_remove"]: on_row,
 		[P + "sides_remove"]: on_row,
+		[P + "packaging_remove"]: on_row,
 	});
 })();

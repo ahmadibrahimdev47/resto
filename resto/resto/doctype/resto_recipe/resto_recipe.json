@@ -18,6 +18,7 @@
   "ingredients_section",
   "items",
   "sides",
+  "packaging",
   "cost_section",
   "main_cost",
   "total_cost",
@@ -25,6 +26,7 @@
   "column_break_cost",
   "selling_rate",
   "food_cost_percent",
+  "packaging_cost",
   "target_food_cost_percent",
   "cost_updated_on",
   "links_section",
@@ -123,10 +125,18 @@
   },
   {
    "depends_on": "eval:doc.recipe_type=='Menu Dish'",
-   "description": "Sides and packaging served with this dish (rice, bread, salad, sauces, box). They are not taken when this dish is part of another dish.",
+   "description": "Sides served with this dish on every order (rice, bread, salad, sauces). They are not taken when this dish is part of another dish. Boxes and cups go in Packaging.",
    "fieldname": "sides",
    "fieldtype": "Table",
    "label": "Served With",
+   "options": "Resto Recipe Item"
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Menu Dish'",
+   "description": "Boxes, cups and lids this dish takes. Each row is taken on the order types ticked on it (takeaway and delivery by default; tick Dine In when the dish is served in it there too), never when this dish is part of another dish. Its cost is shown apart from the food cost.",
+   "fieldname": "packaging",
+   "fieldtype": "Table",
+   "label": "Packaging",
    "options": "Resto Recipe Item"
   },
   {
@@ -176,6 +186,15 @@
    "fieldtype": "Percent",
    "in_list_view": 1,
    "label": "Food Cost %",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.recipe_type=='Menu Dish'",
+   "description": "All the packaging rows of one dish. Not in the recipe cost or the food cost %.",
+   "fieldname": "packaging_cost",
+   "fieldtype": "Currency",
+   "label": "Packaging Cost",
+   "options": "Company:company:default_currency",
    "read_only": 1
   },
   {
@@ -233,7 +252,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-22 14:00:00.000000",
+ "modified": "2026-11-26 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Recipe",

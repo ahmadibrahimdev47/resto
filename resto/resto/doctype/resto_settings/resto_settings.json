@@ -30,6 +30,8 @@
   "drawer_expense_cap",
   "drawer_expense_receipt",
   "drawer_expense_accounts",
+  "drawer_purchase_cap",
+  "cash_supplier",
   "allow_side_changes",
   "charge_extra_sides",
   "column_break_pos",
@@ -50,6 +52,8 @@
   "delivery_fee_item",
   "column_break_delivery",
   "delivery_fee",
+  "packaging_section",
+  "consumables",
   "discount_section",
   "waiter_discount_limit",
   "column_break_discount",
@@ -223,6 +227,19 @@
    "description": "The expense accounts a cashier may pay from the drawer. Empty: any ordinary expense account."
   },
   {
+   "fieldname": "drawer_purchase_cap",
+   "fieldtype": "Currency",
+   "label": "Cash Purchase Needs a Manager Above",
+   "description": "A cash purchase from the drawer above this amount needs a manager's PIN. 0: never."
+  },
+  {
+   "fieldname": "cash_supplier",
+   "fieldtype": "Link",
+   "options": "Supplier",
+   "label": "Cash Supplier",
+   "description": "The supplier of a cash purchase from the drawer when the cashier names none. Empty: a supplier called Cash Supplier is made on the first one."
+  },
+  {
    "default": "0",
    "fieldname": "allow_side_changes",
    "fieldtype": "Check",
@@ -347,6 +364,18 @@
    "label": "Default Delivery Fee"
   },
   {
+   "fieldname": "packaging_section",
+   "fieldtype": "Section Break",
+   "label": "Packaging and Consumables",
+   "description": "Taken from stock on the bill at no price, into the bill's cost of goods sold apart from the food cost; a return never puts them back. Each dish takes the Packaging rows of its recipe ticked for the order's type; each order takes the rows below ticked for its type, once per order or once per guest."
+  },
+  {
+   "fieldname": "consumables",
+   "fieldtype": "Table",
+   "label": "Automatic Consumables",
+   "options": "Resto Consumable Item"
+  },
+  {
    "fieldname": "discount_section",
    "fieldtype": "Section Break",
    "label": "Discount Limits"
@@ -436,7 +465,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-25 20:00:00.000000",
+ "modified": "2026-11-26 11:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

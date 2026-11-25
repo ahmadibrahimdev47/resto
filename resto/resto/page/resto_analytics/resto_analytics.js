@@ -86,6 +86,7 @@ class RestoAnalytics {
 			[__("Food Cost %"), p(k.food_cost_pct), `${__("Cost of Food Sold")}: ${money(k.cogs)}`, k.food_cost_pct > k.food_cost_alert ? "red" : "green"],
 			[__("Total Food Cost %"), p(k.total_food_cost_pct), __("With waste and count differences"), fc_bad ? "red" : "green"],
 			[__("Waste"), money(k.waste), `${p(k.waste_pct)} ${__("of sales")}`, "orange"],
+			[__("Packaging and Consumables"), money(k.packaging_cost), __("Not in the food cost"), ""],
 			[__("Discounts"), money(k.discount), `${p(k.discount_pct)} ${__("of items total")}`, "orange"],
 			[__("Service Charge"), money(k.service), "", ""],
 			[__("Voids"), k.voids, money(k.void_amount), k.voids ? "red" : ""],

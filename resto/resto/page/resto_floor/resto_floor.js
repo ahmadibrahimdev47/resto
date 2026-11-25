@@ -1332,12 +1332,14 @@ class RestoFloor {
 		if (act === "open") return this.open_shift();
 		if (act === "close") return this.close_shift();
 		if (act === "expense") return this.drawer_expense();
+		if (act === "purchase") return this.cash_purchase();
 		if (act === "debt") return this.collect_debt();
 		const s = this.floor.shift || {};
 		if (!s.shift) return this.open_shift();
 		this.menu_dialog(__("Shift", null, "Resto"), [
 			[__("Collect Debt"), () => this.collect_debt()],
 			[__("Drawer Expense"), () => this.drawer_expense()],
+			[__("Cash Purchase"), () => this.cash_purchase()],
 			[__("Close Shift"), () => this.close_shift()],
 		]);
 	}
@@ -1351,7 +1353,11 @@ class RestoFloor {
 		if (r.cashier || r.manager) {
 			acts.push([__("Invoices", null, "Resto"), () => this.invoices()]);
 			if (s.shift) {
-				acts.push([__("Collect Debt"), () => this.collect_debt()], [__("Drawer Expense"), () => this.drawer_expense()]);
+				acts.push(
+					[__("Collect Debt"), () => this.collect_debt()],
+					[__("Drawer Expense"), () => this.drawer_expense()],
+					[__("Cash Purchase"), () => this.cash_purchase()]
+				);
 			}
 		}
 		// The lock screen only when Resto Settings turns it on (D-216); a manager's approval PIN always.
@@ -1470,11 +1476,12 @@ class RestoFloor {
 				${metric(__("Gross Sales"), money(s.gross_sales), __("{0} invoices", [s.sales_count || (r.invoices || []).filter((i) => !i.is_return).length]))}
 				${s.returns_count ? metric(__("Returns"), "-" + money(s.returns_total), __("{0} returns", [s.returns_count])) : ""}
 				${s.expenses_count ? metric(__("POS Expenses"), "-" + money(s.expenses_total), __("{0} expenses", [s.expenses_count])) : ""}
+				${s.purchases_count ? metric(__("Cash Purchases"), "-" + money(s.purchases_total), __("{0} purchases", [s.purchases_count])) : ""}
 				${metric(__("Net Sales"), money(s.net_sales), __("After returns"))}
 				${metric(__("Collected"), money(s.collected), __("Money taken"))}
 				${s.outstanding > 0.005 ? metric(__("On Account"), money(s.outstanding), __("Not collected")) : ""}
 				${s.debts_count ? metric(__("Debts Collected"), money(s.debts_total), __("{0} payments", [s.debts_count])) : ""}
-				${s.expenses_count ? metric(__("Net Cash Impact"), money(s.net_cash), __("Collected - Expenses")) : ""}
+				${s.expenses_count || s.purchases_count ? metric(__("Net Cash Impact"), money(s.net_cash), s.purchases_count ? __("Collected - Expenses - Purchases") : __("Collected - Expenses")) : ""}
 				${metric(__("Tax Collected"), money(s.tax_total))}
 			</div>`);
 			const inv = (r.invoices || [])
@@ -1493,6 +1500,12 @@ class RestoFloor {
 			if ((r.expenses || []).length) {
 				parts.push(`<details><summary><b>${__("POS Expenses")}</b></summary><table class="table table-condensed">
 					${r.expenses.map((e) => `<tr><td>${esc(e.expense_account)}</td><td>${esc(e.remarks || "")}</td><td class="rf-amt">${money(e.amount)}</td></tr>`).join("")}</table></details>`);
+			}
+			if ((r.purchases || []).length) {
+				parts.push(`<details><summary><b>${__("Cash Purchases")}</b></summary><table class="table table-condensed">
+					${r.purchases
+						.map((e) => `<tr><td>${esc(e.supplier_name || e.supplier || "")}</td><td>${esc(e.items_text || "")}</td><td class="rf-amt">${money(e.amount)}</td></tr>`)
+						.join("")}</table></details>`);
 			}
 			if ((r.taxes || []).length) {
 				parts.push(`<details><summary><b>${__("Tax Summary")}</b></summary><table class="table table-condensed">
@@ -1545,6 +1558,7 @@ class RestoFloor {
 					label: __("Expense Account"),
 					options: [{ value: "", label: "" }, ...data.accounts.map((a) => ({ value: a.name, label: a.account_name }))],
 					reqd: 1,
+					description: __("Food and other stock bought for cash is a Cash Purchase, so it enters the stock."),
 				},
 				{
 					fieldname: "amount",
@@ -1563,6 +1577,106 @@ class RestoFloor {
 					d.hide();
 					frappe.show_alert({ message: __("Expense recorded: {0}", [je]), indicator: "green" });
 				}),
+		});
+		d.show();
+	}
+
+	// Food or other stock bought for cash out of the drawer (D-225): a paid Purchase Invoice that
+	// receives it into the kitchen at what was paid; the shift's expected cash goes down by it.
+	async cash_purchase() {
+		const data = await frappe.xcall("resto.resto.shift.purchase_data");
+		if (!data.modes.length) return frappe.msgprint(__("This shift has no cash payment method"));
+		// One id per dialog: a retried click after a lost answer gives the same purchase.
+		const request_id = frappe.utils.get_random(20);
+		const suppliers = [{ value: "", label: __("Cash Supplier", null, "Resto") }, ...data.suppliers.filter((x) => x.name !== data.cash_supplier).map((x) => ({ value: x.name, label: x.supplier_name || x.name }))];
+		const total = (rows) => (rows || []).reduce((a, r) => a + flt(r.amount), 0);
+		const d = new frappe.ui.Dialog({
+			title: __("Cash Purchase"),
+			fields: [
+				{
+					fieldname: "note",
+					fieldtype: "HTML",
+					options: `<p class="text-muted">${__("Received into {0} at what was paid, and paid from the drawer.", [esc(data.warehouse || "")])}</p>`,
+				},
+				{
+					fieldname: "items",
+					fieldtype: "Table",
+					label: __("Items Bought"),
+					cannot_add_rows: false,
+					in_place_edit: true,
+					reqd: 1,
+					data: [],
+					fields: [
+						{
+							fieldname: "item_code",
+							fieldtype: "Link",
+							options: "Item",
+							label: __("Item"),
+							in_list_view: 1,
+							columns: 3,
+							reqd: 1,
+							get_query: () => ({ filters: { is_stock_item: 1, is_purchase_item: 1, disabled: 0, has_variants: 0 } }),
+							// The unit the quantity is in, shown on the row (a Kg item is not typed in grams).
+							onchange() {
+								const row = this.doc;
+								if (!row || !row.item_code) return;
+								frappe.db.get_value("Item", row.item_code, "stock_uom").then((r) => {
+									row.stock_uom = (r.message || {}).stock_uom || "";
+									d.fields_dict.items.grid.refresh();
+								});
+							},
+						},
+						{ fieldname: "qty", fieldtype: "Float", label: __("Qty (stock unit)"), in_list_view: 1, columns: 2, reqd: 1 },
+						{ fieldname: "stock_uom", fieldtype: "Data", label: __("Stock UOM"), in_list_view: 1, columns: 2, read_only: 1 },
+						{ fieldname: "amount", fieldtype: "Currency", label: __("Amount Paid"), in_list_view: 1, columns: 3, reqd: 1 },
+					],
+				},
+				{ fieldname: "mode_of_payment", fieldtype: "Select", label: __("Paid From"), options: data.modes.join("\n"), default: data.modes[0], reqd: 1 },
+				{ fieldname: "supplier", fieldtype: "Select", label: __("Supplier"), options: suppliers, default: "" },
+				{ fieldname: "remarks", fieldtype: "Data", label: __("Remarks") },
+				{ fieldname: "receipt", fieldtype: "Attach", label: __("Receipt") },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				const items = (v.items || []).filter((r) => r.item_code).map((r) => ({ item_code: r.item_code, qty: r.qty, amount: r.amount }));
+				if (!items.length) return frappe.msgprint(__("Add what was bought"));
+				const sum = total(items);
+				// The manager's PIN is asked before the screen waits for the server.
+				let ok = {};
+				if (data.approval_above != null && sum > flt(data.approval_above) + 0.005) {
+					ok = await ask_approval(this.floor, __("Cash purchase of {0} (above {1})", [money(sum), money(data.approval_above)]));
+					if (!ok) return;
+				}
+				const send = () =>
+					new Promise((resolve, reject) =>
+						frappe.call({
+							method: "resto.resto.shift.cash_purchase",
+							args: { items: JSON.stringify(items), mode_of_payment: v.mode_of_payment, supplier: v.supplier || null, remarks: v.remarks || null, receipt: v.receipt || null, request_id, ...ok },
+							callback: (r) => resolve(r.message),
+							error: (r) => reject(r || {}),
+						})
+					);
+				let pi = null;
+				let approve = false;
+				await this.shift_busy(d, async () => {
+					try {
+						pi = await send();
+					} catch (r) {
+						// A price far from the usual one (the server said why): a manager approves it.
+						approve = r.exc_type === "ApprovalRequired" && !ok.approver && !this.floor.roles.manager;
+					}
+				});
+				if (approve) {
+					ok = await ask_approval(this.floor, __("Cash purchase of {0}", [money(sum)]));
+					if (!ok) return;
+					await this.shift_busy(d, async () => {
+						pi = await send().catch(() => null);
+					});
+				}
+				if (!pi) return;
+				d.hide();
+				frappe.show_alert({ message: __("Cash purchase recorded: {0}", [pi]), indicator: "green" });
+			},
 		});
 		d.show();
 	}
@@ -2060,6 +2174,9 @@ class RestoFloor {
 		this.$order.find(".rf-scan").on("click", () => this.$order.find(".rf-search").trigger("focus").select());
 		// One handler for the order's buttons; each goes through action() (changes sent first, one at a time).
 		this.$order.off("click.rfact").on("click.rfact", "[data-act]", (e) => this.action($(e.currentTarget).attr("data-act"), e));
+		this.$order.off("click.rfpack").on("click.rfpack", "[data-pack]", (e) =>
+			this.set_pack($(e.currentTarget).attr("data-pack"), cint($(e.currentTarget).attr("data-n")))
+		);
 		this.$order.off("click.rfcust").on("click.rfcust", "[data-cust]", (e) =>
 			this.action($(e.currentTarget).attr("data-cust") === "new" ? "new_customer" : "customer")
 		);
@@ -2321,6 +2438,7 @@ class RestoFloor {
 			${disc ? `<div class="rf-trow"><span>${__("Discount")}</span><span class="rf-spacer"></span><span dir="ltr">−${money(disc)}</span></div>` : ""}
 			${flt(o.service_charge_percent) ? `<div class="rf-trow rf-muted"><span>${__("Service Charge")} ${o.service_charge_percent}%</span></div>` : ""}
 			${o.invoiced_total ? `<div class="rf-trow rf-muted"><span>${__("Paid So Far")}</span><span class="rf-spacer"></span><span>${money(o.invoiced_total)}</span></div>` : ""}
+			${this.packaging_row(o)}
 			<div class="rf-grand"><b>${o.bill_grand_total ? __("Bill Total") : __("Total", null, "Resto")}</b><span class="rf-spacer"></span><b class="rf-gv">${money(total)}</b></div>
 			${added ? `<small class="rf-muted">${__("The service charge, delivery fee and tax are added on the bill")}</small>` : ""}`);
 		const unsent = o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold).length;
@@ -2346,6 +2464,45 @@ class RestoFloor {
 			const el = this.$order.find(`.rf-ln[data-item="${CSS.escape(this._show_code)}"]`).last()[0];
 			this._show_code = null;
 			if (el) el.scrollIntoView({ block: "nearest" });
+		}
+	}
+
+	// Consumables the cashier adds to a big order (D-217, D-224): one tap for one more bag, of the
+	// rows ticked for the order's type. They are taken from stock on the bill, at no price.
+	packaging_row(o) {
+		const flag = { "Dine In": "dine_in", Takeaway: "takeaway", Delivery: "delivery" }[o.order_type];
+		const add = (this.floor.packaging_addable || []).filter((p) => flag && p[flag]);
+		const billed = (o.invoices || []).some((d) => !d.cancelled);
+		if (!add.length || billed) return "";
+		let extra = {};
+		try {
+			extra = JSON.parse(o.extra_packaging || "{}") || {};
+		} catch (e) {
+			extra = {};
+		}
+		return `<div class="rf-pack"><span class="rf-muted">${__("Extra Packaging")}</span>${add
+			.map((p) => {
+				const n = cint(extra[p.item_code]);
+				const name = esc(p.item_name);
+				return `<span class="rf-packi">${
+					n ? `<button class="rf-ib rf-sm" data-pack="${esc(p.item_code)}" data-n="${n - 1}" title="${__("One Less")}" aria-label="${__("One Less")}">−</button>` : ""
+				}<button class="rf-chip ${n ? "on" : ""}" data-pack="${esc(p.item_code)}" data-n="${n + 1}">+ ${name}${n ? ` ×${n}` : ""}</button></span>`;
+			})
+			.join("")}</div>`;
+	}
+
+	async set_pack(item_code, qty) {
+		const o = this.order;
+		if (!o || this._packing) return;
+		this._packing = true;
+		try {
+			if (!(await this.settled())) return;
+			await call("set_extra_packaging", { order: o.name, item_code, qty }, true);
+			if (this.order && this.order.name === o.name) await this.load_order(o.name);
+		} catch (e) {
+			// the server said why (shown already)
+		} finally {
+			this._packing = false;
 		}
 	}
 
@@ -3014,6 +3171,8 @@ class RestoFloor {
 	async pay(lines) {
 		const o = this.order;
 		const bill = await call("get_bill", { order: o.name, lines: lines ? JSON.stringify(lines) : null }, true);
+		// A packaging or consumable short in stock: said before the money is taken (D-224).
+		if (bill.stock_warning) frappe.msgprint({ message: bill.stock_warning, indicator: "orange", title: __("Stock") });
 		const modes = bill.payment_modes;
 		const payable = flt(bill.payable);
 		const amounts = modes.map(() => 0);
@@ -3496,6 +3655,8 @@ class RestoFloor {
 		.rf-unsent { display:inline-flex; align-self:flex-start; height:22px; align-items:center; padding:0 8px; border-radius:999px; font-size:12px; font-weight:700;
 			background:var(--rf-acc-soft); color:var(--rf-acc-ink); }
 		.rf-orow.bill { background:var(--rf-amber-soft); }
+		.rf-pack { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:4px 0; }
+		.rf-packi { display:inline-flex; align-items:center; gap:4px; }
 		.rf-onote { padding:8px 14px; background:var(--rf-amber-soft); color:var(--rf-amber-ink); font-size:14px; border-bottom:1px solid var(--rf-line2); white-space:pre-wrap; }
 		.rf-fire { width:100%; border-color:var(--rf-amber); color:var(--rf-amber-ink); }
 		html[dir="ltr"] .rf-root .rf-back svg { transform:scaleX(-1); }

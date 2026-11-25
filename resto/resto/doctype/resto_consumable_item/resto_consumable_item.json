@@ -1,0 +1,120 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-11-26 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_code",
+  "item_name",
+  "qty",
+  "basis",
+  "stock_uom",
+  "column_break_types",
+  "dine_in",
+  "takeaway",
+  "delivery",
+  "can_add_more"
+ ],
+ "fields": [
+  {
+   "columns": 3,
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "item_code.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Qty",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "default": "Per Order",
+   "description": "Per Guest: the quantity times the order's guests (at least one).",
+   "fieldname": "basis",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Basis",
+   "options": "Per Order\nPer Guest",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "item_code.stock_uom",
+   "fieldname": "stock_uom",
+   "fieldtype": "Link",
+   "label": "Stock UOM",
+   "options": "UOM",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_types",
+   "fieldtype": "Column Break"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "fieldname": "dine_in",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Dine In"
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "fieldname": "takeaway",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Takeaway"
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "fieldname": "delivery",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Delivery"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "description": "The order screen shows a button to add more of it to a big order (a second bag).",
+   "fieldname": "can_add_more",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Cashier Can Add More"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-26 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Consumable Item",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 0,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

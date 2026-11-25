@@ -191,7 +191,9 @@ def invoice(name):
 		"return_against": doc.return_against,
 		"status": doc.status,
 		"items": [
-			{"item_name": d.item_name, "qty": d.qty, "rate": d.rate, "amount": d.amount} for d in doc.items
+			{"item_name": d.item_name, "qty": d.qty, "rate": d.rate, "amount": d.amount}
+			for d in doc.items
+			if not d.get("resto_packaging")  # no price, not on the guest's bill (D-217)
 		],
 		"taxes": [{"description": t.description, "amount": t.tax_amount_after_discount_amount} for t in doc.taxes if flt(t.tax_amount_after_discount_amount)],
 		"net_total": doc.net_total,

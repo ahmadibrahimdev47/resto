@@ -2,7 +2,7 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
-from resto.resto.report_utils import invoice_condition, prepare_filters, service_account
+from resto.resto.report_utils import NOT_PACKAGING, invoice_condition, prepare_filters, service_account
 
 WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
@@ -112,7 +112,7 @@ def by_item(filters, group_by):
 			sum(sii.stock_qty) as qty, sum(sii.base_amount) as gross_sales,
 			sum(sii.base_net_amount) as net_sales, count(distinct si.name) as bills
 		from `tabSales Invoice Item` sii join `tabSales Invoice` si on si.name = sii.parent
-		where {invoice_condition()}
+		where {invoice_condition()} and {NOT_PACKAGING}
 		group by `group`
 		order by net_sales desc
 		""",

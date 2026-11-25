@@ -5,12 +5,14 @@ from frappe import _
 from frappe.utils import flt, time_diff_in_seconds
 
 from resto.resto.report_utils import (
+	NOT_PACKAGING,
 	cost_by_invoice_row,
 	date_list,
 	excluded_items,
 	food_sales,
 	invoice_condition,
 	other_food_costs,
+	packaging_cost,
 	pct,
 	prepare_filters,
 	service_account,
@@ -46,7 +48,9 @@ def get_dashboard(from_date=None, to_date=None, company=None):
 	skip = excluded_items() or {""}
 	f.skip = list(skip)
 	cogs_rows = cost_by_invoice_row(f)
-	cogs = sum(cogs_rows.values())
+	# Takeaway packaging is not food (D-217): its cost is shown apart.
+	packaging = packaging_cost(f)
+	cogs = sum(cogs_rows.values()) - packaging
 	extra = other_food_costs(f)
 	waste, counts = extra.waste, extra.counts
 	net = flt(inv.net_sales)
@@ -97,6 +101,7 @@ def get_dashboard(from_date=None, to_date=None, company=None):
 		"discount_pct": pct(inv.discount, inv.gross),
 		"service": flt(inv.service),
 		"cogs": cogs,
+		"packaging_cost": packaging,
 		"food_sales": food,
 		"food_cost_pct": pct(cogs, food),
 		"waste": waste,
@@ -139,14 +144,14 @@ def get_dashboard(from_date=None, to_date=None, company=None):
 	top_items = frappe.db.sql(
 		f"""select max(sii.item_name), sum(sii.stock_qty), sum(sii.base_net_amount)
 		from `tabSales Invoice Item` sii join `tabSales Invoice` si on si.name = sii.parent
-		where {invoice_condition()} and sii.item_code not in %(skip)s
+		where {invoice_condition()} and sii.item_code not in %(skip)s and {NOT_PACKAGING}
 		group by sii.item_code order by 3 desc limit 10""",
 		f,
 	)
 	by_group = frappe.db.sql(
 		f"""select sii.item_group, sum(sii.base_net_amount)
 		from `tabSales Invoice Item` sii join `tabSales Invoice` si on si.name = sii.parent
-		where {invoice_condition()} and sii.item_code not in %(skip)s group by 1 order by 2 desc limit 8""",
+		where {invoice_condition()} and sii.item_code not in %(skip)s and {NOT_PACKAGING} group by 1 order by 2 desc limit 8""",
 		f,
 	)
 	by_waiter = frappe.db.sql(

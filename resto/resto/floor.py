@@ -6,7 +6,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, getdate, now_datetime, nowdate
 
-from resto.resto import approval, billing, kitchen, printing, shift, sides
+from resto.resto import approval, billing, kitchen, packaging, printing, shift, sides
 from resto.resto.doctype.resto_modifier_group.resto_modifier_group import groups_for_item
 from resto.resto.doctype.resto_order.resto_order import ACTIVE, default_service_percent, discount_limit
 from resto.resto.utils import (
@@ -201,6 +201,8 @@ def get_floor():
 			t: default_service_percent(settings, t) for t in ("Dine In", "Takeaway", "Delivery")
 		},
 		"delivery_fee": flt(settings.delivery_fee),
+		# Consumables the cashier may add to an order of the types ticked on them (D-217, D-224).
+		"packaging_addable": packaging.addable(),
 		"shift": shift.status() if has_role(CASHIER) else None,
 		# Orders wait for an open shift when Resto Settings says so (D-211).
 		**dict(zip(("can_order", "no_order_reason"), shift.ordering_allowed())),
@@ -762,6 +764,15 @@ def set_sides(order, lines, sides_choice, together=0):
 		sides.set_for_lines(doc, lines, choice)
 	_reopen_if_billed(doc)
 	return _save(doc).name
+
+
+@frappe.whitelist(methods=["POST"])
+def set_extra_packaging(order, item_code, qty):
+	"""One more bag (or none) on a big order (D-217, D-224)."""
+	require_role(WAITER, CASHIER)
+	doc = _get_order(order)
+	packaging.set_extra(doc, item_code, qty)
+	return _order_view(_save(doc))
 
 
 @frappe.whitelist(methods=["POST"])

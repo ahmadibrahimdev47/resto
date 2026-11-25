@@ -25,6 +25,9 @@ STANDARD_PERMISSIONS = {
 	# ... and reads the POS Profile (item details) while it builds the bill and its preview.
 	"POS Profile": {WAITER: ["read"], CASHIER: ["read"], MANAGER: ["read"]},
 	"Purchase Receipt": {MANAGER: ["read", "report"]},
+	# Cash purchases from the drawer (D-225): the manager picks the cash supplier and opens the invoice.
+	"Supplier": {MANAGER: ["select"]},
+	"Purchase Invoice": {MANAGER: ["read"]},
 }
 
 # A customer's debt paid to the cashier during a shift is counted by that shift's drawer (D-203).
@@ -162,6 +165,19 @@ SALES_INVOICE_FIELDS = {
 			"fieldtype": "Small Text",
 			"label": "Sides Text",
 			"insert_after": "resto_sides",
+			"read_only": 1,
+			"hidden": 1,
+			"print_hide": 1,
+			"report_hide": 1,
+		},
+		# A takeaway or delivery packaging line (D-217): per dish or once per order. Copied to a
+		# return, which drops the line: packaging used is never put back in stock.
+		{
+			"fieldname": "resto_packaging",
+			"fieldtype": "Select",
+			"label": "Packaging",
+			"options": "\nDish\nOrder",
+			"insert_after": "resto_sides_text",
 			"read_only": 1,
 			"hidden": 1,
 			"print_hide": 1,

@@ -37,6 +37,7 @@ ACTIONS = {
 	"cancel": "Cancel an order with items sent to the kitchen",
 	"discount": "Discount above the limit",
 	"on_account": "Bill on the account of a customer without a credit limit",
+	"cash_purchase": "Cash purchase from the drawer above the limit",
 }
 
 

@@ -15,6 +15,9 @@
   "conversion_factor",
   "stock_qty",
   "is_sub_recipe",
+  "dine_in",
+  "takeaway",
+  "delivery",
   "cost_section",
   "rate",
   "column_break_cost",
@@ -93,6 +96,28 @@
    "read_only": 1
   },
   {
+   "default": "0",
+   "depends_on": "eval:(doc.parentfield || '').endsWith('packaging')",
+   "fieldname": "dine_in",
+   "fieldtype": "Check",
+   "label": "Dine In",
+   "description": "Packaging only: the order types that take it. Takeaway and delivery by default."
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:(doc.parentfield || '').endsWith('packaging')",
+   "fieldname": "takeaway",
+   "fieldtype": "Check",
+   "label": "Takeaway"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:(doc.parentfield || '').endsWith('packaging')",
+   "fieldname": "delivery",
+   "fieldtype": "Check",
+   "label": "Delivery"
+  },
+  {
    "fieldname": "cost_section",
    "fieldtype": "Section Break",
    "label": "Cost"
@@ -139,7 +164,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-22 18:00:00.000000",
+ "modified": "2026-11-26 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Recipe Item",

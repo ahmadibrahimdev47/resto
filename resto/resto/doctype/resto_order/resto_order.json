@@ -43,6 +43,7 @@
   "column_break_5",
   "service_charge_percent",
   "delivery_fee",
+  "extra_packaging",
   "bill_section",
   "bill_service_amount",
   "bill_tax_amount",
@@ -292,6 +293,15 @@
    "label": "Delivery Fee"
   },
   {
+   "fieldname": "extra_packaging",
+   "fieldtype": "Code",
+   "label": "Extra Packaging",
+   "hidden": 1,
+   "read_only": 1,
+   "no_copy": 1,
+   "description": "Consumables the cashier added to this order on top of Resto Settings, as item: qty."
+  },
+  {
    "fieldname": "bill_section",
    "fieldtype": "Section Break",
    "label": "Bill",
@@ -442,7 +452,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-25 23:45:00.000000",
+ "modified": "2026-11-26 04:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",

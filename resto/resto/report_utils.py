@@ -6,6 +6,10 @@ from frappe.utils import add_days, flt, get_first_day, getdate, nowdate
 
 from resto.resto.utils import get_settings
 
+# An invoice line that is not takeaway packaging (D-217): packaging is not an item sold, and its
+# cost is shown apart from the food cost (packaging_cost).
+NOT_PACKAGING = "ifnull(sii.resto_packaging, '') = ''"
+
 
 def prepare_filters(filters):
 	filters = frappe._dict(filters or {})
@@ -69,10 +73,23 @@ def sold_rows(filters, item_group=None):
 			si.resto_order_type, si.is_return
 		from `tabSales Invoice Item` sii
 		join `tabSales Invoice` si on si.name = sii.parent
-		where {invoice_condition()} {cond}
+		where {invoice_condition()} and {NOT_PACKAGING} {cond}
 		""",
 		filters,
 		as_dict=True,
+	)
+
+
+def packaging_cost(filters):
+	"""Cost of the takeaway and delivery packaging billed in the period, from the stock ledger."""
+	return flt(
+		frappe.db.sql(
+			f"""select sum(-sle.stock_value_difference) from `tabStock Ledger Entry` sle
+			join `tabSales Invoice Item` sii on sii.name = sle.voucher_detail_no and not ({NOT_PACKAGING})
+			where sle.voucher_type = 'Sales Invoice' and sle.is_cancelled = 0 and sle.company = %(company)s
+				and sle.posting_date between %(from_date)s and %(to_date)s""",
+			filters,
+		)[0][0]
 	)
 
 

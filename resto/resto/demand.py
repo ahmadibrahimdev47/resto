@@ -13,7 +13,7 @@ it); otherwise the invoice posting time. Business day: sales before "Business Da
 import frappe
 from frappe.utils import add_days, cint, getdate
 
-from resto.resto.report_utils import excluded_items
+from resto.resto.report_utils import NOT_PACKAGING, excluded_items
 from resto.resto.utils import get_settings
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -85,7 +85,7 @@ def sales_by_day(company, from_date, to_date, item_group=None, item=None, order_
 			join `tabSales Invoice` si on si.name = sii.parent
 			left join `tabItem` i on i.name = sii.item_code
 			{_JOINS}
-			where si.docstatus = 1 and si.company = %(company)s and {_NEAR} and {" and ".join(cond)}
+			where si.docstatus = 1 and si.company = %(company)s and {_NEAR} and {NOT_PACKAGING} and {" and ".join(cond)}
 		) t
 		where {outer}
 		group by bday{", hr" if by_hour else ""}, item
@@ -133,7 +133,7 @@ def first_sale_dates(company, items):
 			from `tabSales Invoice Item` sii
 			join `tabSales Invoice` si on si.name = sii.parent
 			{_JOINS}
-			where si.docstatus = 1 and si.is_return = 0 and si.company = %(company)s and sii.item_code in %(items)s
+			where si.docstatus = 1 and si.is_return = 0 and si.company = %(company)s and {NOT_PACKAGING} and sii.item_code in %(items)s
 			group by sii.item_code""",
 			{"shift": day_start_hour(), "company": company, "items": list(items)},
 		)

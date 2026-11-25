@@ -26,13 +26,17 @@ TYPE, QTY, PAR, ROWS, SIDES, PREP, STAMP, CHANGED = (
 	P + "changed",
 )
 TARGET = P + "target_food_cost_percent"
+PACK = P + "packaging"  # takeaway and delivery packaging (D-217)
 COSTS = {
 	P + "total_cost": "total_cost",
 	P + "cost_per_unit": "cost_per_unit",
 	P + "selling_rate": "selling_rate",
 	P + "food_cost_percent": "food_cost_percent",
+	P + "packaging_cost": "packaging_cost",
 }
 ROW_FIELDS = ("item_code", "qty", "uom", "note", "side_group")
+# The order types a packaging row is taken on (D-224), with their defaults.
+TYPE_FLAGS = (("dine_in", 0), ("takeaway", 1), ("delivery", 1))
 # The recipe part of the tab shows only on items ticked "Needs a Recipe".
 ON = "!doc.has_variants && doc.resto_needs_recipe"
 IS_PREP = f"eval:{ON} && doc.{TYPE}=='{PREPARED}'"
@@ -67,13 +71,16 @@ def _fields():
 	add(P + "rows_section", "Section Break", depends_on=HAS_TYPE)
 	add(ROWS, "Table", label="Ingredients", options="Resto Recipe Item")
 	add(SIDES, "Table", label="Served With", options="Resto Recipe Item", depends_on=IS_MENU,
-		description="Sides and packaging served with this dish (rice, bread, salad, sauces, box). They are not taken when this dish is part of another dish.")
+		description="Sides served with this dish on every order (rice, bread, salad, sauces). They are not taken when this dish is part of another dish. Boxes and cups go in Packaging.")
+	add(PACK, "Table", label="Packaging", options="Resto Recipe Item", depends_on=IS_MENU,
+		description="Boxes, cups and lids this dish takes. Each row is taken on the order types ticked on it (takeaway and delivery by default; tick Dine In when the dish is served in it there too), never when this dish is part of another dish. Its cost is shown apart from the food cost.")
 	add(P + "cost_section", "Section Break", label="Cost", depends_on=HAS_TYPE)
 	add(P + "total_cost", "Currency", label="Recipe Cost", options=CURRENCY, read_only=1)
 	add(P + "cost_per_unit", "Currency", label="Cost per Unit", options=CURRENCY, read_only=1, depends_on=IS_PREP)
 	add(P + "cost_column", "Column Break")
 	add(P + "selling_rate", "Currency", label="Selling Price", options=CURRENCY, read_only=1, depends_on=IS_MENU)
 	add(P + "food_cost_percent", "Percent", label="Food Cost %", read_only=1, depends_on=IS_MENU)
+	add(P + "packaging_cost", "Currency", label="Packaging Cost", options=CURRENCY, read_only=1, depends_on=IS_MENU)
 	add(TARGET, "Percent", label="Target Food Cost %", depends_on=IS_MENU,
 		description="This dish's own target. Empty: the target in Resto Settings is used.")
 	add(P + "preparation_section", "Section Break", label="Preparation", depends_on=HAS_TYPE)
@@ -153,6 +160,7 @@ def on_update(doc, method=None):
 	)
 	recipe.set("items", data["items"])
 	recipe.set("sides", data["sides"] if data["recipe_type"] == MENU else [])
+	recipe.set("packaging", data["packaging"] if data["recipe_type"] == MENU else [])
 	recipe.save() if exists else recipe.insert()
 
 	# The recipe may set default_bom / allow_negative_stock on the Item: keep the form current.
@@ -172,7 +180,15 @@ def on_change(doc, method=None):
 
 
 def _rows(rows):
-	return [{f: r.get(f) for f in ROW_FIELDS} for r in rows or [] if r.get("item_code")]
+	out = []
+	for r in rows or []:
+		if not r.get("item_code"):
+			continue
+		row = {f: r.get(f) for f in ROW_FIELDS}
+		for f, default in TYPE_FLAGS:
+			row[f] = cint(default if r.get(f) is None else r.get(f))
+		out.append(row)
+	return out
 
 
 def _signature(recipe_or_data):
@@ -185,6 +201,10 @@ def _signature(recipe_or_data):
 		flt(g("target_food_cost_percent"), 6) if g("recipe_type") == MENU else 0,
 		tuple((r["item_code"], flt(r["qty"], 6), r["uom"] or "", r["note"] or "") for r in _rows(g("items"))),
 		tuple((r["item_code"], flt(r["qty"], 6), r["uom"] or "", r["note"] or "", r["side_group"] or "") for r in _rows(g("sides"))),
+		tuple(
+			(r["item_code"], flt(r["qty"], 6), r["uom"] or "", r["note"] or "", *(r[f] for f, _d in TYPE_FLAGS))
+			for r in _rows(g("packaging"))
+		),
 	)
 
 
@@ -201,6 +221,7 @@ def _take(doc):
 			"target_food_cost_percent": flt(doc.get(TARGET)),
 			"items": _rows(doc.get(ROWS)),
 			"sides": _rows(doc.get(SIDES)),
+			"packaging": _rows(doc.get(PACK)),
 			"stamp": doc.get(STAMP),
 		}
 		data["signature"] = _signature(data)
@@ -210,6 +231,7 @@ def _take(doc):
 		doc.set(field, 0)
 	doc.set(ROWS, [])
 	doc.set(SIDES, [])
+	doc.set(PACK, [])
 	return data
 
 
@@ -225,9 +247,9 @@ def _fill(doc, recipe):
 	doc.set(STAMP, str(recipe.modified))
 	for field, source in COSTS.items():
 		doc.set(field, recipe.get(source))
-	for table, source in ((ROWS, recipe.items), (SIDES, recipe.sides)):
+	for table, source in ((ROWS, recipe.items), (SIDES, recipe.sides), (PACK, recipe.get("packaging") or [])):
 		doc.set(table, [])
 		for r in source:
-			row = doc.append(table, {f: r.get(f) for f in (*ROW_FIELDS, "item_name", "stock_uom", "conversion_factor", "stock_qty", "rate", "amount", "is_sub_recipe")})
+			row = doc.append(table, {f: r.get(f) for f in (*ROW_FIELDS, *(f for f, _d in TYPE_FLAGS), "item_name", "stock_uom", "conversion_factor", "stock_qty", "rate", "amount", "is_sub_recipe")})
 			row.name = "resto-view-" + frappe.generate_hash(length=10)
 	doc.set_onload("resto_recipe_active", cint(recipe.is_active))

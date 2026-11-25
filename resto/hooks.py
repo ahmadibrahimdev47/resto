@@ -51,6 +51,8 @@ doc_events = {
 		"on_change": "resto.resto.item_recipe.on_change",
 	},
 	"Sales Invoice": {
+		# A return never takes packaging or consumables back into stock (D-217, D-224).
+		"before_validate": "resto.resto.packaging.drop_from_return",
 		"validate": "resto.resto.billing.validate_sales_invoice",
 		"before_submit": "resto.resto.billing.before_sales_invoice_submit",
 		"before_cancel": "resto.resto.billing.before_sales_invoice_cancel",
@@ -62,6 +64,8 @@ doc_events = {
 		"before_cancel": "resto.resto.shift.check_cancel",
 	},
 	"Journal Entry": {"before_cancel": "resto.resto.shift.check_cancel"},
+	# A cash purchase from a closed shift's drawer stays as the shift counted it (D-225).
+	"Purchase Invoice": {"before_cancel": "resto.resto.shift.check_cancel"},
 }
 
 # Recipe costs follow purchase prices: refresh them every night.

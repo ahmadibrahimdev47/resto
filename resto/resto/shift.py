@@ -3,7 +3,8 @@
 A shift belongs to one cashier on the restaurant's POS Profile, and it may run past midnight. A
 bill settled on the floor is linked to the cashier's open shift (Sales Invoice.resto_shift); the
 closing counts what those invoices received, per payment method, from their own payment rows.
-Drawer expenses are Journal Entries from the payment method's account. Only the counted amounts
+Drawer expenses are Journal Entries from the payment method's account; cash purchases from the
+drawer are paid Purchase Invoices into the kitchen stock (D-225). Only the counted amounts
 come from the browser: everything expected is worked out again on the server when the shift closes.
 """
 
@@ -13,6 +14,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
+from resto.resto import approval
 from resto.resto.utils import CASHIER, MANAGER, get_settings, has_role, publish, require_role
 
 ACCOUNTS_PRECISION = 2
@@ -177,9 +179,19 @@ def compute(shift):
 			modes.append(e.mode_of_payment)
 			opening[e.mode_of_payment] = received[e.mode_of_payment] = change[e.mode_of_payment] = 0
 
+	# Cash purchases from the drawer (D-225): paid Purchase Invoices still in force.
+	purchases = _live_purchases(shift)
+	bought = {m: 0.0 for m in modes}
+	for p in purchases:
+		bought.setdefault(p.mode_of_payment, 0.0)
+		bought[p.mode_of_payment] += flt(p.amount)
+		if p.mode_of_payment not in opening:
+			modes.append(p.mode_of_payment)
+			opening[p.mode_of_payment] = received[p.mode_of_payment] = change[p.mode_of_payment] = spent[p.mode_of_payment] = 0
+
 	rows = []
 	for m in modes:
-		expected = flt(opening[m] + received[m] - change[m] - spent.get(m, 0), ACCOUNTS_PRECISION)
+		expected = flt(opening[m] + received[m] - change[m] - spent.get(m, 0) - bought.get(m, 0), ACCOUNTS_PRECISION)
 		rows.append(
 			{
 				"mode_of_payment": m,
@@ -187,6 +199,7 @@ def compute(shift):
 				"received_amount": flt(received[m], ACCOUNTS_PRECISION),
 				"change_amount": flt(change[m], ACCOUNTS_PRECISION),
 				"expenses_amount": flt(spent.get(m, 0), ACCOUNTS_PRECISION),
+				"purchases_amount": flt(bought.get(m, 0), ACCOUNTS_PRECISION),
 				"expected_amount": expected,
 			}
 		)
@@ -228,6 +241,7 @@ def compute(shift):
 	debts_total = sum(flt(p.received_amount) for p in debts)
 	collected = sum(r["paid_amount"] for r in inv_rows) + debts_total
 	expenses_total = sum(flt(e.amount) for e in expenses)
+	purchases_total = sum(flt(p.amount) for p in purchases)
 	return {
 		"rows": rows,
 		"invoices": inv_rows,
@@ -235,6 +249,18 @@ def compute(shift):
 		"expenses": [
 			{"mode_of_payment": e.mode_of_payment, "expense_account": e.expense_account, "amount": flt(e.amount), "remarks": e.remarks, "journal_entry": e.journal_entry}
 			for e in expenses
+		],
+		"purchases": [
+			{
+				"mode_of_payment": p.mode_of_payment,
+				"supplier": p.supplier,
+				"supplier_name": frappe.get_cached_value("Supplier", p.supplier, "supplier_name") if p.supplier else None,
+				"items_text": p.items_text,
+				"remarks": p.remarks,
+				"amount": flt(p.amount),
+				"purchase_invoice": p.purchase_invoice,
+			}
+			for p in purchases
 		],
 		"debts": [
 			{"payment_entry": p.name, "customer": p.party_name or p.party, "mode_of_payment": p.mode_of_payment, "amount": flt(p.received_amount)}
@@ -252,7 +278,9 @@ def compute(shift):
 			"outstanding": flt(sum(r["on_account"] for r in inv_rows), ACCOUNTS_PRECISION),
 			"expenses_count": len(expenses),
 			"expenses_total": flt(expenses_total, ACCOUNTS_PRECISION),
-			"net_cash": flt(collected - expenses_total, ACCOUNTS_PRECISION),
+			"purchases_count": len(purchases),
+			"purchases_total": flt(purchases_total, ACCOUNTS_PRECISION),
+			"net_cash": flt(collected - expenses_total - purchases_total, ACCOUNTS_PRECISION),
 			"tax_total": flt(sum(flt(t.amount) for t in taxes), ACCOUNTS_PRECISION),
 			"total_quantity": flt(sum(flt(i.total_qty) for i in invoices)),
 		},
@@ -281,6 +309,7 @@ def _report(shift, figures):
 			for r in figures["invoices"]
 		],
 		"expenses": figures["expenses"],
+		"purchases": figures["purchases"],
 		"debts": figures["debts"],
 		"rows": figures["rows"],
 	}
@@ -443,6 +472,7 @@ def close_shift(amounts):
 			"on_account": s["outstanding"],
 			"tax_total": s["tax_total"],
 			"expenses_total": s["expenses_total"],
+			"purchases_total": s["purchases_total"],
 			"net_cash": s["net_cash"],
 			"total_difference": flt(sum(r["difference"] for r in figures["rows"]), ACCOUNTS_PRECISION),
 		}
@@ -506,7 +536,7 @@ def shift_print_data(name):
 	items = frappe.db.sql(
 		"""select sii.item_code, sii.item_name, sum(sii.stock_qty) as qty, sum(sii.base_net_amount) as amount
 		from `tabSales Invoice Item` sii join `tabSales Invoice` si on si.name = sii.parent
-		where si.resto_shift = %s and si.docstatus = 1
+		where si.resto_shift = %s and si.docstatus = 1 and ifnull(sii.resto_packaging, '') = ''
 		group by sii.item_code, sii.item_name order by amount desc""",
 		(name,),
 		as_dict=True,
@@ -567,7 +597,8 @@ def _spent(shift):
 
 
 def _receipt_file(file_url):
-	"""The receipt the cashier just uploaded (theirs, not yet attached to anything)."""
+	"""The receipt the cashier just uploaded (theirs, not yet attached to anything), not already the
+	receipt of another expense or cash purchase."""
 	name = frappe.db.get_value(
 		"File",
 		{"file_url": file_url, "owner": frappe.session.user, "attached_to_name": ("is", "not set"), "is_folder": 0},
@@ -577,7 +608,8 @@ def _receipt_file(file_url):
 		frappe.throw(_("The receipt was not found: attach it again"))
 	content_hash = frappe.db.get_value("File", name, "content_hash")
 	if content_hash and frappe.db.exists(
-		"File", {"content_hash": content_hash, "attached_to_doctype": "Journal Entry", "name": ("!=", name)}
+		"File",
+		{"content_hash": content_hash, "attached_to_doctype": ("in", ("Journal Entry", "Purchase Invoice")), "name": ("!=", name)},
 	):
 		frappe.throw(_("This receipt is already attached to another expense"))
 	return name
@@ -690,6 +722,291 @@ def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_
 	return je.name
 
 
+# --------------------------------------------------------------------------- cash purchases (D-225)
+
+MAX_PURCHASE_LINES = 30
+UNUSUAL = 3  # a price per unit this many times above or below the usual one needs a manager
+
+
+def _live_purchases(shift):
+	"""The shift's cash purchases whose Purchase Invoice is still in force."""
+	rows = [p for p in shift.get("purchases") or [] if p.purchase_invoice]
+	if not rows:
+		return []
+	live = set(
+		frappe.get_all("Purchase Invoice", filters={"name": ("in", [p.purchase_invoice for p in rows]), "docstatus": 1}, pluck="name")
+	)
+	return [p for p in rows if p.purchase_invoice in live]
+
+
+def _cash_supplier():
+	"""The supplier of a cash purchase when the cashier names none: Resto Settings' Cash Supplier,
+	made on the first purchase when it is empty."""
+	settings = get_settings()
+	name = settings.get("cash_supplier")
+	if name and frappe.db.exists("Supplier", name):
+		return name
+	from resto.resto.sides import _t
+
+	label = _t("Cash Supplier")
+	name = frappe.db.get_value("Supplier", {"supplier_name": label}, "name")
+	if not name:
+		supplier = frappe.new_doc("Supplier")
+		supplier.supplier_name = label
+		supplier.supplier_type = "Individual"
+		# Bought at the market: there is never a purchase order or receipt before the invoice.
+		for field in ("allow_purchase_invoice_creation_without_purchase_order", "allow_purchase_invoice_creation_without_purchase_receipt"):
+			if supplier.meta.has_field(field):
+				supplier.set(field, 1)
+		supplier.supplier_group = frappe.db.get_single_value("Buying Settings", "supplier_group") or frappe.db.get_value(
+			"Supplier Group", {"is_group": 0}, "name"
+		)
+		supplier.flags.ignore_permissions = True
+		supplier.insert()
+		name = supplier.name
+	frappe.db.set_single_value("Resto Settings", "cash_supplier", name)
+	frappe.clear_document_cache("Resto Settings", "Resto Settings")
+	return name
+
+
+def _purchase_items(items):
+	"""[{item_code, qty, amount}] of a cash purchase, checked: stock items that can be bought, in
+	their stock unit, each with what was paid for it."""
+	from resto.resto.doctype.resto_recipe.resto_recipe import MENU, get_active_recipe
+
+	rows = json.loads(items) if isinstance(items, str) else (items or [])
+	# The invoice keeps quantities at its own precision: the drawer pays for what the stock receives.
+	qty_precision = frappe.get_precision("Purchase Invoice Item", "qty") or 3
+	out = []
+	for r in rows:
+		code = (r.get("item_code") or "").strip()
+		if not code:
+			continue
+		item = frappe.db.get_value(
+			"Item",
+			code,
+			["item_name", "stock_uom", "disabled", "is_stock_item", "is_purchase_item", "has_variants", "has_batch_no", "has_serial_no"],
+			as_dict=True,
+		)
+		name = frappe.bold(item.item_name if item else code)
+		if not item or item.disabled or item.has_variants or not item.is_stock_item or get_active_recipe(code, MENU):
+			frappe.throw(_("{0} is not a stock item that can be bought: drawer expenses are for what is not stock").format(name))
+		if not item.is_purchase_item:
+			frappe.throw(_("{0} cannot be bought: tick Allow Purchase on the item").format(name))
+		if item.has_batch_no or item.has_serial_no:
+			frappe.throw(_("{0} has batch or serial numbers: it is received on a purchase receipt, not from the drawer").format(name))
+		qty, amount = flt(r.get("qty"), qty_precision), flt(r.get("amount"), ACCOUNTS_PRECISION)
+		if qty <= 0 or amount <= 0:
+			frappe.throw(_("{0}: enter the quantity and the amount paid").format(name))
+		same = next((o for o in out if o.item_code == code), None)
+		if same:
+			# One line per item (ERPNext may refuse the same item twice): the quantities and amounts add up.
+			same.qty = flt(same.qty + qty, qty_precision)
+			same.amount = flt(same.amount + amount, ACCOUNTS_PRECISION)
+			continue
+		out.append(frappe._dict(item_code=code, item_name=item.item_name, stock_uom=item.stock_uom, qty=qty, amount=amount))
+	if not out:
+		frappe.throw(_("Add what was bought"))
+	if len(out) > MAX_PURCHASE_LINES:
+		frappe.throw(_("A cash purchase has at most {0} lines").format(MAX_PURCHASE_LINES))
+	return out
+
+
+def _usual_rate(item_code, warehouse):
+	"""What the item usually costs per stock unit: its valuation in the warehouse, else the item's."""
+	rate = flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "valuation_rate"))
+	if rate <= 0:
+		rate = flt(frappe.db.get_value("Item", item_code, "valuation_rate")) or flt(frappe.db.get_value("Item", item_code, "last_purchase_rate"))
+	return rate
+
+
+def _unusual(rows, warehouse):
+	"""Lines whose price per stock unit is a third or less, or three times or more, of the usual: most
+	often a quantity typed in grams for a kilogram item. A manager approves them."""
+	out = []
+	for r in rows:
+		usual = _usual_rate(r.item_code, warehouse)
+		rate = r.amount / r.qty
+		if usual > 0 and (rate <= usual / UNUSUAL or rate >= usual * UNUSUAL):
+			out.append(
+				_("{0}: {1} per {2}, usually {3}").format(
+					r.item_name, frappe.format(rate, "Currency"), _(r.stock_uom), frappe.format(usual, "Currency")
+				)
+			)
+	return out
+
+
+def _up(value):
+	"""Up to the next cent: the lines then add up to at least what was paid, and the invoice's
+	discount takes back the cents above it."""
+	import math
+
+	return math.ceil(flt(value) * 100 - 1e-6) / 100
+
+
+def _purchase_invoice(shift, rows, total, mode_of_payment, supplier, warehouse, remarks):
+	"""A paid Purchase Invoice that takes the items into the kitchen at what was paid and pays it
+	from the drawer's cash account: Dr stock, Cr cash, nothing owed to the supplier."""
+	cost_center = _cost_center(shift)
+	pi = frappe.new_doc("Purchase Invoice")
+	pi.flags.ignore_permissions = True
+	pi.update(
+		{
+			"company": shift.company,
+			"supplier": supplier,
+			"posting_date": frappe.utils.nowdate(),
+			"posting_time": frappe.utils.nowtime(),
+			"set_posting_time": 1,
+			"update_stock": 1,
+			"set_warehouse": warehouse,
+			"is_paid": 1,
+			"mode_of_payment": mode_of_payment,
+			"cash_bank_account": _mode_account(mode_of_payment, shift.company),
+			"cost_center": cost_center,
+			"ignore_pricing_rule": 1,
+			"disable_rounded_total": 1,
+			"remarks": _("Cash purchase from the drawer, shift {0}").format(shift.name) + (f": {remarks}" if remarks else ""),
+		}
+	)
+	for r in rows:
+		pi.append(
+			"items",
+			{
+				"item_code": r.item_code,
+				"qty": r.qty,
+				"uom": r.stock_uom,
+				"stock_uom": r.stock_uom,
+				"conversion_factor": 1,
+				"rate": _up(r.amount / r.qty),
+				"warehouse": warehouse,
+				"cost_center": cost_center,
+			},
+		)
+	pi.set_missing_values()
+	# What was paid, as paid: no purchase taxes, tax withheld or price list on top of it.
+	if pi.meta.has_field("apply_tds"):
+		pi.apply_tds = 0
+	pi.taxes_and_charges = None
+	pi.set("taxes", [])
+	for d, r in zip(pi.items, rows):
+		d.price_list_rate = d.rate = _up(r.amount / r.qty)
+		d.discount_percentage = d.discount_amount = d.margin_rate_or_amount = 0
+		d.warehouse = warehouse
+	pi.apply_discount_on = "Net Total"
+	pi.additional_discount_percentage = 0
+	pi.discount_amount = 0
+	pi.calculate_taxes_and_totals()
+	pi.discount_amount = flt(flt(pi.total) - total, ACCOUNTS_PRECISION)
+	pi.calculate_taxes_and_totals()
+	if abs(flt(pi.grand_total) - total) > 0.005:
+		frappe.throw(
+			_("The purchase invoice total {0} differs from the amount paid {1}; nothing was recorded").format(
+				frappe.format(pi.grand_total, "Currency"), frappe.format(total, "Currency")
+			)
+		)
+	pi.paid_amount = pi.base_paid_amount = total
+	pi.insert()
+	# Hooks of other apps run on save: the invoice saved must still be exactly what was paid.
+	if abs(flt(pi.grand_total) - total) > 0.005 or abs(flt(pi.outstanding_amount)) > 0.005 or pi.get("taxes"):
+		frappe.throw(
+			_("The purchase invoice total {0} differs from the amount paid {1}; nothing was recorded").format(
+				frappe.format(pi.grand_total, "Currency"), frappe.format(total, "Currency")
+			)
+		)
+	pi.submit()
+	return pi
+
+
+@frappe.whitelist()
+def purchase_data():
+	"""What the floor's Cash Purchase dialog needs."""
+	require_role(CASHIER)
+	shift = _own_shift()
+	settings = get_settings()
+	cap = flt(settings.get("drawer_purchase_cap"))
+	return {
+		"modes": _cash_modes(shift),
+		"suppliers": frappe.get_all(
+			"Supplier", filters={"disabled": 0}, fields=["name", "supplier_name"], order_by="supplier_name", limit=500
+		),
+		"cash_supplier": settings.get("cash_supplier"),
+		"warehouse": settings.kitchen_warehouse,
+		# Above it a manager approves (None: never, or the user is a manager).
+		"approval_above": None if not cap or has_role() else cap,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def cash_purchase(items, mode_of_payment, supplier=None, receipt=None, remarks=None, request_id=None, approver=None, pin=None):
+	"""Food or other stock bought for cash out of the drawer (D-225): a paid Purchase Invoice with
+	the items received into the kitchen at what was paid, paid from the shift's cash method. The
+	shift's expected cash goes down by it, and its close lists it apart from the drawer expenses. Above
+	Resto Settings' amount a manager approves it."""
+	require_role(CASHIER)
+	shift = _own_shift(lock=True)
+	if request_id:
+		# The same click again, after a lost answer: the purchase already made.
+		done = next((p for p in shift.get("purchases") or [] if p.request_id == request_id), None)
+		if done:
+			return done.purchase_invoice
+	settings = get_settings()
+	warehouse = settings.kitchen_warehouse
+	if not warehouse:
+		frappe.throw(_("Set the Kitchen Warehouse in Resto Settings"))
+	if mode_of_payment not in _cash_modes(shift):
+		frappe.throw(_("Payment method {0} is not a cash method of this shift").format(frappe.bold(mode_of_payment)))
+	rows = _purchase_items(items)
+	total = flt(sum(r.amount for r in rows), ACCOUNTS_PRECISION)
+	if supplier:
+		if not frappe.db.exists("Supplier", {"name": supplier, "disabled": 0}):
+			frappe.throw(_("Supplier {0} was not found").format(frappe.bold(supplier)))
+	else:
+		supplier = _cash_supplier()
+	remarks = (remarks or "").strip()
+	receipt_file = _receipt_file(receipt) if receipt else None
+	row = next((r for r in compute(shift)["rows"] if r["mode_of_payment"] == mode_of_payment), None)
+	if not row or total > row["expected_amount"] + 0.005:
+		if _blind() or not row:
+			frappe.throw(_("The drawer does not hold that much for {0}").format(mode_of_payment))
+		frappe.throw(
+			_("Only {0} should be in the drawer for {1}").format(frappe.format(row["expected_amount"], "Currency"), mode_of_payment)
+		)
+	items_text = ", ".join(f"{frappe.format(r.qty, 'Float')} {_(r.stock_uom)} {r.item_name}" for r in rows)
+	approved_by = None
+	cap = flt(settings.get("drawer_purchase_cap"))
+	unusual = _unusual(rows, warehouse)
+	if unusual and not has_role() and not (approver and pin):
+		# Said plainly first: most often the quantity is not in the stock unit.
+		frappe.throw(
+			_("Check the quantities are in the stock unit: {0}. If the prices are right, a manager approves.").format("; ".join(unusual)),
+			approval.ApprovalRequired,
+		)
+	if (cap and total > cap + 0.005) or unusual:
+		approved_by = approval.approve("cash_purchase", shift.name, total, approver, pin, details="; ".join([items_text, *unusual]))
+	pi = _purchase_invoice(shift, rows, total, mode_of_payment, supplier, warehouse, remarks)
+	if receipt_file:
+		# On the invoice itself, where the accountant looks for it.
+		frappe.db.set_value("File", receipt_file, {"attached_to_doctype": "Purchase Invoice", "attached_to_name": pi.name})
+	shift.append(
+		"purchases",
+		{
+			"mode_of_payment": mode_of_payment,
+			"supplier": supplier,
+			"amount": total,
+			"items_text": items_text,
+			"remarks": remarks or None,
+			"purchase_invoice": pi.name,
+			"receipt": receipt or None,
+			"approved_by": approved_by,
+			"currency": shift.currency,
+			"request_id": request_id,
+		},
+	)
+	shift.flags.resto_shift = True
+	shift.save(ignore_permissions=True)
+	return pi.name
+
+
 def link_payment_entry(doc, method=None):
 	"""Payment Entry before_submit: money a customer pays to a cashier who has an open shift (a debt
 	left on account, D-202) is in that cashier's drawer, so the shift counts it."""
@@ -707,6 +1024,8 @@ def check_cancel(doc, method=None):
 	stays as it counted it (ERPNext does the same for its own POS closing). A credit note or a new
 	entry corrects it instead."""
 	name = doc.get("resto_shift")
+	if not name and doc.doctype == "Purchase Invoice":
+		name = frappe.db.get_value("Resto Shift Purchase", {"purchase_invoice": doc.name}, "parent")
 	if not name and doc.doctype == "Journal Entry":
 		name = frappe.db.get_value("Resto Shift Expense", {"journal_entry": doc.name}, "parent") or frappe.db.get_value(
 			"Resto Shift", {"over_short_entry": doc.name}, "name"

@@ -1,13 +1,13 @@
 // Live cost while typing: the server computes it with the same rules as saving (preview_cost);
 // nothing is stored until the recipe is saved.
-const COST_FIELDS = ["main_cost", "total_cost", "cost_per_unit", "selling_rate", "food_cost_percent"];
+const COST_FIELDS = ["main_cost", "total_cost", "packaging_cost", "cost_per_unit", "selling_rate", "food_cost_percent"];
 
 function preview_cost(frm) {
 	// "Resto Recipe Item" events also fire on the Item form's Recipe tab (item_recipe.js).
 	if (frm.doctype !== "Resto Recipe") return;
 	clearTimeout(frm._resto_cost_timer);
 	frm._resto_cost_timer = setTimeout(() => {
-		const rows = [...(frm.doc.items || []), ...(frm.doc.sides || [])];
+		const rows = [...(frm.doc.items || []), ...(frm.doc.sides || []), ...(frm.doc.packaging || [])];
 		if (!rows.some((r) => r.item_code)) return;
 		const seq = (frm._resto_cost_seq = (frm._resto_cost_seq || 0) + 1);
 		frappe.call({
@@ -25,7 +25,7 @@ function preview_cost(frm) {
 
 function apply_cost(frm, cost) {
 	const by_name = {};
-	for (const r of [...(frm.doc.items || []), ...(frm.doc.sides || [])]) by_name[r.name] = r;
+	for (const r of [...(frm.doc.items || []), ...(frm.doc.sides || []), ...(frm.doc.packaging || [])]) by_name[r.name] = r;
 	for (const c of cost.rows) {
 		const row = by_name[c.name] || (frm.doc[c.parentfield] || []).find((r) => r.idx === c.idx);
 		if (!row) continue;
@@ -35,6 +35,7 @@ function apply_cost(frm, cost) {
 	for (const f of COST_FIELDS) frm.doc[f] = cost[f];
 	frm.refresh_field("items");
 	frm.refresh_field("sides");
+	frm.refresh_field("packaging");
 	frm.refresh_fields(COST_FIELDS);
 	window.resto?.show_food_cost?.(frm, "food_cost_percent", "target_food_cost_percent");
 	window.resto?.food_cost_headline?.(frm);
@@ -55,6 +56,8 @@ frappe.ui.form.on("Resto Recipe", {
 		};
 		frm.set_query("item_code", "items", row_query);
 		frm.set_query("item_code", "sides", row_query);
+		// Packaging is taken as its own stock line at no price on the bill (D-217, D-224).
+		frm.set_query("item_code", "packaging", () => ({ filters: { disabled: 0, has_variants: 0, is_fixed_asset: 0, is_stock_item: 1, is_sales_item: 1 } }));
 	},
 
 	refresh(frm) {
@@ -83,6 +86,8 @@ frappe.ui.form.on("Resto Recipe", {
 		} else {
 			frm.clear_table("sides");
 			frm.refresh_field("sides");
+			frm.clear_table("packaging");
+			frm.refresh_field("packaging");
 		}
 		preview_cost(frm);
 	},
@@ -102,4 +107,5 @@ frappe.ui.form.on("Resto Recipe Item", {
 	uom: preview_cost,
 	items_remove: preview_cost,
 	sides_remove: preview_cost,
+	packaging_remove: preview_cost,
 });
