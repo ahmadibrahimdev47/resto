@@ -41,8 +41,12 @@ TRANSITIONS = {
 }
 
 
-def send_lines(order, course=None):
+def send_lines(order, course=None, printed=None):
 	"""Send unsent lines (not held, or of the fired course) to their stations.
+
+	printed: {item: qty} printed by a floor screen without a connection (D-219): only unsent lines
+	within those quantities are sent (a line another screen added meanwhile stays unsent), and
+	their tickets are marked printed, so no printer prints them again.
 
 	Returns the created tickets. The caller saves the order.
 	"""
@@ -51,6 +55,13 @@ def send_lines(order, course=None):
 		for d in order.items
 		if d.kitchen_status == "Not Sent" and (not d.hold or (course and d.course == course))
 	]
+	if printed is not None:
+		left, chosen = dict(printed), []
+		for d in lines:
+			if flt(left.get(d.item_code)) >= flt(d.qty) - 1e-9:
+				left[d.item_code] = flt(left[d.item_code]) - flt(d.qty)
+				chosen.append(d)
+		lines = chosen
 	if not lines:
 		return []
 
@@ -66,7 +77,7 @@ def send_lines(order, course=None):
 	now = now_datetime()
 	tickets = []
 	for station, rows in sorted(by_station.items()):
-		ticket = _make_ticket(order, station, "Order", rows, now)
+		ticket = _make_ticket(order, station, "Order", rows, now, printed=printed is not None)
 		for d in rows:
 			d.kitchen_status = "Sent"
 			d.hold = 0
@@ -121,7 +132,7 @@ def _strike_on_ticket(ticket, order_item):
 		)
 
 
-def _make_ticket(order, station, ticket_type, rows, now):
+def _make_ticket(order, station, ticket_type, rows, now, printed=False):
 	ticket = frappe.new_doc("Resto Kitchen Ticket")
 	ticket.update(
 		{
@@ -151,8 +162,13 @@ def _make_ticket(order, station, ticket_type, rows, now):
 				"course": d.course,
 			},
 		)
+	if printed:
+		# Already on paper from the floor screen (D-219): no printer prints it again.
+		ticket.printed = 1
 	ticket.flags.ignore_permissions = True
 	ticket.insert()
+	if printed:
+		return ticket
 	_queue_print(ticket)
 	if ticket_type == "Order":
 		try:

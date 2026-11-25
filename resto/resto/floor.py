@@ -206,11 +206,41 @@ def get_floor():
 		"user_name": frappe.utils.get_fullname(),
 		"reservations_today": frappe.db.count("Resto Reservation", {"reservation_date": nowdate(), "status": "Booked"}),
 		"tax_added": _tax_added(settings.pos_profile),
+		# How the bill adds service and tax, so a bill printed without a connection (D-219) adds them
+		# as the server does.
+		"bill_rules": _bill_rules(settings),
 		# The lock screen (D-216), when Resto Settings turns it on: whether the user has a PIN to open
 		# it, and the idle minutes before it locks by itself.
 		"screen_lock": cint(settings.get("enable_screen_lock")),
 		"has_pin": approval.has_pin(),
 		"lock_after_minutes": max(cint(settings.get("lock_after_minutes")), 0) if cint(settings.get("enable_screen_lock")) else 0,
+	}
+
+
+def _bill_rules(settings):
+	"""The POS Profile's tax rows and rounding, as billing.build_invoice applies them."""
+	profile = frappe.get_cached_doc("POS Profile", settings.pos_profile) if settings.pos_profile else None
+	if not profile:
+		return None
+	template = profile.taxes_and_charges
+	taxes = (
+		frappe.get_all(
+			"Sales Taxes and Charges",
+			filters={"parent": template, "parenttype": "Sales Taxes and Charges Template"},
+			fields=["description", "charge_type", "rate", "tax_amount", "row_id", "included_in_print_rate", "account_head"],
+			order_by="idx asc",
+		)
+		if template
+		else []
+	)
+	currency = profile.currency or frappe.get_cached_value("Company", profile.company, "default_currency")
+	return {
+		"taxes": taxes,
+		"service_account": settings.service_charge_account,
+		"vat_on_service": cint(settings.get("vat_on_service")),
+		"disable_rounded_total": cint(profile.get("disable_rounded_total")),
+		"smallest_fraction": flt(frappe.get_cached_value("Currency", currency, "smallest_currency_fraction_value")) if currency else 0,
+		"currency": currency,
 	}
 
 
@@ -703,13 +733,24 @@ def remove_line(order, line, view=0, op=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def send_to_kitchen(order):
+def send_to_kitchen(order, printed=None, view=0, op=None):
+	"""printed: {item: qty} a floor screen printed itself while it had no connection (D-219), sent
+	from its outbox once the connection is back (op: a retry records nothing twice). Only those
+	dishes are recorded as sent, and their tickets are not printed again."""
 	require_role(WAITER, CASHIER)
 	shift.require_ordering()
-	doc = _get_order(order)
-	tickets = kitchen.send_lines(doc)
+	if printed is not None:
+		doc, done = _get_order_once(order, op)
+		if done:
+			return _order_view(doc) if cint(view) else []
+		data = _loads(printed, {})
+		budget = {k: flt(v) for k, v in (data if isinstance(data, dict) else {}).items() if flt(v) > 0}
+		tickets = kitchen.send_lines(doc, printed=budget)
+	else:
+		doc = _get_order(order)
+		tickets = kitchen.send_lines(doc)
 	_save(doc)
-	return [t.name for t in tickets]
+	return _order_view(doc) if cint(view) else [t.name for t in tickets]
 
 
 @frappe.whitelist(methods=["POST"])

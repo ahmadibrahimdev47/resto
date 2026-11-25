@@ -71,6 +71,22 @@ const hhmm = (t) => {
 };
 const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 
+// A total rounded as ERPNext rounds an invoice: to the currency's smallest fraction when it has
+// one, else to a whole unit (an exact half to the even one, as Frappe's default rounding).
+function round_money(value, fraction) {
+	const v = flt(value);
+	if (fraction > 0) {
+		const rem = Math.round((v % fraction) * 1e6) / 1e6;
+		const out = rem > fraction / 2 ? v + (fraction - rem) : v - rem;
+		return Math.round(out * 100) / 100;
+	}
+	const down = Math.floor(v);
+	const diff = Math.round((v - down) * 1e6) / 1e6;
+	if (diff > 0.5) return down + 1;
+	if (diff < 0.5) return down;
+	return down % 2 === 0 ? down : down + 1;
+}
+
 // A manager's approval for what a waiter or cashier cannot do alone (D-204): a manager on this
 // screen needs none ({}); otherwise the manager chooses their name and types their PIN here. The
 // server checks it inside the action itself, for that action and amount only. null: not given.
@@ -1686,12 +1702,12 @@ class RestoFloor {
 
 	// Taps not sent yet go now, in one call, before anything else is done with the order. Resolves
 	// once the queue is sent, or left for later when there is no connection.
-	flush_taps() {
+	flush_taps(send = true) {
 		clearTimeout(this._tap_timer);
 		this._tap_timer = null;
 		const taps = this._taps || [];
 		this._taps = [];
-		if (!taps.length) return this.drain();
+		if (!taps.length) return send ? this.drain() : Promise.resolve();
 		const counts = {};
 		taps.forEach((c) => (counts[c] = (counts[c] || 0) + 1));
 		const items = Object.entries(counts).map(([item_code, qty]) => ({ item_code, qty }));
@@ -1699,14 +1715,14 @@ class RestoFloor {
 		const label = items.map((i) => `${i.qty} × ${name_of(i.item_code)}`).join("، ");
 		const order = this._tap_order || this.order.name;
 		this._tap_order = null;
-		return this.sync_call("add_items", { order, items }, label);
+		return this.sync_call("add_items", { order, items }, label, null, !send);
 	}
 
 	// A change is put in the outbox and the outbox is sent, in order.
-	sync_call(method, args, label) {
-		set_outbox([...outbox(), { op: frappe.utils.get_random(20), method, args, label: label || "", at: Date.now() }]);
+	sync_call(method, args, label, extra, later) {
+		set_outbox([...outbox(), { op: frappe.utils.get_random(20), method, args, label: label || "", at: Date.now(), ...(extra || {}) }]);
 		if (this.offline) this.set_offline(true); // the count on the bar
-		return this.drain();
+		return later ? Promise.resolve() : this.drain();
 	}
 
 	// Sends the outbox one change after the other. Never rejects. No connection: the changes stay
@@ -2330,6 +2346,8 @@ class RestoFloor {
 		this._acting = Date.now();
 		this.$order.addClass("rf-acting");
 		try {
+			// The kitchen ticket and the bill never wait for the connection (D-219).
+			if (act === "send" || act === "bill") return await this.send_or_bill(act, e);
 			if (!(await this.settled())) return;
 			return await this.do_action(act, e);
 		} finally {
@@ -2338,10 +2356,180 @@ class RestoFloor {
 		}
 	}
 
+	// Send to Kitchen and Print Bill (D-219): through the server when it answers and nothing waits on
+	// this device; otherwise printed here, from the order as this device has it, so a guest never
+	// waits for the connection to eat or to leave.
+	async send_or_bill(act, e) {
+		// Connected: what waits is sent first. Offline: the taps are kept with the rest, and nothing
+		// is asked now (the paper comes first).
+		await this.flush_taps(!this.offline);
+		if (!outbox().length && !this.offline) {
+			try {
+				return await this.do_action(act, e);
+			} catch (err) {
+				if (!(err && err.network)) throw err;
+			}
+		}
+		return act === "send" ? this.send_here() : this.bill_here();
+	}
+
+	// The kitchen ticket printed on this device. The server records it when the connection is back,
+	// for these dishes only and without printing it again (send_to_kitchen with printed).
+	async send_here() {
+		const o = this.order;
+		const lines = o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold);
+		if (!lines.length) return frappe.show_alert({ message: __("Nothing new to send"), indicator: "blue" });
+		const printed = {};
+		lines.forEach((d) => (printed[d.item_code] = flt(printed[d.item_code]) + flt(d.qty)));
+		if (!(await resto.print_html(this.ticket_html(o, lines)))) {
+			return frappe.msgprint(__("No connection, and this device could not print the kitchen ticket. Try again, or tell the kitchen."));
+		}
+		// The dishes went to the kitchen on paper: the changes that made them are sent, not offered
+		// for discarding (the order must bill what was cooked).
+		set_outbox(outbox().map((j) => (j && j.args && j.args.order === o.name ? { ...j, ok: 1 } : j)));
+		const what = lines.map((d) => `${fmt_qty(d.qty)} × ${d.item_name}`).join("، ");
+		lines.forEach((d) => (d.kitchen_status = "Sent")); // as shown until the server answers
+		this._gen++;
+		this.render_lines();
+		frappe.show_alert({ message: __("No connection: the kitchen ticket was printed here. Hand it to the kitchen; it is recorded when the connection is back."), indicator: "orange" }, 10);
+		this.sync_call("send_to_kitchen", { order: o.name, printed }, __("Kitchen ticket printed on this device: {0}", [what]), { ok: 1 });
+	}
+
+	// The bill printed on this device, its total worked out here as the server does (Resto Settings,
+	// the POS Profile's taxes and rounding, read with the floor). The table is not marked "bill
+	// requested" until the next bill through the server.
+	async bill_here() {
+		const o = this.order;
+		const bill = this.bill_on_device(o);
+		if (!bill) return frappe.msgprint(__("Nothing left to bill on this order"));
+		if (!(await resto.print_html(this.bill_html(o, bill)))) {
+			return frappe.msgprint(__("No connection, and this device could not print the bill. Try again."));
+		}
+		frappe.show_alert({ message: __("No connection: the bill was printed on this device."), indicator: "orange" }, 8);
+	}
+
+	// The bill of what is not billed yet, as billing.build_invoice works it out: food (with options
+	// and sides), the order discount on it, the delivery fee, the service charge as a tax row (first,
+	// and taxed, with "Charge VAT on Service"), the template's taxes, then rounding. estimate: part
+	// of the order is paid already, or the rules were not read, so the total may differ.
+	bill_on_device(o) {
+		const rules = (this.floor && this.floor.bill_rules) || null;
+		const r = rules || {};
+		const round2 = (v) => Math.round((flt(v) + Number.EPSILON) * 100) / 100;
+		const rows = o.items
+			.filter((d) => d.kitchen_status !== "Void" && flt(d.qty) - flt(d.billed_qty) > 1e-9)
+			.map((d) => {
+				const qty = flt(d.qty) - flt(d.billed_qty);
+				const each = flt(d.qty) ? flt(d.amount) / flt(d.qty) : flt(d.rate);
+				return { name: d.item_name, text: d.modifiers_text || "", qty, amount: round2(qty * each) };
+			});
+		if (!rows.length) return null;
+		const food = round2(rows.reduce((s, x) => s + x.amount, 0));
+		const partial = flt(o.invoiced_total) > 0;
+		const discount = round2(Math.min(food, partial ? (flt(o.discount_amount) * food) / (flt(o.net_total) || food) : flt(o.discount_amount)));
+		const fee = o.order_type === "Delivery" && !partial ? flt(o.delivery_fee) : 0;
+		const pct = flt(o.service_charge_percent);
+		const net = round2(food + fee - discount);
+		let taxes = (r.taxes || []).map((t) => ({ ...t }));
+		const inclusive = taxes.some((t) => cint(t.included_in_print_rate));
+		const is_service = (t) => t.service || (r.service_account && t.account_head === r.service_account);
+		const fill = (t) => {
+			t.included_in_print_rate = 0;
+			if (fee) {
+				t.charge_type = "Actual";
+				t.tax_amount = round2(((food - discount) * pct) / 100);
+			} else {
+				t.charge_type = "On Net Total";
+				t.rate = pct;
+			}
+		};
+		const service_rows = taxes.filter(is_service);
+		if (service_rows.length) service_rows.forEach(fill);
+		else if (pct && !inclusive) {
+			const row = { description: __("Service Charge"), service: 1 };
+			fill(row);
+			if (cint(r.vat_on_service)) {
+				taxes.forEach((t) => {
+					if (t.charge_type === "On Net Total") {
+						t.charge_type = "On Previous Row Total";
+						t.row_id = "1";
+					} else if (["On Previous Row Amount", "On Previous Row Total"].includes(t.charge_type) && t.row_id) {
+						t.row_id = String(cint(t.row_id) + 1);
+					}
+				});
+				taxes = [row, ...taxes];
+			} else taxes.push(row);
+		}
+		const out = [];
+		let total = net;
+		if (!inclusive) {
+			taxes.forEach((t) => {
+				const before = out[cint(t.row_id) - 1];
+				let amount = 0;
+				if (t.charge_type === "Actual") amount = flt(t.tax_amount);
+				else if (t.charge_type === "On Net Total") amount = (net * flt(t.rate)) / 100;
+				else if (t.charge_type === "On Previous Row Amount") amount = ((before ? before.amount : 0) * flt(t.rate)) / 100;
+				else if (t.charge_type === "On Previous Row Total") amount = ((before ? before.total : net) * flt(t.rate)) / 100;
+				amount = round2(amount);
+				total = round2(total + amount);
+				out.push({ description: t.description, amount, total, service: !!is_service(t) });
+			});
+		}
+		const payable = cint(r.disable_rounded_total) ? total : round_money(total, flt(r.smallest_fraction));
+		return { rows, food, discount, fee, taxes: out.filter((x) => x.amount), grand: total, payable, estimate: partial || !rules };
+	}
+
+	paper(title, body) {
+		const dir = frappe.utils.is_rtl && frappe.utils.is_rtl() ? "rtl" : document.dir || "rtl";
+		return `<!doctype html><html dir="${dir}"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+			@page { margin: 0; } * { box-sizing: border-box; }
+			body { margin: 0; padding: 4mm; width: 72mm; font-family: Almarai, Tahoma, Arial, sans-serif; font-size: 12px; color: #000; direction: ${dir}; }
+			h1 { font-size: 15px; margin: 0 0 2mm; text-align: center; } h2 { font-size: 13px; margin: 0 0 2mm; text-align: center; border: 1px solid #000; padding: 1mm; }
+			.m { display: flex; justify-content: space-between; gap: 2mm; } .s { font-size: 11px; } hr { border: 0; border-top: 1px dashed #000; margin: 2mm 0; }
+			.big { font-size: 15px; font-weight: 700; } .k { font-size: 16px; font-weight: 700; margin-top: 2mm; } .n { font-size: 12px; padding-inline-start: 4mm; }
+		</style></head><body>${body}</body></html>`;
+	}
+
+	paper_head(o) {
+		const where = o.resto_table ? `${__("Table", null, "Resto")} ${esc(o.resto_table)}` : esc(__(o.order_type));
+		return `<div class="m s"><span>${esc(o.name)}</span><span>${where}</span></div>
+			<div class="m s"><span>${esc(frappe.datetime.str_to_user(frappe.datetime.now_datetime()))}</span><span>${esc((this.floor && this.floor.user_name) || frappe.session.user)}</span></div>`;
+	}
+
+	ticket_html(o, lines) {
+		const rows = lines
+			.map((d) => {
+				const notes = [d.modifiers_text, d.sides_text || d.extras_text, d.notes, d.course ? __(d.course) : ""].filter(Boolean);
+				return `<div class="k">${fmt_qty(d.qty)} × ${esc(d.item_name)}</div>${notes.map((n) => `<div class="n">${esc(n)}</div>`).join("")}`;
+			})
+			.join("");
+		return this.paper(
+			__("Kitchen Ticket"),
+			`<h2>${__("Kitchen ticket, printed without a connection")}</h2>${this.paper_head(o)}<hr>${rows}<hr><div class="s">${__("Recorded in the system when the connection is back.")}</div>`
+		);
+	}
+
+	bill_html(o, b) {
+		const line = (label, value, cls) => `<div class="m ${cls || ""}"><span>${label}</span><span dir="ltr">${value}</span></div>`;
+		const rows = b.rows.map((x) => line(`${fmt_qty(x.qty)} × ${esc(x.name)}${x.text ? ` <span class="s">(${esc(x.text)})</span>` : ""}`, money(x.amount))).join("");
+		const brand = (this.floor && this.floor.brand) || "";
+		return this.paper(
+			__("Bill"),
+			`${brand ? `<h1>${esc(brand)}</h1>` : ""}<h2>${__("Bill, printed without a connection")}</h2>${this.paper_head(o)}<hr>${rows}<hr>
+			${line(__("Items Total"), money(b.food))}
+			${b.discount ? line(__("Discount"), `−${money(b.discount)}`) : ""}
+			${b.fee ? line(__("Delivery Fee"), money(b.fee)) : ""}
+			${b.taxes.map((t) => line(esc(t.service ? __("Service Charge") : t.description), money(t.amount))).join("")}
+			${b.payable !== b.grand ? line(__("Rounding"), money(b.payable - b.grand)) : ""}
+			<hr>${line(__("Total", null, "Resto"), money(b.payable), "big")}
+			<hr><div class="s">${b.estimate ? __("An estimate: the final bill is made when it is paid.") : __("The bill is checked again when it is paid.")}</div>`
+		);
+	}
+
 	async do_action(act, e) {
 		const o = this.order;
 		if (act === "send") {
-			const tickets = await call("send_to_kitchen", { order: o.name }, true);
+			const tickets = await call("send_to_kitchen", { order: o.name }, true, 15000);
 			frappe.show_alert({ message: tickets.length ? __("Sent to {0} station(s)", [tickets.length]) : __("Nothing new to send"), indicator: tickets.length ? "green" : "blue" });
 			return this.load_order(o.name);
 		}
@@ -2364,7 +2552,7 @@ class RestoFloor {
 			if (this._billing) return;
 			this._billing = true;
 			try {
-				const bill = await call("request_bill", { order: o.name }, true);
+				const bill = await call("request_bill", { order: o.name }, true, 15000);
 				if (bill && bill.on_printer) frappe.show_alert({ message: __("Sent to printer"), indicator: "green" });
 				else if (bill && bill.print_error) frappe.show_alert({ message: __("Bill requested, but it could not be printed. Tell the manager."), indicator: "red" }, 10);
 				else if (bill && bill.pages && bill.pages.length && this.prints_here()) {
