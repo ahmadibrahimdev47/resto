@@ -134,32 +134,21 @@ class SetupCheck:
 		if s.selling_price_list and p.selling_price_list and p.selling_price_list != s.selling_price_list:
 			self.warn(
 				area,
-				_("POS Profile price list {0} differs from Resto's {1}; POSNext and the floor would sell at different prices").format(
+				_("POS Profile price list {0} differs from Resto's {1}; bills made at the desk and on the floor would use different prices").format(
 					p.selling_price_list, s.selling_price_list
 				),
 			)
 		if not p.write_off_account or not p.write_off_cost_center:
 			self.warn(area, _("Set the write off account and cost center in POS Profile {0} (used for rounding)").format(p.name))
-		from resto.resto.billing import taxes_inclusive_setting
-
-		template_inclusive = bool(
+		inclusive = bool(
 			p.taxes_and_charges
 			and frappe.db.exists(
 				"Sales Taxes and Charges",
 				{"parent": p.taxes_and_charges, "parenttype": "Sales Taxes and Charges Template", "included_in_print_rate": 1},
 			)
 		)
-		posnext_inclusive = taxes_inclusive_setting(p.name)
-		inclusive = template_inclusive if posnext_inclusive is None else posnext_inclusive
 		if not p.taxes_and_charges:
 			self.warn(area, _("POS Profile {0} has no tax template; bills will have no VAT").format(p.name))
-		if posnext_inclusive is not None and template_inclusive != posnext_inclusive:
-			self.warn(
-				area,
-				_("Tax template {0} and POSNext POS Settings disagree on tax inclusive prices; POSNext decides, so floor bills treat prices as {1}").format(
-					p.taxes_and_charges, _("including tax") if posnext_inclusive else _("excluding tax")
-				),
-			)
 		if inclusive and flt(s.service_charge_percent):
 			self.error(
 				area,

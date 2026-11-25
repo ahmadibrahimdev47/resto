@@ -12,7 +12,7 @@ from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
 from resto.resto import sides
-from resto.resto.utils import CASHIER, get_settings, has_role, posnext_installed, publish, require_role
+from resto.resto.utils import CASHIER, get_settings, has_role, publish, require_role
 
 EPS = 0.0000001
 
@@ -299,20 +299,8 @@ def _set_service_charge(si, order, settings, actual_base=None):
 		t.idx = i
 
 
-def taxes_inclusive_setting(pos_profile):
-	"""POSNext's tax inclusive switch for the profile, or None when POSNext does not decide it."""
-	if not posnext_installed() or not frappe.db.has_column("POS Settings", "tax_inclusive"):
-		return None
-	return bool(cint(frappe.db.get_value("POS Settings", {"pos_profile": pos_profile}, "tax_inclusive")))
-
-
 def _set_tax_inclusive(si, profile):
-	"""Apply the same tax inclusive rule that POSNext's Sales Invoice hook applies on save, so the
-	bill shown and the invoice saved are the same. Returns True when prices include tax."""
-	setting = taxes_inclusive_setting(profile.name)
-	if setting is not None:
-		for t in si.taxes:
-			t.included_in_print_rate = 0 if t.charge_type == "Actual" else int(setting)
+	"""Whether prices include tax: the tax template decides (D-203, POSNext no longer used)."""
 	return any(cint(t.included_in_print_rate) for t in si.taxes)
 
 

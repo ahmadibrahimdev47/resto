@@ -2521,3 +2521,4 @@
 "Your Login Password","كلمة مرور الدخول",""
 "Account {0} must be an expense or income account","يجب أن يكون الحساب {0} حساب مصروفات أو إيرادات",""
 "This receipt is already attached to another expense","هذا الإيصال مرفق بالفعل بمصروف آخر",""
+"POS Profile price list {0} differs from Resto's {1}; bills made at the desk and on the floor would use different prices","قائمة أسعار ملف نقطة البيع {0} تختلف عن قائمة المطعم {1}؛ فتُسعَّر فواتير المكتب وفواتير الصالة بأسعار مختلفة",""

@@ -21,6 +21,8 @@ STANDARD_PERMISSIONS = {
 	"Bin": {MANAGER: ["read", "report"]},
 	# ERPNext checks the customer's receivable account (select) while it builds any bill.
 	"Account": {WAITER: ["select"], CASHIER: ["select"], MANAGER: ["select"]},
+	# ... and reads the POS Profile (item details) while it builds the bill and its preview.
+	"POS Profile": {WAITER: ["read"], CASHIER: ["read"], MANAGER: ["read"]},
 	"Purchase Receipt": {MANAGER: ["read", "report"]},
 }
 
