@@ -335,11 +335,13 @@ class TestPackaging(IntegrationTestCase):
 		before = bins()
 		parts = [self.pay(order, {line: 1})[0] for _i in range(3)]
 		self.assertEqual([packaging_rows(p).get(("PACK-BOX", "Dish"), 0) for p in parts], [1, 0, 1])
-		parts[0].cancel()
+		# Fresh from the database: cancelling an earlier part reposts the later stock entries,
+		# which ERPNext stamps on their invoices.
+		frappe.get_doc("Sales Invoice", parts[0].name).cancel()
 		again, _ = self.pay(order)
 		self.assertEqual(packaging_rows(again).get(("PACK-BOX", "Dish"), 0), 1)
 		self.assertEqual(moved(before)["PACK-BOX"], 2)
-		parts[1].cancel()
+		frappe.get_doc("Sales Invoice", parts[1].name).cancel()
 		again, _ = self.pay(order)
 		self.assertEqual(packaging_rows(again).get(("PACK-BOX", "Dish"), 0), 0)
 		self.assertEqual(moved(before)["PACK-BOX"], 2)
