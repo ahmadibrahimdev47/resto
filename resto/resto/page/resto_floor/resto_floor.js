@@ -57,6 +57,13 @@ function call(method, args, freeze, timeout) {
 	});
 }
 
+// The server itself answered, busy or failing, without refusing (5xx, a rate limit, a timeout):
+// the connection is there and the change is sent again.
+const server_busy = (e) => {
+	const status = cint(e && e.status);
+	return status >= 500 || status === 429 || status === 408;
+};
+
 // "9:05:00" (a time from the server) as "09:05".
 const hhmm = (t) => {
 	const [h, m] = String(t || "").split(":");
@@ -207,6 +214,7 @@ class RestoFloor {
 		// Locked, opened or signed out in another tab of this browser: the same here. A lock waits
 		// for a payment open here to finish (the clock shows it then).
 		window.addEventListener("storage", (e) => {
+			if (e.key === outbox_key()) return this.pending_gone();
 			if (e.key !== this.lock_key()) return;
 			if (e.newValue === "out") window.location.href = "/login";
 			else if (this.lock_stored()) !this._paying && !this._settling && this.show_lock();
@@ -335,7 +343,7 @@ class RestoFloor {
 			this.floor = floor;
 		} catch (e) {
 			if (e && e.network) {
-				this.set_offline(true);
+				this.set_offline(!server_busy(e));
 				// Not loaded yet: try again soon (once loaded, the periodic refresh does).
 				if (!this._poll) this._t = setTimeout(() => this.refresh(), 10000);
 			}
@@ -1706,31 +1714,50 @@ class RestoFloor {
 	// refusal: dropped, with a message, and the order is drawn again as the server has it.
 	drain() {
 		if (this._draining) return this._draining;
-		this._draining = (async () => {
+		const run = (async () => {
+			// Never done before this._draining holds it: an empty outbox (or a change waiting for the
+			// waiter's choice) used to end the body at once, its finally ran first, and the finished
+			// promise stayed in this._draining, so nothing was ever sent again from this page.
+			await null;
 			try {
 				for (;;) {
-					const job = outbox()[0];
-					if (!job) break;
+					const list = outbox();
+					if (!list.length) break;
+					const job = list[0];
+					if (!job || typeof job !== "object" || !job.op || !job.method || !job.args || !job.args.order) {
+						set_outbox(list.slice(1));
+						continue; // not a change this screen made: dropped
+					}
 					// Kept more than two minutes (offline, or left by a closed page): the dishes may
 					// have been taken again on another screen meanwhile, so the waiter decides.
 					if (!job.ok && Date.now() - cint(job.at) > 120000) {
-						this.ask_stale(job);
+						this.ask_stale();
 						break;
 					}
 					let view = null;
+					this._sending_op = job.op;
 					try {
 						view = await call(job.method, { ...job.args, view: 1, op: job.op }, false, 20000);
 					} catch (e) {
 						if (e && e.network) {
-							this.set_offline(true);
+							// The server answered without refusing (busy or failing: 5xx, 429, 408):
+							// connected, the change waits and is sent again, and an action on the order
+							// says so. No answer, or not the server's (a portal page, a login): offline.
+							this._fail = { op: job.op, status: cint(e.status), at: Date.now() };
+							this.set_offline(!server_busy(e));
 							clearTimeout(this._retry);
 							this._retry = setTimeout(() => this.drain(), 5000);
 							break;
 						}
+						this._refusals = (this._refusals || 0) + 1;
 						this.refused(job);
+					} finally {
+						this._sending_op = null;
 					}
+					this._fail = null;
 					set_outbox(outbox().filter((j) => j.op !== job.op));
 					this.set_offline(false);
+					this.pending_gone();
 					try {
 						if (this.order && this.order.name === job.args.order) {
 							if (view) this.show_view(view);
@@ -1743,44 +1770,89 @@ class RestoFloor {
 			} catch (e) {
 				console.error(e);
 			} finally {
-				this._draining = null;
+				if (this._draining === run) this._draining = null;
 			}
 		})();
-		return this._draining;
+		this._draining = run;
+		return run;
 	}
 
-	ask_stale(job) {
-		if (this._asking) return;
-		this._asking = true;
-		const mins = Math.max(1, Math.round((Date.now() - cint(job.at)) / 60000));
-		const what = job.label || (job.method === "remove_line" ? __("a line removed") : __("a quantity changed"));
-		const d = new frappe.ui.Dialog({
+	// A change kept more than two minutes waits for the waiter's choice (asked again a minute after
+	// the window was closed without one; an action on the order asks at once).
+	ask_stale() {
+		if (Date.now() < (this._snooze || 0)) return;
+		this.show_pending();
+	}
+
+	// The window of changes not sent closes once none of its changes waits any more (sent by a
+	// retry, or by another tab of this browser).
+	pending_gone() {
+		const d = this._pending_dialog;
+		if (!d) return;
+		const left = new Set(outbox().map((j) => j && j.op));
+		if (!d.resto_ops.some((op) => left.has(op))) d.hide();
+	}
+
+	// The changes kept on this device, what holds them, and the choice: send them now, or discard
+	// them (taken again on another screen meanwhile). One window at a time; closed without a choice,
+	// the next action on the order or the next refresh asks again.
+	show_pending() {
+		const jobs = outbox().filter((j) => j && typeof j === "object" && j.op);
+		if (!jobs.length) return;
+		if (this._pending_dialog) return; // one window (display is set only once it has opened)
+		const old = jobs.some((j) => !j.ok && Date.now() - cint(j.at) > 120000);
+		const fail = this._fail && jobs.some((j) => j.op === this._fail.op) ? this._fail : null;
+		const why = old
+			? __("If they were taken again on another screen, discard them.")
+			: fail
+			? __("The server did not take them yet (error {0}): they are sent again by themselves, or now.", [fail.status])
+			: __("They are being sent: try again in a moment, or send them now.");
+		const rows = jobs
+			.map((j) => {
+				const mins = Math.max(0, Math.round((Date.now() - cint(j.at)) / 60000));
+				const what = j.label || (j.method === "remove_line" ? __("a line removed") : __("a quantity changed"));
+				return `<li>${__("Made {0} min ago on order {1} and not sent yet: {2}", [mins, esc((j.args || {}).order), esc(what)])}</li>`;
+			})
+			.join("");
+		const orders = [...new Set(jobs.map((j) => (j.args || {}).order))];
+		let chose = false;
+		const d = (this._pending_dialog = new frappe.ui.Dialog({
 			title: __("Changes Not Sent Yet"),
-			fields: [
-				{
-					fieldname: "html",
-					fieldtype: "HTML",
-					options: `<p>${__("Made {0} min ago on order {1} and not sent yet: {2}", [mins, esc(job.args.order), esc(what)])}</p>
-						<p class="text-muted">${__("If they were taken again on another screen, discard them.")}</p>`,
-				},
-			],
+			fields: [{ fieldname: "html", fieldtype: "HTML", options: `<ul>${rows}</ul><p class="text-muted">${why}</p>` }],
 			primary_action_label: __("Send Now"),
-			primary_action: () => {
-				set_outbox(outbox().map((j) => (j.op === job.op ? { ...j, ok: 1 } : j)));
+			primary_action: async () => {
+				chose = true;
+				const ops = new Set(jobs.map((j) => j.op));
+				set_outbox(outbox().map((j) => (j && ops.has(j.op) ? { ...j, ok: 1 } : j)));
 				d.hide();
+				clearTimeout(this._retry);
+				const refusals = this._refusals || 0;
+				await this.drain();
+				// "Sent" only when none was refused (a refusal says so itself).
+				if (!outbox().length) (this._refusals || 0) === refusals && frappe.show_alert({ message: __("Changes sent"), indicator: "green" });
+				else if (this.offline) frappe.msgprint(__("Not connected: the last changes are kept on this device and sent when the connection is back. Try again then."));
+				else this.show_pending();
 			},
 			secondary_action_label: __("Discard"),
 			secondary_action: () => {
-				set_outbox(outbox().filter((j) => j.op !== job.op));
+				chose = true;
+				// The change on its way to the server now cannot be called back: it is not discarded.
+				const busy = this._sending_op;
+				const ops = new Set(jobs.map((j) => j.op).filter((op) => op !== busy));
+				set_outbox(outbox().filter((j) => !(j && ops.has(j.op))));
 				d.hide();
-				if (this.order && this.order.name === job.args.order) this.reload_lines(job.args.order).catch(() => {});
+				if (busy && jobs.some((j) => j.op === busy)) {
+					frappe.show_alert({ message: __("A change already on its way to the server was not discarded"), indicator: "orange" });
+				}
+				if (this.order && orders.includes(this.order.name)) this.reload_lines(this.order.name).catch(() => {});
+				if (this.offline) this.set_offline(true); // the count on the bar
 			},
 			on_hide: () => {
-				this._asking = false;
-				if (!this.offline || !outbox().length) this.set_offline(this.offline);
-				setTimeout(() => this.drain(), 0);
+				if (this._pending_dialog === d) this._pending_dialog = null;
+				if (!chose) this._snooze = Date.now() + 60000;
 			},
-		});
+		}));
+		d.resto_ops = jobs.map((j) => j.op);
 		d.show();
 	}
 
@@ -1820,10 +1892,16 @@ class RestoFloor {
 
 	// Before an action on the order: the taps and changes waiting are sent first. false: they could
 	// not be (no connection), and the action is not done, so the kitchen or the bill never misses them.
+	// "Not connected" only when the server gave no answer; otherwise what waits is shown, with the
+	// choice to send it now or discard it.
 	async settled() {
 		await this.flush_taps();
 		if (!outbox().length) return true;
-		frappe.msgprint(__("Not connected: the last changes are kept on this device and sent when the connection is back. Try again then."));
+		if (this.offline) {
+			frappe.msgprint(__("Not connected: the last changes are kept on this device and sent when the connection is back. Try again then."));
+		} else {
+			this.show_pending();
+		}
 		return false;
 	}
 
@@ -2119,8 +2197,9 @@ class RestoFloor {
 			}
 			this.render_lines();
 			this.flush_taps();
-			if (q === "trash") this.sync_call("remove_line", { order: o.name, line: line.name });
-			else this.sync_call("update_line", { order: o.name, line: line.name, step });
+			// The dish named, so a change kept on the device says which line it is.
+			if (q === "trash") this.sync_call("remove_line", { order: o.name, line: line.name }, `${__("a line removed")}: ${line.item_name}`);
+			else this.sync_call("update_line", { order: o.name, line: line.name, step }, `${step > 0 ? "+" : "−"}${fmt_qty(Math.abs(step))} × ${line.item_name}`);
 		});
 		this.$order.find("[data-lm]").on("click", (e) => {
 			const line = o.items.find((d) => d.name === $(e.currentTarget).closest(".rf-ln").attr("data-line"));
