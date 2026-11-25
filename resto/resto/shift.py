@@ -13,7 +13,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
-from resto.resto.utils import CASHIER, get_settings, has_role, require_role
+from resto.resto.utils import CASHIER, MANAGER, get_settings, has_role, publish, require_role
 
 ACCOUNTS_PRECISION = 2
 
@@ -302,6 +302,29 @@ def status():
 	return out
 
 
+def ordering_allowed(user=None):
+	"""(allowed, reason): with "Require an Open Shift" on, no order is started, added to, sent or
+	billed without a shift (D-211). A cashier or a manager (Resto Cashier or Resto Manager role) needs
+	their own open shift; a waiter or host, any open shift on the restaurant's POS Profile."""
+	settings = get_settings()
+	if not cint(settings.require_pos_shift):
+		return True, None
+	user = user or frappe.session.user
+	if {CASHIER, MANAGER} & set(frappe.get_roles(user)):
+		if open_shift_of(user, settings.pos_profile):
+			return True, None
+		return False, _("Open your shift first (Open Shift at the top of the floor screen)")
+	if frappe.db.exists("Resto Shift", {"status": "Open", "pos_profile": settings.pos_profile}):
+		return True, None
+	return False, _("No cashier shift is open: orders start once a cashier opens a shift")
+
+
+def require_ordering():
+	allowed, reason = ordering_allowed()
+	if not allowed:
+		frappe.throw(reason, title=_("No Open Shift"))
+
+
 @frappe.whitelist()
 def opening_data():
 	"""What the opening shows: the restaurant's POS Profile, its company, warehouse and currency,
@@ -359,6 +382,7 @@ def open_shift(amounts=None):
 		shift.append("payments", {"mode_of_payment": m.mode_of_payment, "opening_amount": amount, "currency": p.currency})
 	shift.flags.resto_shift = True
 	shift.insert(ignore_permissions=True)
+	publish("shift")  # waiters' screens may take orders now (D-211)
 	return shift.name
 
 
@@ -426,6 +450,7 @@ def close_shift(amounts):
 	shift.over_short_entry = _over_short_entry(shift, figures["rows"])
 	shift.flags.resto_shift = True
 	shift.save(ignore_permissions=True)
+	publish("shift")
 	report = _report(shift, figures)
 	report["closing"] = shift.name
 	return report

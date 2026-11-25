@@ -36,5 +36,5 @@ Legend: [x] done, [ ] to do.
 
 ## Phase G: quality
 - [x] G1 Tests on test.resto.
-- [ ] G2 Deploy to erp.local (schema only, no data) and smoke test screens.
+- [ ] G2 Deploy to the production site (schema only, no data) and smoke test screens.
 - [x] G3 README and decision log update.

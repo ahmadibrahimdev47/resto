@@ -38,6 +38,34 @@ def _get_order(name, statuses=ACTIVE):
 	return order
 
 
+OPS_KEPT = 50
+
+
+def _op_id(op):
+	"""A change's id from the floor screen (D-213): letters, digits, - and _ only."""
+	op = (op or "").strip()
+	if not op:
+		return None
+	if len(op) > 40 or not all(ch.isalnum() or ch in "-_" for ch in op):
+		frappe.throw(_("Invalid change id"))
+	return op
+
+
+def _get_order_once(name, op):
+	"""(order, done): the order locked for change, and whether this change was already applied. A
+	change the floor sends again after its connection dropped (the first one may have reached the
+	server) is found here and not applied twice: its id was saved with it, in the same transaction."""
+	op = _op_id(op)
+	doc = frappe.get_doc("Resto Order", name, for_update=True)
+	if op and op in (doc.client_ops or "").split():
+		return doc, True
+	if doc.status not in ACTIVE:
+		frappe.throw(_("Order {0} is {1}").format(doc.name, _(doc.status, context="Resto")))
+	if op:
+		doc.client_ops = " ".join([*(doc.client_ops or "").split()[-(OPS_KEPT - 1) :], op])
+	return doc, False
+
+
 def _save(order):
 	order.flags.ignore_permissions = True
 	order.flags.resto_api = True
@@ -91,19 +119,26 @@ def get_floor():
 		],
 		order_by="opened_at asc",
 	)
-	ready = (
-		dict(
-			frappe.db.sql(
-				"""select parent, count(*) from `tabResto Order Item`
-				where parenttype='Resto Order' and kitchen_status='Ready' and parent in %s group by parent""",
+	# Per order: dishes ready, dishes on it (voided ones left out) and lines not sent to the kitchen
+	# yet, for the table cards and the lists.
+	counts = (
+		{
+			r[0]: r[1:]
+			for r in frappe.db.sql(
+				"""select parent, sum(kitchen_status = 'Ready'), sum(case when kitchen_status != 'Void' then qty else 0 end),
+					sum(kitchen_status = 'Not Sent')
+				from `tabResto Order Item` where parenttype = 'Resto Order' and parent in %s group by parent""",
 				[[o.name for o in orders]],
 			)
-		)
+		}
 		if orders
 		else {}
 	)
 	for o in orders:
-		o.ready_count = ready.get(o.name, 0)
+		ready, dishes, unsent = counts.get(o.name) or (0, 0, 0)
+		o.ready_count = cint(ready)
+		o.dishes = flt(dishes)
+		o.unsent_count = cint(unsent)
 		o.waiter_name = frappe.utils.get_fullname(o.waiter) if o.waiter else ""
 		o.minutes = int((now - get_datetime(o.opened_at)).total_seconds() // 60) if o.opened_at else 0
 
@@ -162,9 +197,30 @@ def get_floor():
 		},
 		"delivery_fee": flt(settings.delivery_fee),
 		"shift": shift.status() if has_role(CASHIER) else None,
+		# Orders wait for an open shift when Resto Settings says so (D-211).
+		**dict(zip(("can_order", "no_order_reason"), shift.ordering_allowed())),
 		# Above this discount a waiter or cashier needs a manager's PIN (D-204).
 		"discount_limit": discount_limit(),
+		# The screen's header and the order's total (D-214).
+		"brand": (frappe.get_cached_value("Company", settings.company, "company_name") if settings.company else "") or "",
+		"user_name": frappe.utils.get_fullname(),
+		"reservations_today": frappe.db.count("Resto Reservation", {"reservation_date": nowdate(), "status": "Booked"}),
+		"tax_added": _tax_added(settings.pos_profile),
 	}
+
+
+def _tax_added(pos_profile):
+	"""Whether the bill adds tax on top of the menu prices (a tax template whose rates are not included
+	in the price): the order screen then says the total is before tax."""
+	template = frappe.db.get_value("POS Profile", pos_profile, "taxes_and_charges") if pos_profile else None
+	if not template:
+		return 0
+	return int(
+		not frappe.db.exists(
+			"Sales Taxes and Charges",
+			{"parent": template, "parenttype": "Sales Taxes and Charges Template", "included_in_print_rate": 1},
+		)
+	)
 
 
 @frappe.whitelist()
@@ -216,6 +272,17 @@ def get_menu():
 					"has_modifiers": bool(groups_for_item(it.name)),
 				}
 			)
+	# The dishes' barcodes (Item Barcode), so a scanned code finds its dish on the floor.
+	barcodes = {}
+	if items:
+		for b in frappe.get_all(
+			"Item Barcode",
+			filters={"parenttype": "Item", "parent": ("in", [i["item_code"] for i in items])},
+			fields=["parent", "barcode"],
+		):
+			barcodes.setdefault(b.parent, []).append(b.barcode)
+	for i in items:
+		i["barcodes"] = barcodes.get(i["item_code"], [])
 	groups = sorted({i["item_group"] for i in items})
 	return {"groups": groups, "items": items, "price_list": price_list}
 
@@ -229,7 +296,12 @@ def get_modifiers(item_code):
 @frappe.whitelist()
 def get_order(order):
 	require_role(*STAFF, KITCHEN)
-	doc = frappe.get_doc("Resto Order", order)
+	return _order_view(frappe.get_doc("Resto Order", order))
+
+
+def _order_view(doc):
+	"""The order as the floor screen shows it (also returned by a line change, so the screen needs no
+	second call)."""
 	data = doc.as_dict()
 	data["waiter_name"] = frappe.utils.get_fullname(doc.waiter) if doc.waiter else ""
 	data["invoiced_total"] = doc.invoiced_total()
@@ -390,6 +462,7 @@ def create_order(
 	order_type="Dine In", table=None, guests=1, customer=None, customer_name=None, phone=None, address=None, new_customer=0
 ):
 	require_role(WAITER, CASHIER)
+	shift.require_ordering()
 	customer, customer_name, phone, address = _customer_details(
 		customer, customer_name, phone, address, new_customer, order_type
 	)
@@ -458,9 +531,14 @@ def _plain_unsent_line(doc, it):
 
 
 @frappe.whitelist(methods=["POST"])
-def add_items(order, items):
+def add_items(order, items, view=0, op=None):
+	"""Add dishes; several taps come together in one call (D-210). view: return the order as the
+	floor shows it, instead of its name. op: the change's id, so a retry adds nothing (D-213)."""
 	require_role(WAITER, CASHIER)
-	doc = _get_order(order)
+	doc, done = _get_order_once(order, op)
+	if done:
+		return _order_view(doc) if cint(view) else doc.name
+	shift.require_ordering()
 	for it in _loads(items, []):
 		qty = flt(it.get("qty") or 1)
 		same = _plain_unsent_line(doc, it)
@@ -482,16 +560,29 @@ def add_items(order, items):
 			},
 		)
 	_reopen_if_billed(doc)
-	return _save(doc).name
+	_save(doc)
+	return _order_view(doc) if cint(view) else doc.name
 
 
 @frappe.whitelist(methods=["POST"])
-def update_line(order, line, qty=None, notes=None, course=None, hold=None):
+def update_line(order, line, qty=None, notes=None, course=None, hold=None, view=0, op=None, step=None):
+	"""step: add to the quantity the server has (+1 / -1 from the floor's buttons, D-213), so a change
+	made meanwhile on another screen is kept; at zero or below the line goes."""
 	require_role(WAITER, CASHIER)
-	doc = _get_order(order)
+	doc, done = _get_order_once(order, op)
+	if done:
+		return _order_view(doc) if cint(view) else doc.name
 	row = _line(doc, line)
 	if row.kitchen_status != "Not Sent":
 		frappe.throw(_("{0} was sent to the kitchen; void it and add it again").format(frappe.bold(row.item_name)))
+	old_qty = flt(row.qty)
+	if step is not None:
+		qty = old_qty + flt(step)
+		if qty <= 0:
+			doc.remove(row)
+			_reopen_if_billed(doc)
+			_save(doc)
+			return _order_view(doc) if cint(view) else doc.name
 	if qty is not None:
 		row.qty = flt(qty)
 	if notes is not None:
@@ -500,8 +591,11 @@ def update_line(order, line, qty=None, notes=None, course=None, hold=None):
 		row.course = course or None
 	if hold is not None:
 		row.hold = cint(hold)
+	if qty is not None and flt(qty) > old_qty:
+		shift.require_ordering()  # more dishes is ordering
 	_reopen_if_billed(doc)
-	return _save(doc).name
+	_save(doc)
+	return _order_view(doc) if cint(view) else doc.name
 
 
 @frappe.whitelist()
@@ -564,6 +658,7 @@ def set_sides(order, lines, sides_choice, together=0):
 	"""sides_choice: {slot key: {item: portions}} of the slots changed, per dish for one line, in
 	total for several lines (or together)."""
 	require_role(WAITER, CASHIER)
+	shift.require_ordering()  # extra portions are charged
 	doc = _get_order(order)
 	lines = _loads(lines, [])
 	choice = _loads(sides_choice, {})
@@ -588,20 +683,24 @@ def set_print_sides(order, print_sides):
 
 
 @frappe.whitelist(methods=["POST"])
-def remove_line(order, line):
+def remove_line(order, line, view=0, op=None):
 	require_role(WAITER, CASHIER)
-	doc = _get_order(order)
+	doc, done = _get_order_once(order, op)
+	if done:
+		return _order_view(doc) if cint(view) else doc.name
 	row = _line(doc, line)
 	if row.kitchen_status != "Not Sent":
 		frappe.throw(_("{0} was sent to the kitchen; void it instead").format(frappe.bold(row.item_name)))
 	doc.remove(row)
 	_reopen_if_billed(doc)
-	return _save(doc).name
+	_save(doc)
+	return _order_view(doc) if cint(view) else doc.name
 
 
 @frappe.whitelist(methods=["POST"])
 def send_to_kitchen(order):
 	require_role(WAITER, CASHIER)
+	shift.require_ordering()
 	doc = _get_order(order)
 	tickets = kitchen.send_lines(doc)
 	_save(doc)
@@ -611,6 +710,7 @@ def send_to_kitchen(order):
 @frappe.whitelist(methods=["POST"])
 def fire_course(order, course):
 	require_role(WAITER, CASHIER)
+	shift.require_ordering()
 	doc = _get_order(order)
 	tickets = kitchen.send_lines(doc, course=course)
 	_save(doc)
@@ -1052,6 +1152,7 @@ def get_bill(order, lines=None):
 def request_bill(order):
 	"""Freeze the bill for printing; the table shows 'bill requested'."""
 	require_role(WAITER, CASHIER)
+	shift.require_ordering()
 	doc = _get_order(order)
 	unsent = [d.item_name for d in doc.active_lines() if d.kitchen_status == "Not Sent"]
 	if unsent:
@@ -1141,6 +1242,7 @@ def _settle_result(doc, si):
 @frappe.whitelist(methods=["POST"])
 def seat_reservation(reservation, table=None):
 	require_role(HOST, WAITER)
+	shift.require_ordering()
 	res = frappe.get_doc("Resto Reservation", reservation, for_update=True)
 	if res.status != "Booked":
 		frappe.throw(_("Reservation {0} is {1}").format(res.name, _(res.status, context="Resto")))

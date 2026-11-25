@@ -73,6 +73,7 @@ class RestoOrder(Document):
 		self.validate_order_type()
 		self.validate_table()
 		self.validate_lines()
+		self.check_ordering()
 		self.calculate_totals()
 		self.validate_discount()
 		if (
@@ -186,6 +187,19 @@ class RestoOrder(Document):
 			frappe.throw(
 				_("Table {0} already has the open order {1}").format(frappe.bold(self.resto_table), other)
 			)
+
+	def check_ordering(self):
+		"""Started, or a dish added or raised, from the form or the REST API: an open shift is needed
+		as on the floor (D-211). Resto's own API checks it itself, where it applies."""
+		if self.flags.resto_api:
+			return
+		old = {d.name: (flt(d.qty), d.item_code) for d in self.before_doc.items} if self.before_doc else {}
+		if self.is_new() or any(
+			d.name not in old or flt(d.qty) > old[d.name][0] or d.item_code != old[d.name][1] for d in self.items
+		):
+			from resto.resto import shift
+
+			shift.require_ordering()
 
 	def validate_lines(self):
 		sides.clear_cache()

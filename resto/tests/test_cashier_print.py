@@ -126,6 +126,11 @@ class TestCashierPrint(IntegrationTestCase):
 		if printing.get_settings().receipt_print_format == printing.RECEIPT_FORMAT:
 			self.assertIn("PRINTED AGAIN", again_pages[0])
 		self.assertIn(first["sales_invoice"], [r.name for r in printing.recent_receipts()])
+		# Sent again with the same total on another method: not the same click, so not "done".
+		with self.assertRaises(frappe.ValidationError):
+			floor.settle(
+				order, json.dumps([{"mode_of_payment": "Card", "amount": bill["payable"]}]), None, bill["payable"], "cashier-print-1"
+			)
 
 	def test_receipt_pages_only_for_restaurant_invoices(self):
 		self.assertRaises(frappe.ValidationError, printing.receipt_pages, "no-such-invoice")

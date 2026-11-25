@@ -13,14 +13,46 @@ frappe.pages["resto-floor"].on_page_show = function (wrapper) {
 	wrapper.resto_floor && wrapper.resto_floor.refresh();
 };
 
-function call(method, args, freeze) {
+// A failed call rejects with {network}: true when the server was not reached (no connection, the
+// server down or too slow, the session expired), so the change can be sent again; false when the
+// server refused it. Frappe calls no error callback on some failures: "always" settles those.
+function call(method, args, freeze, timeout) {
 	return new Promise((resolve, reject) => {
-		frappe.call({
+		let req = null;
+		let settled = false;
+		let timer = null;
+		const done = (fn, value) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			fn(value);
+		};
+		// Refused: the server answered with its own error (a message or an exception) that sending
+		// again will not change. Anything else (no answer, a proxy or portal page, a rate limit, an
+		// expired session, a deadlock, a timeout) is "not reached": the change is kept and sent again.
+		const failed = () => {
+			const status = req ? req.status : 0;
+			const json = (req && req.responseJSON) || {};
+			const exc = String(json.exc_type || "");
+			const expired =
+				!!json.session_expired ||
+				!!(frappe.app && frappe.app.session_expired_dialog && frappe.app.session_expired_dialog.display) ||
+				(frappe.request && frappe.request.is_session_expired && frappe.request.is_session_expired(json));
+			const refused =
+				!!(json.exc_type || json._server_messages || json.exc) &&
+				![401, 408, 429].includes(status) &&
+				status < 500 &&
+				!["QueryDeadlockError", "QueryTimeoutError", "CSRFTokenError", "SessionExpired"].includes(exc);
+			done(reject, { network: !refused || !!expired, status });
+		};
+		if (timeout) timer = setTimeout(() => done(reject, { network: true, status: 0 }), timeout);
+		req = frappe.call({
 			method: API + method,
 			args: args || {},
 			freeze: !!freeze,
-			callback: (r) => resolve(r.message),
-			error: (e) => reject(e),
+			callback: (r) => done(resolve, r.message),
+			error: failed,
+			always: () => setTimeout(failed, 0),
 		});
 	});
 }
@@ -73,6 +105,72 @@ function ask_approval(floor, what) {
 }
 const money = (v) => format_currency(v || 0);
 
+// The floor's look (D-214): line icons drawn inline (no icon font to load), sized by CSS.
+const svg = (d, fill) =>
+	`<svg viewBox="0 0 24 24" fill="${fill ? "currentColor" : "none"}" stroke="${fill ? "none" : "currentColor"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON = {
+	bell: svg('<path d="M4 15h16"/><path d="M6 15a6 6 0 0 1 12 0"/><path d="M12 7V5"/><path d="M3 19h18"/>'),
+	clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+	wifi: svg('<path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/>'),
+	refresh: svg('<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>'),
+	receipt: svg('<path d="M7 3h10v18l-2.5-1.5L12 21l-2.5-1.5L7 21z"/><path d="M10 8h4M10 12h4"/>'),
+	drawer: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5h8v2"/><path d="M3 12h18"/>'),
+	truck: svg('<path d="M3 7h11v9H3z"/><path d="M14 10h4l3 3v3h-7"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>'),
+	plus: svg('<path d="M12 5v14M5 12h14"/>'),
+	minus: svg('<path d="M5 12h14"/>'),
+	back: svg('<path d="M9 6l6 6-6 6"/>'),
+	user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+	search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'),
+	barcode: svg('<path d="M4 7V5h3M17 5h3v2M20 17v2h-3M7 19H4v-2"/><path d="M8 9v6M11 9v6M14 9v6M17 9v6"/>'),
+	more: svg('<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>', true),
+	trash: svg('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
+	send: svg('<path d="M4 12l16-8-6 16-2-6z"/>'),
+	print: svg('<path d="M6 9V3h12v6"/><rect x="4" y="9" width="16" height="8" rx="2"/><path d="M7 14h10v7H7z"/>'),
+	spin: svg('<path d="M21 12a9 9 0 1 1-3-6.7"/>'),
+};
+// Minutes as "38 min" or "1 h 05 min".
+const dur = (minutes) => {
+	const m = Math.max(cint(minutes), 0);
+	const h = Math.floor(m / 60);
+	return h ? __("{0} h {1} min", [h, String(m % 60).padStart(2, "0")]) : __("{0} min", [m]);
+};
+const minutes_since = (dt) => (dt ? Math.max(0, Math.floor((Date.now() - frappe.datetime.str_to_obj(dt).getTime()) / 60000)) : 0);
+const fmt_qty = (q) => (flt(q) % 1 ? flt(q).toFixed(2).replace(/0$/, "") : String(cint(q)));
+
+// Changes made on the order screen and not yet saved on the server (D-213): kept in this browser,
+// per user, so a dropped connection or a reload does not lose them, and sent in order when the
+// server answers again. Each has an id the server keeps with it, so sending it twice adds nothing.
+let MEMORY_OUTBOX = [];
+let STORAGE_BROKEN = false;
+const outbox_key = () => `resto_floor_outbox|${frappe.session.user}`;
+function outbox() {
+	if (STORAGE_BROKEN) return MEMORY_OUTBOX;
+	try {
+		const list = JSON.parse(localStorage.getItem(outbox_key()) || "[]");
+		return Array.isArray(list) ? list : [];
+	} catch (e) {
+		return MEMORY_OUTBOX; // storage off (a private window): kept while the page is open
+	}
+}
+function set_outbox(list) {
+	MEMORY_OUTBOX = list;
+	try {
+		localStorage.setItem(outbox_key(), JSON.stringify(list));
+	} catch (e) {
+		STORAGE_BROKEN = true;
+		// memory only
+	}
+}
+const plain_line = (d) =>
+	d.kitchen_status === "Not Sent" &&
+	(!d.modifiers || d.modifiers === "[]") &&
+	!(d.notes || "").trim() &&
+	!d.course &&
+	!d.hold &&
+	!d.sides &&
+	!d.sides_extras &&
+	!flt(d.billed_qty);
+
 class RestoFloor {
 	constructor(page, wrapper) {
 		this.page = page;
@@ -81,28 +179,98 @@ class RestoFloor {
 		this.floor = null;
 		this.menu = null;
 		this.order = null;
+		this._gen = 0; // bumped by every change made on the screen
 		this.make();
 		this.refresh();
 		frappe.realtime.on("resto_update", () => this.schedule_refresh());
+		$(window).on("online", () => {
+			this.drain();
+			this.refresh();
+		});
+		$(window).on("offline", () => this.set_offline(true));
+		if (outbox().length) this.drain();
 	}
 
 	make() {
-		this.page.set_primary_action(__("New Takeaway"), () => this.new_order("Takeaway"), "add");
-		this.page.add_inner_button(__("New Delivery"), () => this.new_order("Delivery"));
-		this.page.add_inner_button(__("Reservations"), () => frappe.set_route("List", "Resto Reservation"));
-		this.page.add_inner_button(__("Kitchen Display"), () => frappe.set_route("resto-kitchen"));
-		this.page.add_inner_button(__("Refresh"), () => this.refresh());
-
+		// The screen draws its own header (D-214): Frappe's page title bar is hidden on this page.
+		$(this.wrapper).addClass("rf-page");
 		$(this.page.body).html(`
 			<style>${RestoFloor.css()}</style>
-			<div class="resto-floor">
-				<div class="rf-tabs"></div>
-				<div class="rf-body"></div>
-			</div>
-			<div class="rf-order" style="display:none"></div>`);
-		this.$tabs = $(this.page.body).find(".rf-tabs");
-		this.$body = $(this.page.body).find(".rf-body");
-		this.$order = $(this.page.body).find(".rf-order");
+			<div class="rf-root">
+				<div class="resto-floor">
+					<header class="rf-head"></header>
+					<div class="rf-alerts"></div>
+					<div class="rf-bar"><div class="rf-tabs"></div><span class="rf-spacer"></span><div class="rf-acts"></div></div>
+					<main class="rf-main"><section class="rf-body"></section><aside class="rf-side"></aside></main>
+				</div>
+				<div class="rf-order" style="display:none"></div>
+			</div>`);
+		const $b = $(this.page.body);
+		this.$head = $b.find(".rf-head").first();
+		this.$alerts = $b.find(".rf-alerts");
+		this.$tabs = $b.find(".rf-tabs");
+		this.$acts = $b.find(".rf-acts");
+		this.$body = $b.find(".rf-body");
+		this.$side = $b.find(".rf-side");
+		this.$order = $b.find(".rf-order");
+		this._clock = setInterval(() => this.tick(), 20000);
+		// F4: the menu search (a barcode scanner types into it too).
+		$(document).on("keydown.resto_floor", (e) => {
+			if (e.key !== "F4" || !this.$order.is(":visible")) return;
+			e.preventDefault();
+			this.$order.find(".rf-search").trigger("focus").select();
+		});
+	}
+
+	role_label() {
+		const r = this.floor.roles;
+		if (r.manager) return __("Manager", null, "Resto");
+		if (r.cashier) return __("Cashier", null, "Resto");
+		if (r.waiter) return __("Waiter", null, "Resto");
+		if (r.host) return __("Host", null, "Resto");
+		return "";
+	}
+
+	// The header of the floor: the restaurant, the shift, the time, the connection, the user.
+	render_head() {
+		const f = this.floor;
+		const initial = (f.user_name || "?").trim().charAt(0);
+		this.put(this.$head, `
+			<div class="rf-brand"><span class="rf-logo">${ICON.bell}</span>
+				<div><b>${esc(f.brand || __("Restaurant Floor"))}</b><small>${__("Floor", null, "Resto")}</small></div></div>
+			<span class="rf-spacer"></span>
+			${this.shift_pill()}
+			<span class="rf-pill rf-pill-gray rf-hide-sm">${ICON.clock}<span class="rf-clock-t"></span></span>
+			${this.net_pill()}
+			<button class="rf-ib" data-h="refresh" title="${__("Refresh")}" aria-label="${__("Refresh")}">${ICON.refresh}</button>
+			<button class="rf-btn rf-userbtn" data-h="user"><span class="rf-av">${esc(initial)}</span>
+				<span class="rf-hide-sm">${esc(f.user_name)}${this.role_label() ? ` · ${esc(this.role_label())}` : ""}</span></button>`, () => {
+			this.$head.find("[data-h=refresh]").on("click", () => this.refresh());
+			this.$head.find("[data-h=user]").on("click", () => this.user_menu());
+			this.$head.find("[data-shift]").on("click", (e) => this.shift_click($(e.currentTarget).attr("data-shift")));
+		});
+		this.tick();
+	}
+
+	net_pill() {
+		return this.offline
+			? `<span class="rf-pill rf-pill-amber rf-net">${ICON.wifi}<span>${__("Offline", null, "Resto")}</span></span>`
+			: `<span class="rf-pill rf-pill-gray rf-net ok">${ICON.wifi}<span class="rf-hide-sm">${__("Online", null, "Resto")}</span></span>`;
+	}
+
+	// The clock and the shift's time, every few seconds.
+	tick() {
+		const lang = `${frappe.boot.lang || "en"}-u-nu-latn`;
+		const now = new Date();
+		let text = "";
+		try {
+			text = `${now.toLocaleTimeString(lang, { hour: "numeric", minute: "2-digit" })} · ${now.toLocaleDateString(lang, { weekday: "long" })}`;
+		} catch (e) {
+			text = now.toTimeString().slice(0, 5);
+		}
+		$(this.page.body).find(".rf-clock-t").text(text);
+		const s = this.floor && this.floor.shift;
+		if (s && s.shift && s.since) $(this.page.body).find(".rf-shift-t").text(__("Shift open for {0}", [dur(minutes_since(s.since))]));
 	}
 
 	schedule_refresh() {
@@ -112,21 +280,36 @@ class RestoFloor {
 
 	async refresh() {
 		if (!$(this.wrapper).is(":visible")) return;
+		const seq = (this._refresh_seq = (this._refresh_seq || 0) + 1);
+		let floor;
 		try {
-			this.floor = await call("get_floor");
+			floor = await call("get_floor");
+			if (seq !== this._refresh_seq) return; // a newer refresh was asked for meanwhile
+			this.floor = floor;
 		} catch (e) {
+			if (e && e.network) {
+				this.set_offline(true);
+				// Not loaded yet: try again soon (once loaded, the periodic refresh does).
+				if (!this._poll) this._t = setTimeout(() => this.refresh(), 10000);
+			}
 			return;
 		}
-		if (!this._pin_btn && this.floor.roles.manager) {
-			this._pin_btn = this.page.add_inner_button(__("My Approval PIN"), () => this.set_my_pin());
-		}
-		if (!this._receipts_btn && this.floor.roles.cashier) {
-			this._receipts_btn = this.page.add_inner_button(__("Receipts"), () => this.receipts());
-		}
+		if (this.offline) this.set_offline(false);
+		if (outbox().length) this.drain();
 		this.render_floor();
-		if (this.order) this.reload_lines(this.order.name);
+		if (this.order) this.reload_lines(this.order.name).catch(() => {});
 		clearInterval(this._poll);
 		this._poll = setInterval(() => this.refresh(), (this.floor.refresh_seconds || 15) * 1000);
+	}
+
+	// Puts html in a part of the floor only when it changed: a refresh every few seconds then keeps
+	// the list's scroll and never replaces a button under the finger.
+	put($el, html, bind) {
+		if ($el.data("rf-html") === html) return;
+		const top = $el.find(".rf-side-l").scrollTop();
+		$el.html(html).data("rf-html", html);
+		if (bind) bind();
+		if (top) $el.find(".rf-side-l").scrollTop(top);
 	}
 
 	// ------------------------------------------------------------------ printing
@@ -175,41 +358,6 @@ class RestoFloor {
 		d.$wrapper.find("input[data-fieldname=password]").attr({ autocomplete: "current-password" });
 	}
 
-	async receipts() {
-		const rows = await frappe.xcall("resto.resto.printing.recent_receipts");
-		const d = new frappe.ui.Dialog({ title: __("Receipts"), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
-		const here = this.prints_here();
-		const list = (rows || [])
-			.map(
-				(r, i) => `<tr><td>${esc(hhmm(r.posting_time))}</td>
-					<td><a href="/app/sales-invoice/${esc(r.name)}">${esc(r.name)}</a>${r.is_return ? " · " + __("Return") : ""}</td>
-					<td>${r.resto_table ? __("Table {0}", [esc(r.resto_table)], "Resto") : esc(__(r.resto_order_type || "", null, "Resto"))} · ${esc(r.resto_order || "")}</td>
-					<td class="rf-amt">${money(r.rounded_total || r.grand_total)}</td>
-					<td>${r.resto_receipt_printed ? "🖨" : ""}</td>
-					<td><button class="btn btn-default btn-xs" data-i="${i}">${__("Print Again")}</button></td></tr>`
-			)
-			.join("");
-		d.fields_dict.html.$wrapper.html(`
-			<p><button class="btn btn-sm ${here ? "btn-success" : "btn-default"}" data-here="1">${here ? "☑" : "☐"} ${__("This device prints bills and receipts")}</button></p>
-			${list ? `<table class="table table-condensed">${list}</table>` : `<p class="text-muted">${__("No receipts today")}</p>`}`);
-		d.fields_dict.html.$wrapper.find("[data-here]").on("click", () => {
-			try {
-				localStorage.setItem("resto_prints_here", here ? "0" : "1");
-			} catch (e) {
-				// private window: the default stays
-			}
-			d.hide();
-			this.receipts();
-		});
-		d.fields_dict.html.$wrapper.find("[data-i]").on("click", async (e) => {
-			const btn = $(e.currentTarget).prop("disabled", true);
-			const r = rows[btn.attr("data-i")];
-			await this.print_receipt(r.name, this.floor.receipt_mode || this.receipt_mode);
-			btn.prop("disabled", false);
-		});
-		d.show();
-	}
-
 	async print_receipt(sales_invoice, mode) {
 		mode = mode || this.receipt_mode;
 		if (mode === "server") {
@@ -223,105 +371,374 @@ class RestoFloor {
 		}
 	}
 
+	// ------------------------------------------------------------------ invoices (D-215)
+
+	// The invoice history (D-212's lists): the open shift, today, the bills still owed and today's
+	// returns; searched by invoice or order number, customer or phone; one invoice beside the list
+	// with its lines, payments and change, to print again. Reading only.
+	async invoices() {
+		this._inv = { tab: "today", txt: "", order_type: "", mode: "", rows: [], more: false, sel: null, seq: 0 };
+		$(this.page.body).find(".resto-floor").hide();
+		this.$order.css("display", "flex").html(`
+			<header class="rf-head rf-ohead">
+				<button class="rf-btn rf-back">${ICON.back}<span>${__("Floor", null, "Resto")}</span></button>
+				<div class="rf-otitle"><b>${__("Invoices", null, "Resto")}</b></div>
+				<span class="rf-spacer"></span>
+				<button class="rf-btn rf-here"></button>
+			</header>
+			<div class="rf-inv">
+				<section class="rf-inv-l">
+					<div class="rf-tabs rf-inv-tabs"></div>
+					<div class="rf-inv-kpi"></div>
+					<label class="rf-sbox">${ICON.search}<input class="rf-inv-q" type="search" autocomplete="off"
+						placeholder="${__("Search by invoice or order number, customer or phone")}"></label>
+					<div class="rf-chips rf-inv-types"></div>
+					<div class="rf-chips rf-inv-modes"></div>
+					<div class="rf-inv-list"></div>
+				</section>
+				<section class="rf-inv-d"><p class="rf-empty">${__("Choose an invoice to see it")}</p></section>
+			</div>`);
+		this.$order.find(".rf-back").on("click", () => this.close_order());
+		this.draw_here();
+		let timer;
+		this.$order.find(".rf-inv-q").on("input", (e) => {
+			clearTimeout(timer);
+			timer = setTimeout(() => {
+				this._inv.txt = $(e.currentTarget).val().trim();
+				this.load_invoices();
+			}, 350);
+		});
+		this.$order.on("click.rfinv", "[data-it]", (e) => {
+			this._inv.tab = $(e.currentTarget).attr("data-it");
+			this.draw_inv_tabs();
+			this.load_invoices();
+		});
+		this.$order.on("click.rfinv", "[data-ot]", (e) => {
+			this._inv.order_type = $(e.currentTarget).attr("data-ot");
+			this.draw_inv_chips();
+			this.load_invoices();
+		});
+		this.$order.on("click.rfinv", "[data-im]", (e) => {
+			this._inv.mode = $(e.currentTarget).attr("data-im");
+			this.draw_inv_chips();
+			this.load_invoices();
+		});
+		this.$order.on("click.rfinv", "[data-inv]", (e) => this.show_invoice($(e.currentTarget).attr("data-inv")));
+		this.$order.on("click.rfinv", ".rf-inv-more", () => this.load_invoices(true));
+		const [counts, live] = await Promise.all([
+			frappe.xcall("resto.resto.history.counts").catch(() => ({})),
+			frappe.xcall("resto.resto.history.live").catch(() => null),
+		]);
+		if (!this._inv) return; // left meanwhile
+		this._inv.counts = counts || {};
+		if (this._inv.counts.shift != null) this._inv.tab = "shift";
+		this.draw_inv_tabs();
+		this.draw_inv_chips();
+		if (live && live.net_sales != null) {
+			const n = cint(live.sales_count);
+			this.$order.find(".rf-inv-kpi").html(`
+				<div class="rf-kpi"><span>${__("Shift Sales")}</span><b>${money(live.net_sales)}</b></div>
+				<div class="rf-kpi"><span>${__("Average Bill")}</span><b>${money(n ? flt(live.net_sales) / n : 0)}</b></div>`);
+		}
+		this.load_invoices();
+	}
+
+	draw_here() {
+		const here = this.prints_here();
+		this.$order
+			.find(".rf-here")
+			.toggleClass("on", here)
+			.html(`${ICON.print}<span>${__("This device prints bills and receipts")}</span>`)
+			.attr("aria-pressed", here ? "true" : "false")
+			.off("click")
+			.on("click", () => {
+				try {
+					localStorage.setItem("resto_prints_here", here ? "0" : "1");
+				} catch (e) {
+					// private window: the default stays
+				}
+				this.draw_here();
+			});
+	}
+
+	draw_inv_tabs() {
+		const c = this._inv.counts || {};
+		const tabs = [
+			c.shift != null ? ["shift", __("Current Shift"), c.shift] : null,
+			["today", __("Today", null, "Resto"), c.today],
+			["owed", __("Unpaid Debts"), c.owed],
+			["returns", __("Returns"), c.returns],
+		].filter(Boolean);
+		this.$order.find(".rf-inv-tabs").html(
+			tabs
+				.map(
+					([k, label, n]) =>
+						`<button class="rf-tab ${k === this._inv.tab ? "on" : ""}" data-it="${k}">${label}${n != null ? ` <span class="rf-cnt">${cint(n)}</span>` : ""}</button>`
+				)
+				.join("")
+		);
+	}
+
+	draw_inv_chips() {
+		const chip = (attr, val, label, on) => `<button class="rf-chip ${on ? "on" : ""}" ${attr}="${esc(val)}">${label}</button>`;
+		const types = [["", __("All", null, "Resto")], ["Dine In", __("Dine In")], ["Takeaway", __("Takeaway", null, "Resto")], ["Delivery", __("Delivery", null, "Resto")]];
+		this.$order.find(".rf-inv-types").html(types.map(([v, l]) => chip("data-ot", v, l, this._inv.order_type === v)).join(""));
+		const modes = (this._inv.counts || {}).modes || [];
+		this.$order
+			.find(".rf-inv-modes")
+			.html(modes.length > 1 ? modes.map((m) => chip("data-im", this._inv.mode === m ? "" : m, esc(__(m)), this._inv.mode === m)).join("") : "");
+	}
+
+	async load_invoices(more) {
+		const s = this._inv;
+		if (!s) return;
+		const seq = ++s.seq;
+		const args = { txt: s.txt, order_type: s.order_type, mode: s.mode, start: more ? s.rows.length : 0 };
+		if (!s.txt) {
+			if (s.tab === "shift") args.shift = "current";
+			else if (s.tab === "today") args.period = "today";
+			else if (s.tab === "owed") Object.assign(args, { status: "owed", period: "any" });
+			else if (s.tab === "returns") Object.assign(args, { status: "returns", period: "today" });
+		}
+		const $list = this.$order.find(".rf-inv-list");
+		if (!more) $list.html(`<p class="rf-empty">${__("Loading…")}</p>`);
+		let r;
+		try {
+			r = await frappe.xcall("resto.resto.history.invoices", args);
+		} catch (e) {
+			if (seq === s.seq && !more) $list.html(`<p class="rf-empty">${__("Offline", null, "Resto")}</p>`);
+			return;
+		}
+		if (this._inv !== s || seq !== s.seq) return; // a newer search, or the screen left
+		s.rows = more ? s.rows.concat(r.invoices) : r.invoices;
+		s.more = r.more;
+		$list.html(
+			s.rows.length
+				? s.rows.map((v) => this.inv_row(v)).join("") +
+						(s.more ? `<button class="rf-btn rf-inv-more">${__("Load More")}</button>` : "")
+				: `<p class="rf-empty">${__("No invoices")}</p>`
+		);
+	}
+
+	inv_status(v) {
+		if (cint(v.is_return)) return `<span class="rf-st k-void">${__("Return")}</span>`;
+		if (cint(v.overdue)) return `<span class="rf-st k-void">${__("Overdue", null, "Resto Invoice")}</span>`;
+		const owed = flt(v.outstanding_amount);
+		if (owed <= 0) return `<span class="rf-st k-ok">${__("Paid", null, "Resto Invoice")}</span>`;
+		if (owed >= flt(v.total) - 0.005) return `<span class="rf-st k-void">${__("Unpaid", null, "Resto Invoice")}</span>`;
+		return `<span class="rf-st k-warn">${__("{0} left", [money(owed)])}</span>`;
+	}
+
+	inv_where(v) {
+		if (cint(v.is_return)) return __("Return of {0}", [esc(v.return_against)]);
+		const where = v.resto_table
+			? __("Table {0}", [esc(v.resto_table)], "Resto")
+			: esc(__(v.resto_order_type || "", null, "Resto"));
+		const who = v.customer_name && v.customer_name !== v.customer ? esc(v.customer_name) : esc(v.customer_name || "");
+		return [where, v.resto_order ? esc(v.resto_order) : "", v.resto_table ? "" : who].filter(Boolean).join(" · ");
+	}
+
+	inv_row(v) {
+		const modes = (v.modes || []).map((m) => esc(__(m))).join(" + ");
+		return `<button class="rf-invr ${this._inv.sel === v.name ? "on" : ""}" data-inv="${esc(v.name)}">
+			<div class="rf-orow1"><b>${esc(v.name)}</b><span class="rf-muted">${this.inv_where(v)}</span>
+				<span class="rf-spacer"></span><b class="rf-amt">${money(v.total)}</b></div>
+			<div class="rf-orow2"><span>${esc(hhmm(v.posting_time))}${v.posting_date !== frappe.datetime.get_today() ? ` · ${esc(frappe.datetime.str_to_user(v.posting_date))}` : ""}${modes ? ` · ${modes}` : ""} · ${esc(v.cashier || "")}</span>
+				<span class="rf-spacer"></span>${this.inv_status(v)}</div>
+		</button>`;
+	}
+
+	async show_invoice(name) {
+		const s = this._inv;
+		s.sel = name;
+		this.$order.find(".rf-invr").removeClass("on").filter(`[data-inv="${CSS.escape(name)}"]`).addClass("on");
+		const $d = this.$order.find(".rf-inv-d").html(`<p class="rf-empty">${__("Loading…")}</p>`);
+		let v;
+		try {
+			v = await frappe.xcall("resto.resto.history.invoice", { name });
+		} catch (e) {
+			if (this._inv === s && s.sel === name) $d.html(`<p class="rf-empty">${__("Offline", null, "Resto")}</p>`);
+			return;
+		}
+		if (this._inv !== s || s.sel !== name) return;
+		const row = s.rows.find((r) => r.name === name) || {};
+		const status = this.inv_status({ ...v, total: v.grand_total, overdue: row.overdue });
+		const line = (label, value, cls) => `<div class="rf-trow ${cls || ""}"><span>${label}</span><span class="rf-spacer"></span><b class="rf-amt">${value}</b></div>`;
+		$d.html(`
+			<div class="rf-invd-h"><b class="rf-invd-n">${esc(v.name)}</b>${status}<span class="rf-spacer"></span>
+				${cint(v.is_return) ? "" : `<button class="rf-btn" data-ia="print">${ICON.print}<span>${__("Print Again")}</span></button>`}
+				${v.can_return ? `<button class="rf-btn" data-ia="return" title="${__("Opens the invoice: Create, then Return")}">${ICON.back}<span>${__("Return")}</span></button>` : ""}
+			</div>
+			<p class="rf-muted">${[
+				this.inv_where({ ...v, resto_order_type: v.order_type }),
+				__("Customer {0}", [esc(v.customer_name || v.customer)]),
+				__("Cashier {0}", [esc(v.cashier)]),
+				`${esc(frappe.datetime.str_to_user(v.posting_date))} ${esc(hhmm(v.posting_time))}`,
+			].join(" · ")}</p>
+			<table class="rf-invd-t"><thead><tr><th>${__("Item")}</th><th>${__("Qty")}</th><th>${__("Rate")}</th><th>${__("Amount")}</th></tr></thead>
+				<tbody>${v.items
+					.map((d) => `<tr><td>${esc(d.item_name)}</td><td>${fmt_qty(d.qty)}</td><td>${money(d.rate)}</td><td>${money(d.amount)}</td></tr>`)
+					.join("")}</tbody></table>
+			<div class="rf-tots">
+				${line(__("Items Total"), money(v.total))}
+				${flt(v.discount_amount) ? line(__("Discount"), `<span dir="ltr">−${money(v.discount_amount)}</span>`) : ""}
+				${v.taxes.map((t) => line(esc(t.description), money(t.amount))).join("")}
+				${line(__("Total", null, "Resto"), money(v.grand_total), "rf-tbig")}
+			</div>
+			<div class="rf-tots">
+				${v.payments.map((p) => line(esc(__(p.mode_of_payment)), money(p.amount))).join("")}
+				${flt(v.change_amount) ? line(__("Change", null, "Resto"), money(v.change_amount)) : ""}
+				${flt(v.outstanding_amount) > 0 ? line(__("Still Owed"), money(v.outstanding_amount), "rf-warn") : ""}
+			</div>
+			<p class="rf-muted">${cint(v.printed) ? __("The receipt was printed") : __("The receipt was not printed yet")}</p>`);
+		$d.find("[data-ia=print]").on("click", async (e) => {
+			const btn = $(e.currentTarget).prop("disabled", true);
+			try {
+				await this.print_receipt(v.name, this.floor.receipt_mode || this.receipt_mode);
+			} finally {
+				btn.prop("disabled", false);
+			}
+		});
+		$d.find("[data-ia=return]").on("click", () => frappe.set_route("Form", "Sales Invoice", v.name));
+	}
+
 	// ------------------------------------------------------------------ floor
 
 	render_floor() {
-		const halls = this.floor.halls;
+		const f = this.floor;
+		const halls = f.halls;
 		if (!this.hall || !(this.hall === "__orders" || halls.find((h) => h.name === this.hall))) {
 			this.hall = halls.length ? halls[0].name : "__orders";
 		}
-		const tabs = halls.map(
-			(h) => {
-				const busy = h.tables.filter((t) => t.status !== "free").length;
-				return `<button class="btn btn-sm ${h.name === this.hall ? "btn-primary" : "btn-default"}" data-hall="${esc(h.name)}">
-					${esc(h.name)} <span class="rf-count">${busy}/${h.tables.length}</span></button>`;
-			}
+		this.render_head();
+		const tab = (key, label, count) =>
+			`<button class="rf-tab ${key === this.hall ? "on" : ""}" data-hall="${esc(key)}">${label} <span class="rf-cnt">${count}</span></button>`;
+		const tabs = halls.map((h) => tab(h.name, esc(h.name), `${h.tables.filter((t) => t.status !== "free").length}/${h.tables.length}`));
+		tabs.push(tab("__orders", __("Takeaway & Delivery"), f.orders.length));
+		tabs.push(tab("__reservations", __("Reservations"), f.reservations_today || 0));
+		this.put(this.$tabs, tabs.join(""), () =>
+			this.$tabs.find("[data-hall]").on("click", (e) => {
+				const key = $(e.currentTarget).attr("data-hall");
+				if (key === "__reservations") return frappe.set_route("List", "Resto Reservation");
+				this.hall = key;
+				try {
+					localStorage.setItem("resto_floor_hall", this.hall);
+				} catch (err) {
+					// remembered for this page only
+				}
+				this.render_floor();
+			})
 		);
-		tabs.push(
-			`<button class="btn btn-sm ${this.hall === "__orders" ? "btn-primary" : "btn-default"}" data-hall="__orders">
-				${__("Takeaway & Delivery")} <span class="rf-count">${this.floor.orders.length}</span></button>`
-		);
-		this.$tabs.html(this.shift_bar() + this.kitchen_print_alert() + tabs.join(""));
-		this.$tabs.find("[data-shift]").on("click", (e) => {
-			const act = $(e.currentTarget).attr("data-shift");
-			if (act === "open") this.open_shift();
-			else if (act === "expense") this.drawer_expense();
-			else if (act === "debt") this.collect_debt();
-			else this.close_shift();
-		});
-		this.$tabs.find("button[data-hall]").on("click", (e) => {
-			this.hall = $(e.currentTarget).attr("data-hall");
-			localStorage.setItem("resto_floor_hall", this.hall);
-			this.render_floor();
-		});
 
-		if (this.hall === "__orders") return this.render_orders();
+		const r = f.roles;
+		const takes = r.waiter || r.cashier || r.manager;
+		this.put(this.$acts, `
+			${r.cashier || r.manager ? `<button class="rf-btn" data-a="invoices">${ICON.receipt}<span>${__("Invoices", null, "Resto")}</span></button>
+				<button class="rf-btn" data-a="shift">${ICON.drawer}<span>${__("Shift", null, "Resto")}</span></button>` : ""}
+			${takes ? `<button class="rf-btn" data-a="delivery">${ICON.truck}<span>${__("New Delivery")}</span></button>
+				<button class="rf-btn rf-btn-p" data-a="takeaway">${ICON.plus}<span>${__("New Takeaway")}</span></button>` : ""}`, () =>
+			this.$acts.find("[data-a]").on("click", (e) => {
+				const a = $(e.currentTarget).attr("data-a");
+				const sh = this.floor.shift;
+				if (a === "invoices") this.invoices();
+				else if (a === "shift") this.shift_click(sh && sh.shift ? "menu" : "open");
+				else if (a === "delivery") this.new_order("Delivery");
+				else this.new_order("Takeaway");
+			})
+		);
+
+		this.put(this.$alerts, this.kitchen_print_alert() + this.no_shift_banner(), () =>
+			this.$alerts.find("[data-shift]").on("click", (e) => this.shift_click($(e.currentTarget).attr("data-shift")))
+		);
+
+		if (this.hall === "__orders") {
+			this.$side.hide();
+			return this.render_orders();
+		}
 		const hall = halls.find((h) => h.name === this.hall);
+		this.$side.show();
+		this.put(
+			this.$side,
+			`<div class="rf-side-h"><b>${__("Running Orders")}</b><span class="rf-cnt">${f.orders.length}</span></div>
+			<div class="rf-side-l">${f.orders.map((o) => this.order_row(o)).join("") || `<p class="rf-empty">${__("No open takeaway or delivery orders.")}</p>`}</div>`,
+			() => this.$side.find("[data-order]").on("click", (e) => this.load_order($(e.currentTarget).attr("data-order")))
+		);
 		if (!hall.tables.length) {
-			this.$body.html(`<p class="text-muted">${__("No tables in this hall yet.")}</p>`);
+			this.put(this.$body, `<p class="rf-empty">${__("No tables in this hall yet.")}</p>`);
 			return;
 		}
 		// The grid follows the page direction: in Arabic table 1 is on the right, and column 1 of a
 		// placed table is the right-hand column (D-209).
-		const cards = hall.tables.map((t) => this.table_card(t));
-		this.$body.html(
-			`<div class="rf-grid" style="grid-template-columns: repeat(${hall.grid_columns}, minmax(120px, 1fr))">${cards.join("")}</div>
+		this.put(this.$body, `
+			<div class="rf-grid ${f.can_order ? "" : "locked"}" style="grid-template-columns: repeat(${hall.grid_columns}, minmax(0, 1fr))">
+				${hall.tables.map((t) => this.table_card(t)).join("")}</div>
 			<div class="rf-legend">
-				<span class="rf-dot free"></span>${__("Free", null, "Resto")}
-				<span class="rf-dot occupied"></span>${__("Occupied")}
-				<span class="rf-dot bill"></span>${__("Bill Requested")}
-				<span class="rf-dot reserved"></span>${__("Reserved")}
-			</div>`
+				<span><i class="free"></i>${__("Free", null, "Resto")}</span>
+				<span><i class="occupied"></i>${__("Occupied")}</span>
+				<span><i class="bill"></i>${__("Bill Requested")}</span>
+				<span><i class="reserved"></i>${__("Reserved")}</span>
+			</div>`, () =>
+			this.$body.find(".rf-tbl").on("click", (e) => {
+				const name = $(e.currentTarget).attr("data-table");
+				const now = this.floor.halls.flatMap((h) => h.tables).find((t) => t.name === name);
+				if (now) this.open_table(now);
+			})
 		);
-		this.$body.find(".rf-table").on("click", (e) => {
-			const name = $(e.currentTarget).attr("data-table");
-			this.open_table(hall.tables.find((t) => t.name === name));
-		});
 	}
 
 	table_card(t) {
 		const o = t.order;
-		const pos =
-			t.grid_row && t.grid_col ? `grid-row:${t.grid_row};grid-column:${t.grid_col};` : "";
-		let info = `<div class="rf-seats">${__("{0} seats", [t.seats || 0])}</div>`;
+		const pos = t.grid_row && t.grid_col ? `grid-row:${t.grid_row};grid-column:${t.grid_col};` : "";
+		const label = { free: __("Free", null, "Resto"), occupied: __("Occupied"), bill: __("Bill Requested"), reserved: __("Reserved") }[t.status];
+		const seats = __("{0} seats", [t.seats || 0]);
+		let body;
 		if (o) {
-			info = `<div>${__("{0} guests", [o.guests || 0])} · ${o.minutes}′</div>
-				<div class="rf-amount">${money(o.bill_grand_total || o.net_total)}</div>
-				<div class="rf-waiter">${esc(o.waiter_name)}</div>
+			body = `<span class="rf-tsub">${o.guests ? __("{0} guests", [o.guests]) : seats} · ${__("{0} dishes", [fmt_qty(o.dishes)])}${o.waiter_name ? ` · ${esc(o.waiter_name)}` : ""}</span>
+				${o.unsent_count ? `<span class="rf-unsent">${__("Not sent: {0}", [o.unsent_count])}</span>` : ""}
+				<div class="rf-tfoot"><b class="rf-tamt">${money(o.bill_grand_total || o.net_total)}</b><span class="rf-spacer"></span>
+					<span class="rf-tago">${__("for {0}", [dur(o.minutes)])}</span></div>
 				${o.ready_count ? `<span class="rf-ready">${__("Ready")} ${o.ready_count}</span>` : ""}`;
 		} else if (t.reservation) {
-			info = `<div>${esc(t.reservation.customer_name)}</div>
-				<div>${esc((t.reservation.reservation_time || "").slice(0, 5))} · ${__("{0} guests", [t.reservation.guests])}</div>`;
+			body = `<span class="rf-tsub">${seats}</span>
+				<span class="rf-tfoot rf-tres">${esc(t.reservation.customer_name)} · ${esc(hhmm(t.reservation.reservation_time))} · ${__("{0} guests", [t.reservation.guests])}</span>`;
+		} else {
+			body = `<span class="rf-tsub">${seats}</span><span class="rf-tfoot rf-thint">${__("Tap to open an order")}</span>`;
 		}
-		return `<div class="rf-table ${t.status} ${t.shape === "Round" ? "round" : ""}" data-table="${esc(t.name)}" dir="${frappe.utils.is_rtl() ? "rtl" : "ltr"}" style="${pos}">
-			<div class="rf-name">${esc(t.name)}</div>${info}</div>`;
+		return `<button class="rf-tbl ${t.status} ${t.shape === "Round" ? "round" : ""}" data-table="${esc(t.name)}" style="${pos}">
+			<div class="rf-ttop"><b class="rf-tname">${esc(t.name)}</b><span class="rf-spacer"></span><span class="rf-st">${label}</span></div>${body}</button>`;
+	}
+
+	// A takeaway or delivery order (and a dine-in order to bill again) in the lists.
+	order_row(o) {
+		const kind = o.rebill ? "rebill" : o.order_type === "Delivery" ? "delivery" : "takeaway";
+		const who = [esc(o.customer_name || __("Walk-in", null, "Resto")), o.phone ? `<bdi dir="ltr">${esc(o.phone)}</bdi>` : ""].filter(Boolean).join(" · ");
+		return `<button class="rf-orow ${o.status === "Bill Requested" ? "bill" : ""}" data-order="${esc(o.name)}">
+			<div class="rf-orow1"><span class="rf-st k-${kind}">${__(o.order_type, null, "Resto")}</span><b>${esc(o.name)}</b>
+				<span class="rf-spacer"></span><b>${money(o.bill_grand_total || o.net_total)}</b></div>
+			<div class="rf-orow2"><span>${who}</span>
+				${o.delivery_status ? `<span>· ${__(o.delivery_status, null, "Resto")}</span>` : ""}
+				${o.ready_count ? `<span class="rf-ok">· ${__("Ready")} ${o.ready_count}</span>` : ""}
+				${o.status === "Bill Requested" ? `<span class="rf-warn">· ${__("Bill Requested")}</span>` : ""}
+				${o.unsent_count ? `<span class="rf-unsent">${__("Not sent: {0}", [o.unsent_count])}</span>` : ""}
+				<span class="rf-spacer"></span><span>${__("for {0}", [dur(o.minutes)])}</span></div>
+			${o.rebill ? `<div class="rf-warn">${__("To Bill Again")} · ${__("Table {0}", [esc(o.resto_table)], "Resto")}</div>` : ""}
+		</button>`;
 	}
 
 	render_orders() {
 		const orders = this.floor.orders;
 		if (!orders.length) {
-			this.$body.html(`<p class="text-muted">${__("No open takeaway or delivery orders.")}</p>`);
+			this.put(this.$body, `<p class="rf-empty">${__("No open takeaway or delivery orders.")}</p>`);
 			return;
 		}
-		this.$body.html(
-			`<div class="rf-list">${orders
-				.map(
-					(o) => `<div class="rf-ocard ${o.status === "Bill Requested" ? "bill" : "occupied"}" data-order="${esc(o.name)}">
-					<div class="rf-name">${__(o.order_type, null, "Resto")} · ${esc(o.name)}</div>
-					${o.rebill ? `<div class="text-danger">${__("To Bill Again")} · ${__("Table {0}", [esc(o.resto_table)], "Resto")}</div>` : ""}
-					<div>${esc(o.customer_name || "")} ${esc(o.phone || "")}</div>
-					<div>${o.minutes}′ · <b>${money(o.net_total)}</b></div>
-					${o.delivery_status ? `<div class="text-muted">${__(o.delivery_status, null, "Resto")}</div>` : ""}
-					${o.ready_count ? `<span class="rf-ready">${__("Ready")} ${o.ready_count}</span>` : ""}
-				</div>`
-				)
-				.join("")}</div>`
+		this.put(this.$body, `<div class="rf-olist">${orders.map((o) => this.order_row(o)).join("")}</div>`, () =>
+			this.$body.find("[data-order]").on("click", (e) => this.load_order($(e.currentTarget).attr("data-order")))
 		);
-		this.$body.find(".rf-ocard").on("click", (e) => this.load_order($(e.currentTarget).attr("data-order")));
 	}
 
 	open_table(t) {
 		if (t.order) return this.load_order(t.order.name);
+		if (!this.floor.can_order) return frappe.msgprint(esc(this.floor.no_order_reason));
 		if (t.reservation) {
 			frappe.confirm(
 				__("Seat the reservation of {0} on this table?", [esc(t.reservation.customer_name)]),
@@ -338,7 +755,7 @@ class RestoFloor {
 
 	ask_guests(t) {
 		const d = new frappe.ui.Dialog({
-			title: __("Open Table {0}", [t.name]),
+			title: __("Open Table {0}", [esc(t.name)]),
 			fields: [{ fieldname: "guests", fieldtype: "Int", label: __("Guests"), default: 2, reqd: 1 }],
 			primary_action_label: __("Open", null, "Resto"),
 			primary_action: async (v) => {
@@ -461,6 +878,7 @@ class RestoFloor {
 	}
 
 	new_order(order_type) {
+		if (!this.floor.can_order) return frappe.msgprint(esc(this.floor.no_order_reason));
 		const d = new frappe.ui.Dialog({
 			title: __("New {0} Order", [__(order_type, null, "Resto")]),
 			fields: this.customer_fields({}, order_type === "Delivery"),
@@ -479,22 +897,94 @@ class RestoFloor {
 
 	// ------------------------------------------------------------------ shift (Resto Shift, D-203)
 
-	shift_bar() {
-		const s = this.floor.shift;
-		if (!s) return "";
-		if (s.shift && s.other_profile) {
-			// Bills here need a shift on the restaurant's profile: this one is closed first.
-			return `<div class="rf-shift rf-shift-none">${__("Your open shift is on POS Profile {0}; close it and open one on {1}", [esc(s.other_profile), esc(s.pos_profile)])}
-				<button class="btn btn-xs btn-default" data-shift="close">${__("Close Shift")}</button></div>`;
+	// The shift as a pill in the header: open since when, or none (D-211).
+	shift_pill() {
+		const f = this.floor;
+		const s = f.shift;
+		if (s && s.shift && !s.other_profile) {
+			return `<button class="rf-pill rf-pill-green" data-shift="menu"><i class="rf-dotc"></i><span class="rf-shift-t">${__("Shift open for {0}", [dur(minutes_since(s.since))])}</span></button>`;
 		}
-		if (s.shift) {
-			return `<div class="rf-shift rf-shift-open">✓ ${__("Shift open since {0}", [esc(frappe.datetime.str_to_user(s.since))])}
-				<button class="btn btn-xs btn-default" data-shift="debt">${__("Collect Debt")}</button>
-				<button class="btn btn-xs btn-default" data-shift="expense">${__("Drawer Expense")}</button>
-				<button class="btn btn-xs btn-default" data-shift="close">${__("Close Shift")}</button></div>`;
+		if (!s) {
+			// A waiter has no drawer: what matters is whether a cashier's shift is open.
+			return f.can_order
+				? `<span class="rf-pill rf-pill-green"><i class="rf-dotc"></i><span>${__("Shift open", null, "Resto")}</span></span>`
+				: `<span class="rf-pill rf-pill-amber"><i class="rf-dotc"></i><span>${__("No open shift", null, "Resto")}</span></span>`;
 		}
-		return `<div class="rf-shift rf-shift-none">${s.required ? __("No shift open: bills cannot be settled") : __("No shift open")}
-			<button class="btn btn-xs btn-primary" data-shift="open">${__("Open Shift")}</button></div>`;
+		return `<button class="rf-pill rf-pill-amber" data-shift="${s.other_profile ? "close" : "open"}"><i class="rf-dotc"></i><span>${s.other_profile ? __("Close Shift") : __("No open shift", null, "Resto")}</span></button>`;
+	}
+
+	// Orders wait for a shift (D-211): the floor says so, and a cashier opens one from here.
+	no_shift_banner() {
+		const f = this.floor;
+		const s = f.shift;
+		if (s && s.shift && s.other_profile) {
+			return `<div class="rf-banner"><div><b>${__("The floor is closed until a shift is opened")}</b>
+				<span>${__("Your open shift is on POS Profile {0}; close it and open one on {1}", [esc(s.other_profile), esc(s.pos_profile)])}</span></div>
+				<button class="rf-btn" data-shift="close">${__("Close Shift")}</button></div>`;
+		}
+		if (f.can_order) {
+			return s && !s.shift && !s.required ? `<div class="rf-banner soft"><span>${__("No shift open")}</span>
+				<button class="rf-btn" data-shift="open">${__("Open Shift")}</button></div>` : "";
+		}
+		return `<div class="rf-banner"><div><b>${__("The floor is closed until a shift is opened")}</b><span>${esc(f.no_order_reason)}</span></div>
+			${s ? `<button class="rf-btn rf-btn-p" data-shift="open">${ICON.drawer}<span>${__("Open Shift")}</span></button>` : ""}</div>`;
+	}
+
+	shift_click(act) {
+		if (act === "open") return this.open_shift();
+		if (act === "close") return this.close_shift();
+		if (act === "expense") return this.drawer_expense();
+		if (act === "debt") return this.collect_debt();
+		const s = this.floor.shift || {};
+		if (!s.shift) return this.open_shift();
+		this.menu_dialog(__("Shift", null, "Resto"), [
+			[__("Collect Debt"), () => this.collect_debt()],
+			[__("Drawer Expense"), () => this.drawer_expense()],
+			[__("Close Shift"), () => this.close_shift()],
+		]);
+	}
+
+	// The user button's menu (D-214).
+	user_menu() {
+		const f = this.floor;
+		const r = f.roles;
+		const s = f.shift || {};
+		const acts = [];
+		if (r.cashier || r.manager) {
+			acts.push([__("Invoices", null, "Resto"), () => this.invoices()]);
+			if (s.shift) {
+				acts.push([__("Collect Debt"), () => this.collect_debt()], [__("Drawer Expense"), () => this.drawer_expense()]);
+			}
+		}
+		if (r.manager) acts.push([__("My Approval PIN"), () => this.set_my_pin()]);
+		acts.push([__("Kitchen Display"), () => frappe.set_route("resto-kitchen")]);
+		if (r.cashier || r.manager) {
+			acts.push(s.shift ? [__("Close Shift"), () => this.close_shift()] : [__("Open Shift"), () => this.open_shift()]);
+		}
+		acts.push([
+			__("Log out"),
+			() =>
+				frappe.confirm(__("Log out of this device?"), async () => {
+					if (this.order && !(await this.settled())) return;
+					frappe.app.logout();
+				}),
+		]);
+		this.menu_dialog(`${esc(f.user_name)}${this.role_label() ? ` · ${esc(this.role_label())}` : ""}`, acts);
+	}
+
+	menu_dialog(title, acts) {
+		const d = new frappe.ui.Dialog({ title, fields: [{ fieldname: "html", fieldtype: "HTML" }] });
+		d.$wrapper.on("hidden.bs.modal", () => setTimeout(() => d.$wrapper.remove(), 0));
+		d.fields_dict.html.$wrapper.html(
+			`<div class="rf-root rf-mdlg"><div class="rf-menu-list">${acts
+				.map((a, i) => `<button class="rf-btn rf-menu-btn ${a[2] || ""}" data-i="${i}">${a[0]}</button>`)
+				.join("")}</div></div>`
+		);
+		d.fields_dict.html.$wrapper.find("button").on("click", (e) => {
+			d.hide();
+			acts[$(e.currentTarget).attr("data-i")][1]();
+		});
+		d.show();
 	}
 
 	async open_shift() {
@@ -625,7 +1115,7 @@ class RestoFloor {
 		const sum = (k) => list.reduce((a, p) => a + flt(p[k]), 0);
 		const total = blind
 			? ""
-			: `<tr class="rf-total"><th>${__("Total")}</th><th class="rf-amt">${money(sum("opening_amount"))}</th>
+			: `<tr class="rf-total"><th>${__("Total", null, "Resto")}</th><th class="rf-amt">${money(sum("opening_amount"))}</th>
 				<th class="rf-amt">${money(sum("expected_amount"))}</th>
 				<th class="rf-amt" data-tc>${entry ? "" : money(sum("closing_amount"))}</th>
 				<th class="rf-amt" data-td>${entry ? "" : diff(sum("difference"))}</th></tr>`;
@@ -775,120 +1265,425 @@ class RestoFloor {
 	// ------------------------------------------------------------------ order panel
 
 	async load_order(name) {
-		const order = await call("get_order", { order: name });
+		if (this.order && this.order.name !== name) this.flush_taps();
+		this._load_seq = (this._load_seq || 0) + 1;
+		const seq = this._load_seq;
+		const gen = this._gen;
+		const order = await call("get_order", { order: name }, false, 20000);
+		// Another order was opened, or this one left, while this one was on its way.
+		if (seq !== this._load_seq) return;
 		if (!["Open", "Bill Requested"].includes(order.status)) {
 			this.close_order();
 			frappe.show_alert({ message: __("Order {0} is {1}", [name, __(order.status, null, "Resto")]), indicator: "blue" });
 			return;
 		}
+		// The same order already on screen: its title and lines only; the menu (images, search,
+		// chosen group) stays as it is (D-210).
+		const shown = this.order && this.order.name === name && this.$order.is(":visible") && this.$order.find(".rf-menu").length;
+		// Changed on the screen while this was on its way: the answer to that change draws it.
+		if (shown && (gen !== this._gen || this.syncing())) return;
 		this.order = order;
 		if (!this.menu) this.menu = await call("get_menu");
+		if (shown) {
+			this.$order.find(".rf-otitle").html(this.order_title(order));
+			return this.render_lines();
+		}
 		this.render_order();
+	}
+
+	order_title(o) {
+		const head = o.order_type === "Dine In" ? __("Table {0}", [esc(o.resto_table)], "Resto") : __(o.order_type, null, "Resto");
+		const sub = [esc(o.name)];
+		if (o.order_type === "Dine In") sub.push(__("{0} guests", [o.guests]));
+		if (o.opened_at) sub.push(__("for {0}", [dur(minutes_since(o.opened_at))]));
+		return `<strong>${head}${o.status === "Bill Requested" ? ` <span class="rf-tag t-bill">${__("Bill Requested")}</span>` : ""}</strong>
+			<small>${sub.join(" · ")}</small>`;
 	}
 
 	async reload_lines(name) {
 		// Periodic refresh: update the order's lines and totals but keep the menu, its search and
-		// any open dialog as they are.
-		const order = await call("get_order", { order: name });
+		// any open dialog as they are. Not while changes made on the screen are still on their way
+		// or were made while this was: the screen shows them, and the server's answer replaces it.
+		if (this.syncing()) return;
+		const gen = this._gen;
+		const order = await call("get_order", { order: name }, false, 20000);
 		if (!this.order || this.order.name !== name) return;
 		if (!["Open", "Bill Requested"].includes(order.status)) return this.load_order(name);
+		if (gen !== this._gen || this.syncing()) return;
 		const status_changed = order.status !== this.order.status;
 		this.order = order;
-		if (status_changed) return this.render_order();
+		if (status_changed) this.$order.find(".rf-otitle").html(this.order_title(order));
 		this.render_lines();
 	}
 
+	syncing() {
+		return !!((this._taps || []).length || outbox().length);
+	}
+
+	// The order as the server returned it after a change (D-210): only the lines are drawn again.
+	show_view(view) {
+		if (!this.order || this.order.name !== view.name || this.syncing()) return;
+		if (!["Open", "Bill Requested"].includes(view.status)) return this.load_order(view.name);
+		const status_changed = view.status !== this.order.status;
+		this.order = view;
+		if (status_changed) this.$order.find(".rf-otitle").html(this.order_title(view));
+		this.render_lines();
+	}
+
+	// A dish tapped (D-210): on the screen at once, then sent with the other taps of the same moment
+	// in one call. The server stays the record (kitchen, other screens, a closed browser): its answer
+	// replaces what the screen guessed, and a refusal puts the server's order back.
+	tap_item(item) {
+		if (!this.floor.can_order) return frappe.msgprint(esc(this.floor.no_order_reason));
+		const o = this.order;
+		const same = o.items.find((d) => d.item_code === item.item_code && plain_line(d));
+		if (same) {
+			same.qty = flt(same.qty) + 1;
+			same.amount = flt(same.amount) + flt(item.rate);
+		} else {
+			o.items.push({
+				name: `__new_${frappe.utils.get_random(8)}`,
+				item_code: item.item_code,
+				item_name: item.item_name,
+				qty: 1,
+				rate: item.rate,
+				amount: flt(item.rate),
+				kitchen_status: "Not Sent",
+				modifiers: "[]",
+				_pending: 1,
+			});
+		}
+		o.net_total = flt(o.net_total) + flt(item.rate);
+		this._gen++;
+		this._show_code = item.item_code;
+		if (this._tap_order && this._tap_order !== o.name) this.flush_taps();
+		this._tap_order = o.name;
+		this._taps = this._taps || [];
+		this._taps.push(item.item_code);
+		frappe.utils.play_sound("click");
+		this.render_lines();
+		// Sent 300 ms after the first tap of a run, not the last: the line is saved sooner.
+		if (!this._tap_timer) this._tap_timer = setTimeout(() => this.flush_taps(), 300);
+	}
+
+	// Taps not sent yet go now, in one call, before anything else is done with the order. Resolves
+	// once the queue is sent, or left for later when there is no connection.
+	flush_taps() {
+		clearTimeout(this._tap_timer);
+		this._tap_timer = null;
+		const taps = this._taps || [];
+		this._taps = [];
+		if (!taps.length) return this.drain();
+		const counts = {};
+		taps.forEach((c) => (counts[c] = (counts[c] || 0) + 1));
+		const items = Object.entries(counts).map(([item_code, qty]) => ({ item_code, qty }));
+		const name_of = (code) => ((this.order && this.order.items.find((d) => d.item_code === code)) || {}).item_name || code;
+		const label = items.map((i) => `${i.qty} × ${name_of(i.item_code)}`).join("، ");
+		const order = this._tap_order || this.order.name;
+		this._tap_order = null;
+		return this.sync_call("add_items", { order, items }, label);
+	}
+
+	// A change is put in the outbox and the outbox is sent, in order.
+	sync_call(method, args, label) {
+		set_outbox([...outbox(), { op: frappe.utils.get_random(20), method, args, label: label || "", at: Date.now() }]);
+		if (this.offline) this.set_offline(true); // the count on the bar
+		return this.drain();
+	}
+
+	// Sends the outbox one change after the other. Never rejects. No connection: the changes stay
+	// (the screen keeps showing them) and are sent again in a few seconds or when it is back. A
+	// refusal: dropped, with a message, and the order is drawn again as the server has it.
+	drain() {
+		if (this._draining) return this._draining;
+		this._draining = (async () => {
+			try {
+				for (;;) {
+					const job = outbox()[0];
+					if (!job) break;
+					// Kept more than two minutes (offline, or left by a closed page): the dishes may
+					// have been taken again on another screen meanwhile, so the waiter decides.
+					if (!job.ok && Date.now() - cint(job.at) > 120000) {
+						this.ask_stale(job);
+						break;
+					}
+					let view = null;
+					try {
+						view = await call(job.method, { ...job.args, view: 1, op: job.op }, false, 20000);
+					} catch (e) {
+						if (e && e.network) {
+							this.set_offline(true);
+							clearTimeout(this._retry);
+							this._retry = setTimeout(() => this.drain(), 5000);
+							break;
+						}
+						this.refused(job);
+					}
+					set_outbox(outbox().filter((j) => j.op !== job.op));
+					this.set_offline(false);
+					try {
+						if (this.order && this.order.name === job.args.order) {
+							if (view) this.show_view(view);
+							else await this.reload_lines(job.args.order);
+						}
+					} catch (e) {
+						// the next refresh draws it
+					}
+				}
+			} catch (e) {
+				console.error(e);
+			} finally {
+				this._draining = null;
+			}
+		})();
+		return this._draining;
+	}
+
+	ask_stale(job) {
+		if (this._asking) return;
+		this._asking = true;
+		const mins = Math.max(1, Math.round((Date.now() - cint(job.at)) / 60000));
+		const what = job.label || (job.method === "remove_line" ? __("a line removed") : __("a quantity changed"));
+		const d = new frappe.ui.Dialog({
+			title: __("Changes Not Sent Yet"),
+			fields: [
+				{
+					fieldname: "html",
+					fieldtype: "HTML",
+					options: `<p>${__("Made {0} min ago on order {1} and not sent yet: {2}", [mins, esc(job.args.order), esc(what)])}</p>
+						<p class="text-muted">${__("If they were taken again on another screen, discard them.")}</p>`,
+				},
+			],
+			primary_action_label: __("Send Now"),
+			primary_action: () => {
+				set_outbox(outbox().map((j) => (j.op === job.op ? { ...j, ok: 1 } : j)));
+				d.hide();
+			},
+			secondary_action_label: __("Discard"),
+			secondary_action: () => {
+				set_outbox(outbox().filter((j) => j.op !== job.op));
+				d.hide();
+				if (this.order && this.order.name === job.args.order) this.reload_lines(job.args.order).catch(() => {});
+			},
+			on_hide: () => {
+				this._asking = false;
+				if (!this.offline || !outbox().length) this.set_offline(this.offline);
+				setTimeout(() => this.drain(), 0);
+			},
+		});
+		d.show();
+	}
+
+	refused(job) {
+		if (job.method !== "add_items") return; // the server's message says it; the order is drawn again
+		frappe.msgprint({
+			title: __("Not Saved"),
+			indicator: "red",
+			message: __("These dishes were not added to order {0}: {1}", [esc(job.args.order), esc(job.label)]),
+		});
+		// A dish taken off the menu since: the menu is read again.
+		call("get_menu")
+			.then((menu) => (this.menu = menu))
+			.catch(() => {});
+	}
+
+	// No connection (D-213): a bar on the screen says so and how many changes wait on this device.
+	set_offline(flag) {
+		const was = this.offline;
+		this.offline = flag;
+		if (this.floor && was !== flag) $(this.page.body).find(".rf-net").replaceWith(this.net_pill());
+		let $bar = $(this.page.body).find(".rf-offline");
+		$(this.page.body).find(".rf-root").toggleClass("rf-off", !!flag);
+		if (!flag) {
+			$bar.remove();
+			if (was) frappe.show_alert({ message: __("Connected again"), indicator: "green" });
+			return;
+		}
+		if (!$bar.length) $bar = $(`<div class="rf-offline"></div>`).prependTo($(this.page.body).find(".rf-root"));
+		const n = outbox().length;
+		$bar.text(
+			n
+				? __("Not connected: {0} change(s) are kept on this device and sent when the connection is back. Sending to the kitchen, bills and payments wait for it.", [n])
+				: __("Not connected: sending to the kitchen, bills and payments wait for the connection.")
+		);
+	}
+
+	// Before an action on the order: the taps and changes waiting are sent first. false: they could
+	// not be (no connection), and the action is not done, so the kitchen or the bill never misses them.
+	async settled() {
+		await this.flush_taps();
+		if (!outbox().length) return true;
+		frappe.msgprint(__("Not connected: the last changes are kept on this device and sent when the connection is back. Try again then."));
+		return false;
+	}
+
 	close_order() {
+		this._inv = null;
+		this.$order.off(".rfinv");
+		this.flush_taps();
+		this._load_seq = (this._load_seq || 0) + 1; // an order still loading is not shown
 		this.order = null;
 		this.$order.hide().empty();
 		$(this.page.body).find(".resto-floor").show();
 		this.refresh();
 	}
 
+	// Back to the floor: dishes not sent to the kitchen yet are named first.
+	leave_order() {
+		const o = this.order;
+		const unsent = o ? o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold).reduce((n, d) => n + flt(d.qty), 0) : 0;
+		if (!unsent) return this.close_order();
+		frappe.confirm(__("{0} dish(es) on this order are not sent to the kitchen yet. Go back to the floor anyway?", [fmt_qty(unsent)]), () =>
+			this.close_order()
+		);
+	}
+
 	render_order() {
 		const o = this.order;
 		$(this.page.body).find(".resto-floor").hide();
-		const head =
-			o.order_type === "Dine In"
-				? `${__("Table {0}", [esc(o.resto_table)], "Resto")} · ${__("{0} guests", [o.guests])}`
-				: `${__(o.order_type, null, "Resto")} · ${esc(o.customer_name || "")} ${esc(o.phone || "")}`;
-		this.$order.show().html(`
-			<div class="rf-ohead">
-				<button class="btn btn-default btn-sm rf-back">${frappe.utils.is_rtl() ? "→" : "←"} ${__("Floor", null, "Resto")}</button>
-				<div class="rf-otitle">${head} <span class="text-muted">${esc(o.name)}</span>
-					${o.status === "Bill Requested" ? `<span class="indicator-pill orange">${__("Bill Requested")}</span>` : ""}</div>
-				<div class="rf-oactions">
-					<button class="btn btn-default btn-sm" data-act="more">${__("More")} ▾</button>
-				</div>
-			</div>
+		this.$order.css("display", "flex").html(`
+			<header class="rf-head rf-ohead">
+				<button class="rf-btn rf-back">${ICON.back}<span>${__("Floor", null, "Resto")}</span></button>
+				<div class="rf-otitle">${this.order_title(o)}</div>
+				<span class="rf-spacer"></span>
+				<div class="rf-custchip"></div>
+				<span class="rf-hide-sm">${this.shift_pill()}</span>
+				${this.net_pill()}
+			</header>
 			<div class="rf-ocols">
-				<div class="rf-menu">
-					<input class="form-control rf-search" placeholder="${__("Search menu")}">
+				<section class="rf-menu">
+					<div class="rf-srow">
+						<label class="rf-sbox">${ICON.search}<input type="search" class="rf-search" autocomplete="off"
+							placeholder="${__("Search by name or code, or scan a barcode")}"><kbd dir="ltr">F4</kbd></label>
+						<button class="rf-ib rf-scan" title="${__("Scan Barcode")}" aria-label="${__("Scan Barcode")}">${ICON.barcode}</button>
+					</div>
 					<div class="rf-groups"></div>
 					<div class="rf-items"></div>
-				</div>
-				<div class="rf-cart">
+				</section>
+				<aside class="rf-cart">
+					<div class="rf-chead"><b>${__("Order", null, "Resto")}</b><span class="rf-ccount"></span><span class="rf-spacer"></span>
+						<button class="rf-btn rf-sm" data-act="note">${__("Note")}</button>
+						<button class="rf-btn rf-sm" data-act="discount">${__("Discount")}</button>
+						<button class="rf-ib rf-sm" data-act="more" title="${__("More")}" aria-label="${__("More")}">${ICON.more}</button></div>
 					<div class="rf-lines"></div>
-					<div class="rf-totals"></div>
-					<div class="rf-buttons">
-						<button class="btn btn-primary" data-act="send">${__("Send to Kitchen")}</button>
-						<button class="btn btn-default" data-act="fire">${__("Fire Course")}</button>
-						<button class="btn btn-default" data-act="served">${__("Served")}</button>
-						<button class="btn btn-warning" data-act="bill">${__("Print Bill")}</button>
-						${this.floor.roles.cashier || this.floor.roles.manager ? `<button class="btn btn-success" data-act="pay">${__("Pay", null, "Resto")}</button>` : ""}
-					</div>
-				</div>
+					<div class="rf-cfoot"><div class="rf-totals"></div><div class="rf-cbtns">
+						<button class="rf-btn rf-lg rf-fire" data-act="fire" style="display:none"></button>
+						<div class="rf-c2">
+							<button class="rf-btn rf-btn-d rf-lg" data-act="send">${ICON.send}<span class="rf-send-t"></span></button>
+							<button class="rf-btn rf-lg" data-act="bill">${ICON.print}<span>${__("Print Bill")}</span></button>
+						</div>
+						${this.floor.roles.cashier || this.floor.roles.manager ? `<button class="rf-btn rf-btn-p rf-xl rf-pay-b" data-act="pay"></button>` : ""}
+					</div></div>
+				</aside>
 			</div>`);
-		this.$order.find(".rf-back").on("click", () => this.close_order());
-		this.$order.find("[data-act]").on("click", (e) => this.action($(e.currentTarget).attr("data-act"), e));
+		this.$order.find(".rf-back").on("click", () => this.leave_order());
+		this.$order.find(".rf-ohead [data-shift]").on("click", (e) => this.shift_click($(e.currentTarget).attr("data-shift")));
+		this.$order.find(".rf-scan").on("click", () => this.$order.find(".rf-search").trigger("focus").select());
+		// One handler for the order's buttons; each goes through action() (changes sent first, one at a time).
+		this.$order.off("click.rfact").on("click.rfact", "[data-act]", (e) => this.action($(e.currentTarget).attr("data-act"), e));
+		this.$order.off("click.rfcust").on("click.rfcust", "[data-cust]", (e) =>
+			this.action($(e.currentTarget).attr("data-cust") === "new" ? "new_customer" : "customer")
+		);
 		this.render_menu();
 		this.render_lines();
+	}
+
+	// The customer on the order, in the order's header.
+	render_customer() {
+		const o = this.order;
+		const staff = this.floor.roles.cashier || this.floor.roles.manager;
+		this.$order.find(".rf-custchip").html(`
+			<span class="rf-av b">${ICON.user}</span>
+			<div class="rf-custtxt"><b>${esc(o.customer_name || __("Walk-in", null, "Resto"))}</b><small>${o.phone ? `<bdi dir="ltr">${esc(o.phone)}</bdi>` : __("Customer")}</small></div>
+			<button class="rf-ib rf-flat" data-cust="find" title="${__("Change Customer")}" aria-label="${__("Change Customer")}">${ICON.search}</button>
+			${staff ? `<button class="rf-ib rf-flat g" data-cust="new" title="${__("New Customer")}" aria-label="${__("New Customer")}">${ICON.plus}</button>` : ""}`);
 	}
 
 	render_menu(group, search) {
 		const $groups = this.$order.find(".rf-groups");
 		this._group = group === undefined ? this._group || null : group;
+		const groups = this.menu.groups;
 		$groups.html(
-			[`<button class="btn btn-xs ${!this._group ? "btn-primary" : "btn-default"}" data-g="">${__("All")}</button>`]
-				.concat(
-					this.menu.groups.map(
-						(g) =>
-							`<button class="btn btn-xs ${this._group === g ? "btn-primary" : "btn-default"}" data-g="${esc(g)}">${esc(__(g))}</button>`
-					)
-				)
+			[`<button class="rf-chip ${!this._group ? "on" : ""}" data-g="">${__("All")}</button>`]
+				.concat(groups.map((g) => `<button class="rf-chip ${this._group === g ? "on" : ""}" data-g="${esc(g)}">${esc(__(g))}</button>`))
 				.join("")
 		);
 		$groups.find("button").on("click", (e) => this.render_menu($(e.currentTarget).attr("data-g") || null));
 		const $search = this.$order.find(".rf-search");
 		$search.off("input").on("input", frappe.utils.debounce(() => this.render_menu(undefined), 200));
-		const txt = ($search.val() || "").toLowerCase();
-		const items = this.menu.items.filter(
-			(i) =>
-				(!this._group || i.item_group === this._group) &&
-				(!txt || i.item_name.toLowerCase().includes(txt) || i.item_code.toLowerCase().includes(txt))
-		);
+		// Enter (a barcode scanner ends with it): the dish whose code is typed, or the only one found.
+		$search.off("keydown").on("keydown", (e) => {
+			if (e.key !== "Enter") return;
+			e.preventDefault();
+			const typed = ($search.val() || "").trim();
+			if (!typed) return;
+			const txt = typed.toLowerCase();
+			// A scanned barcode or a typed code first, then the only dish found.
+			const item =
+				this.menu.items.find((i) => (i.barcodes || []).includes(typed)) ||
+				this.menu.items.find((i) => i.item_code.toLowerCase() === txt) ||
+				(() => {
+					const found = this.menu_matches(txt);
+					return found.length === 1 ? found[0] : null;
+				})();
+			if (!item) return frappe.show_alert({ message: __("No single dish matches {0}", [esc(txt)]), indicator: "orange" });
+			$search.val("");
+			this.render_menu(undefined);
+			this.add_item(item);
+		});
+		const txt = ($search.val() || "").trim().toLowerCase();
+		const items = this.menu_matches(txt);
+		const shade = (g) => `c${Math.max(groups.indexOf(g), 0) % 6}`;
 		this.$order.find(".rf-items").html(
 			items
 				.map(
-					(i) => `<div class="rf-item" data-item="${esc(i.item_code)}">
-					${i.image ? `<img src="${esc(i.image)}" loading="lazy">` : ""}
-					<div class="rf-iname">${esc(i.item_name)}</div>
-					<div class="rf-irate">${money(i.rate)}${i.has_modifiers ? " ✱" : ""}</div></div>`
+					(i) => `<button class="rf-item" data-item="${esc(i.item_code)}">
+					<span class="rf-bdg" style="display:none"></span>
+					${i.image ? `<img src="${esc(i.image)}" loading="lazy" alt="">` : `<span class="rf-ph ${shade(i.item_group)}">${esc((i.item_name || "?").trim().charAt(0))}</span>`}
+					<span class="rf-iname">${esc(i.item_name)}</span>
+					<span class="rf-irate">${money(i.rate)}${i.has_modifiers ? " ✱" : ""}</span></button>`
 				)
-				.join("") || `<p class="text-muted">${__("No items. Check prices in the price list {0}.", [esc(this.menu.price_list)])}</p>`
+				.join("") || `<p class="rf-empty">${__("No items. Check prices in the price list {0}.", [esc(this.menu.price_list)])}</p>`
 		);
 		this.$order.find(".rf-item").on("click", (e) => {
 			const item = this.menu.items.find((i) => i.item_code === $(e.currentTarget).attr("data-item"));
 			this.add_item(item);
 		});
+		this.update_badges();
+	}
+
+	menu_matches(txt) {
+		// أ إ آ ا, ة ه, ى ي and the short vowels match each other: a cashier types them either way.
+		const norm = (v) =>
+			String(v || "")
+				.toLowerCase()
+				.replace(/[\u064B-\u0652\u0640]/g, "")
+				.replace(/[أإآ]/g, "ا")
+				.replace(/ة/g, "ه")
+				.replace(/ى/g, "ي");
+		const t = norm(txt);
+		return this.menu.items.filter(
+			(i) =>
+				(!this._group || i.item_group === this._group || txt) &&
+				(!t || norm(i.item_name).includes(t) || norm(i.item_code).includes(t) || (i.barcodes || []).includes(txt))
+		);
+	}
+
+	// How many of each dish the order has, on the menu's cards.
+	update_badges() {
+		const counts = {};
+		(this.order.items || []).forEach((d) => {
+			if (d.kitchen_status !== "Void") counts[d.item_code] = (counts[d.item_code] || 0) + flt(d.qty);
+		});
+		this.$order.find(".rf-item").each((_, el) => {
+			const n = counts[$(el).attr("data-item")];
+			$(el).find(".rf-bdg").text(n ? fmt_qty(n) : "").toggle(!!n);
+		});
 	}
 
 	async add_item(item) {
-		if (!item.has_modifiers) {
-			await call("add_items", { order: this.order.name, items: [{ item_code: item.item_code, qty: 1 }] });
-			frappe.utils.play_sound("click");
-			return this.load_order(this.order.name);
-		}
+		if (!item.has_modifiers) return this.tap_item(item);
+		if (!this.floor.can_order) return frappe.msgprint(esc(this.floor.no_order_reason));
 		const groups = await call("get_modifiers", { item_code: item.item_code });
 		const fields = [{ fieldname: "qty", fieldtype: "Float", label: __("Qty"), default: 1, reqd: 1 }];
 		groups.forEach((g, gi) => {
@@ -925,12 +1720,27 @@ class RestoFloor {
 						if (v[`m_${gi}_${oi}`]) modifiers.push({ group: g.name, option: opt.option_name });
 					})
 				);
-				await call("add_items", {
-					order: this.order.name,
-					items: [{ item_code: item.item_code, qty: v.qty, notes: v.notes, course: v.course, hold: v.hold, modifiers }],
-				});
-				d.hide();
-				this.load_order(this.order.name);
+				if (d._busy) return;
+				d._busy = true;
+				try {
+					if (!(await this.settled())) return;
+					const name = this.order.name;
+					const items = [{ item_code: item.item_code, qty: v.qty, notes: v.notes, course: v.course, hold: v.hold, modifiers }];
+					// Pressed again after a dropped answer: added once; changed choices are a new dish.
+					const key = JSON.stringify(items);
+					if (d._op_key !== key) {
+						d._op = frappe.utils.get_random(20);
+						d._op_key = key;
+					}
+					const view = await call("add_items", { order: name, items, view: 1, op: d._op }, false, 20000);
+					d.hide();
+					frappe.utils.play_sound("click");
+					if (this.order && this.order.name === name) this.show_view(view);
+				} catch (e) {
+					// refused or not connected: the message is shown and the dialog keeps the choices
+				} finally {
+					d._busy = false;
+				}
 			},
 		});
 		d.show();
@@ -938,54 +1748,133 @@ class RestoFloor {
 
 	render_lines() {
 		const o = this.order;
+		const manager = this.floor.roles.manager;
+		const in_kitchen = { Sent: __("In the Kitchen"), "In Progress": __("In the Kitchen") };
 		const lines = o.items.map((d) => {
 			const sent = d.kitchen_status !== "Not Sent";
 			const voided = d.kitchen_status === "Void";
-			return `<div class="rf-line ${voided ? "void" : ""}" data-line="${esc(d.name)}">
-				<div class="rf-lmain">
-					<b>${esc(d.item_name)}</b>
-					${d.modifiers_text ? `<div class="rf-mod">${esc(d.modifiers_text)}</div>` : ""}
-					${d.sides_text ? `<div class="rf-mod"><b>${esc(d.sides_text)}</b></div>` : ""}
-					${d.extras_text ? `<div class="rf-mod">${esc(d.extras_text)}</div>` : ""}
-					${d.notes ? `<div class="rf-mod">✎ ${esc(d.notes)}</div>` : ""}
-					<div class="rf-lmeta">
-						<span class="rf-status s-${(d.kitchen_status || "").replace(/ /g, "")}">${__(d.kitchen_status, null, "Resto")}</span>
-						${d.course ? `<span>${__(d.course)}</span>` : ""}
-						${d.hold && !sent ? `<span class="rf-hold">${__("Held")}</span>` : ""}
-						${d.billed_qty ? `<span>${__("Billed {0}", [d.billed_qty])}</span>` : ""}
-					</div>
-				</div>
-				<div class="rf-lqty">
-					${sent ? `<span>× ${d.qty}</span>` : `<button class="btn btn-xs btn-default" data-q="-1">−</button><span>${d.qty}</span><button class="btn btn-xs btn-default" data-q="1">+</button>`}
-				</div>
-				<div class="rf-lamt">${money(d.amount)}</div>
-				<div class="rf-lmenu"><button class="btn btn-xs btn-default" data-lm="1">⋮</button></div>
-			</div>`;
+			const each = flt(d.qty) ? flt(d.amount) / flt(d.qty) : flt(d.rate);
+			const extra = [d.modifiers_text, d.sides_text, d.extras_text].filter(Boolean).map(esc);
+			const meta = [
+				d.course ? esc(__(d.course)) : "",
+				d.hold && !sent ? __("Held") : "",
+				flt(d.billed_qty) ? __("Billed {0}", [fmt_qty(d.billed_qty)]) : "",
+				d.notes ? `✎ ${esc(d.notes)}` : "",
+			].filter(Boolean);
+			const slug = (d.kitchen_status || "").replace(/ /g, "");
+			const tag = d._pending
+				? `<span class="rf-tag t-saving">${ICON.spin}${__("Saving…")}</span>`
+				: !sent
+				? `<span class="rf-tag t-new">${__("New", null, "Resto")}</span>`
+				: `<span class="rf-tag t-${slug}">${in_kitchen[d.kitchen_status] || __(d.kitchen_status, null, "Resto")}</span>`;
+			const tools = voided
+				? ""
+				: !sent
+				? `<div class="rf-stp"><button data-q="1" aria-label="${__("More")}">${ICON.plus}</button><span>${fmt_qty(d.qty)}</span>
+						<button data-q="-1" aria-label="${__("Less")}">${ICON.minus}</button></div>
+					<button class="rf-ib rf-del" data-q="trash" title="${__("Remove", null, "Resto")}" aria-label="${__("Remove", null, "Resto")}">${ICON.trash}</button>
+					<button class="rf-ib" data-lm="1" title="${__("More")}" aria-label="${__("More")}">${ICON.more}</button>`
+				: `${manager ? "" : `<span class="rf-hint rf-hide-sm">${__("Voiding needs a manager's approval")}</span>`}
+					<button class="rf-ib" data-lm="1" title="${__("More")}" aria-label="${__("More")}">${ICON.more}</button>`;
+			return `<div class="rf-ln ${!sent ? "fresh" : ""} ${voided ? "void" : ""} ${d._pending ? "pending" : ""}" data-line="${esc(d.name)}" data-item="${esc(d.item_code)}">
+				<div class="rf-ln1"><div class="rf-lnm"><b>${esc(d.item_name)}</b>
+					<small>${fmt_qty(d.qty)} × ${money(each)}${extra.length ? ` · ${extra.join(" · ")}` : ""}</small>
+					${meta.length ? `<small>${meta.join(" · ")}</small>` : ""}</div>
+					<b class="rf-lamt">${money(d.amount)}</b></div>
+				<div class="rf-ln2">${tag}<span class="rf-spacer"></span>${tools}</div></div>`;
 		});
-		this.$order.find(".rf-lines").html(lines.join("") || `<p class="text-muted">${__("Tap menu items to add them.")}</p>`);
+		this.$order.find(".rf-lines").html(lines.join("") || `<p class="rf-empty">${__("Tap menu items to add them.")}</p>`);
 		this.$order.find("[data-q]").on("click", (e) => {
-			const $l = $(e.currentTarget).closest(".rf-line");
+			const $l = $(e.currentTarget).closest(".rf-ln");
 			const line = o.items.find((d) => d.name === $l.attr("data-line"));
-			const qty = line.qty + parseInt($(e.currentTarget).attr("data-q"));
-			if (qty <= 0) return this.line_call("remove_line", { line: line.name });
-			this.line_call("update_line", { line: line.name, qty });
+			if (!line) return;
+			const q = $(e.currentTarget).attr("data-q");
+			if (q === "trash" && flt(line.qty) > 1 && !e.rf_ok) {
+				// Asked again on the line as it is then (the lines may have been drawn again meanwhile).
+				return frappe.confirm(__("Remove {0} × {1}?", [fmt_qty(line.qty), esc(line.item_name)]), () =>
+					this.$order.find(`.rf-ln[data-line="${CSS.escape(line.name)}"] [data-q=trash]`).trigger($.Event("click", { rf_ok: true }))
+				);
+			}
+			const step = q === "trash" ? -flt(line.qty) : parseInt(q);
+			if (line._pending) return this.step_pending(line, step); // no line on the server yet
+			if (step > 0 && !this.floor.can_order) return frappe.msgprint(esc(this.floor.no_order_reason));
+			this._gen++;
+			const qty = flt(line.qty) + step;
+			const each = flt(line.qty) ? flt(line.amount) / flt(line.qty) : flt(line.rate);
+			o.net_total = flt(o.net_total) + step * each;
+			if (qty <= 0) o.items = o.items.filter((d) => d !== line);
+			else {
+				line.qty = qty;
+				line.amount = each * qty;
+			}
+			this.render_lines();
+			this.flush_taps();
+			if (q === "trash") this.sync_call("remove_line", { order: o.name, line: line.name });
+			else this.sync_call("update_line", { order: o.name, line: line.name, step });
 		});
 		this.$order.find("[data-lm]").on("click", (e) => {
-			const line = o.items.find((d) => d.name === $(e.currentTarget).closest(".rf-line").attr("data-line"));
+			const line = o.items.find((d) => d.name === $(e.currentTarget).closest(".rf-ln").attr("data-line"));
+			if (!line) return;
+			if (line._pending) return frappe.show_alert({ message: __("Being saved: try again in a moment"), indicator: "blue" });
 			this.line_menu(line);
 		});
 
-		const disc = o.discount_amount ? `<div>${__("Discount")} <span>−${money(o.discount_amount)}</span></div>` : "";
+		// Totals. Before the bill is asked for, the total is the dishes less the discount: the bill
+		// adds the service charge, the delivery fee and the tax (when prices do not include it).
+		const live = o.items.filter((d) => d.kitchen_status !== "Void");
+		const count = live.reduce((s, d) => s + flt(d.qty), 0);
+		this.$order.find(".rf-ccount").text(__("{0} items", [fmt_qty(count)]));
+		const disc = flt(o.discount_amount);
+		const total = o.bill_grand_total ? flt(o.bill_grand_total) : flt(o.net_total) - disc;
+		const added = !o.bill_grand_total && (flt(o.service_charge_percent) || this.floor.tax_added || (o.order_type === "Delivery" && flt(o.delivery_fee)));
 		this.$order.find(".rf-totals").html(`
-			<div>${__("Items Total")} <span>${money(o.net_total)}</span></div>${disc}
-			${o.service_charge_percent ? `<div class="text-muted">${__("Service Charge")} ${o.service_charge_percent}%</div>` : ""}
-			${o.bill_grand_total ? `<div class="rf-grand">${__("Bill Total")} <span>${money(o.bill_grand_total)}</span></div>` : ""}
-			${o.invoiced_total ? `<div class="text-muted">${__("Paid So Far")} <span>${money(o.invoiced_total)}</span></div>` : ""}`);
+			<div class="rf-trow"><span>${__("Items Total")}</span><span class="rf-spacer"></span><span>${money(o.net_total)}</span></div>
+			${disc ? `<div class="rf-trow"><span>${__("Discount")}</span><span class="rf-spacer"></span><span dir="ltr">−${money(disc)}</span></div>` : ""}
+			${flt(o.service_charge_percent) ? `<div class="rf-trow rf-muted"><span>${__("Service Charge")} ${o.service_charge_percent}%</span></div>` : ""}
+			${o.invoiced_total ? `<div class="rf-trow rf-muted"><span>${__("Paid So Far")}</span><span class="rf-spacer"></span><span>${money(o.invoiced_total)}</span></div>` : ""}
+			<div class="rf-grand"><b>${o.bill_grand_total ? __("Bill Total") : __("Total", null, "Resto")}</b><span class="rf-spacer"></span><b class="rf-gv">${money(total)}</b></div>
+			${added ? `<small class="rf-muted">${__("The service charge, delivery fee and tax are added on the bill")}</small>` : ""}`);
+		const unsent = o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold).length;
+		const held = o.items.filter((d) => d.kitchen_status === "Not Sent" && d.hold).length;
+		// The buttons stay; only their text changes (a tap on them is never lost to a redraw).
+		this.$order.find(".rf-send-t").text(`${__("Send to Kitchen")}${unsent ? ` (${unsent})` : ""}`);
+		this.$order.find(".rf-fire").toggle(!!held).text(__("Fire Held Dishes ({0})", [held]));
+		this.$order.find(".rf-pay-b").text(`${__("Pay", null, "Resto")}${added || flt(o.invoiced_total) ? "" : ` · ${money(total)}`}`);
+		this.$order.find(".rf-onote").remove();
+		if (o.notes) this.$order.find(".rf-lines").prepend(`<div class="rf-onote">✎ ${esc(o.notes)}</div>`);
+		this.render_customer();
+		this.update_badges();
+		// The dish just tapped is shown, even at the end of a long order.
+		if (this._show_code) {
+			const el = this.$order.find(`.rf-ln[data-item="${CSS.escape(this._show_code)}"]`).last()[0];
+			this._show_code = null;
+			if (el) el.scrollIntoView({ block: "nearest" });
+		}
+	}
+
+	// + on a line just tapped is one more tap; − (or the bin) takes back taps not sent yet.
+	step_pending(line, step) {
+		if (step > 0) return this.tap_item({ item_code: line.item_code, item_name: line.item_name, rate: line.rate });
+		const taps = this._taps || [];
+		const n = Math.round(-step);
+		if (taps.filter((c) => c === line.item_code).length < n) {
+			return frappe.show_alert({ message: __("Being saved: try again in a moment"), indicator: "blue" });
+		}
+		for (let k = 0; k < n; k++) taps.splice(taps.lastIndexOf(line.item_code), 1);
+		this._gen++;
+		const o = this.order;
+		line.qty = flt(line.qty) - n;
+		line.amount = flt(line.amount) - n * flt(line.rate);
+		o.net_total = flt(o.net_total) - n * flt(line.rate);
+		if (line.qty <= 0) o.items = o.items.filter((d) => d !== line);
+		this.render_lines();
 	}
 
 	async line_call(method, args) {
-		await call(method, { order: this.order.name, ...args });
-		this.load_order(this.order.name);
+		if (!(await this.settled())) return;
+		const name = this.order.name;
+		await call(method, { order: name, ...args });
+		if (this.order && this.order.name === name) await this.reload_lines(name);
 	}
 
 	line_menu(line) {
@@ -1040,6 +1929,19 @@ class RestoFloor {
 	}
 
 	async action(act, e) {
+		if (this._acting && Date.now() - this._acting < 30000) return; // one action at a time
+		this._acting = Date.now();
+		this.$order.addClass("rf-acting");
+		try {
+			if (!(await this.settled())) return;
+			return await this.do_action(act, e);
+		} finally {
+			this._acting = 0;
+			this.$order.removeClass("rf-acting");
+		}
+	}
+
+	async do_action(act, e) {
 		const o = this.order;
 		if (act === "send") {
 			const tickets = await call("send_to_kitchen", { order: o.name }, true);
@@ -1081,13 +1983,19 @@ class RestoFloor {
 		}
 		if (act === "pay") return this.pay();
 		if (act === "more") return this.more_menu(e);
+		if (act === "note") return this.edit_info(false, "notes");
+		if (act === "discount") return this.discount();
+		if (act === "customer") return this.edit_info();
+		if (act === "new_customer") return this.edit_info(true);
 	}
 
 	more_menu() {
 		const o = this.order;
 		const acts = [
-			[__("Discount"), () => this.discount()],
-			[__("Guests and Customer"), () => this.edit_info()],
+			[__("Fire Course"), () => this.action("fire")],
+			[__("Served"), () => this.action("served")],
+			[__("Discount"), () => this.action("discount")],
+			[__("Guests and Customer"), () => this.action("customer")],
 		];
 		const with_sides = o.sides_enabled ? o.items.filter((d) => d.kitchen_status === "Not Sent" && d.has_sides) : [];
 		if (with_sides.length > 1 || (with_sides.length === 1 && flt(with_sides[0].qty) > 1)) {
@@ -1109,11 +2017,8 @@ class RestoFloor {
 		}
 		if (o.order_type === "Delivery") acts.push([__("Delivery Status"), () => this.delivery()]);
 		if (this.floor.roles.manager) acts.push([__("Service Charge"), () => this.service()]);
-		acts.push([__("Open Full Form"), () => frappe.set_route("Form", "Resto Order", o.name)], [__("Cancel Order"), () => this.cancel()]);
-		const d = new frappe.ui.Dialog({ title: __("Order Actions"), fields: [{ fieldname: "html", fieldtype: "HTML" }] });
-		d.fields_dict.html.$wrapper.html(acts.map((a, i) => `<button class="btn btn-default btn-block" data-i="${i}">${a[0]}</button>`).join(""));
-		d.fields_dict.html.$wrapper.find("button").on("click", (e) => { d.hide(); acts[$(e.currentTarget).attr("data-i")][1](); });
-		d.show();
+		acts.push([__("Open Full Form"), () => frappe.set_route("Form", "Resto Order", o.name)], [__("Cancel Order"), () => this.cancel(), "rf-danger"]);
+		this.menu_dialog(__("Order Actions"), acts);
 	}
 
 	pick_side_lines(lines) {
@@ -1253,13 +2158,15 @@ class RestoFloor {
 		);
 	}
 
-	edit_info() {
+	edit_info(new_customer, focus) {
 		const o = this.order;
+		// A new customer: nothing of the order's current customer is picked or filled in.
+		const c = new_customer ? { ...o, customer: null, customer_name: "", phone: "" } : o;
 		const d = new frappe.ui.Dialog({
-			title: __("Guests and Customer"),
+			title: new_customer ? __("New Customer") : __("Guests and Customer"),
 			fields: [
 				{ fieldname: "guests", fieldtype: "Int", label: __("Guests"), default: o.guests },
-				...this.customer_fields(o, o.order_type === "Delivery"),
+				...this.customer_fields(c, o.order_type === "Delivery"),
 				{ fieldname: "notes", fieldtype: "Small Text", label: __("Notes"), default: o.notes },
 			],
 			primary_action_label: __("Save"),
@@ -1271,7 +2178,9 @@ class RestoFloor {
 			},
 		});
 		d.show();
-		this.bind_customer(d, o, false);
+		this.bind_customer(d, c, !!new_customer);
+		const first = focus === "notes" ? "notes" : new_customer ? "phone" : null;
+		if (first) setTimeout(() => d.fields_dict[first].$input && d.fields_dict[first].$input.trigger("focus"), 300);
 	}
 
 	free_tables() {
@@ -1355,127 +2264,300 @@ class RestoFloor {
 
 	// ------------------------------------------------------------------ payment
 
+	// Payment (D-214): the bill on one side; on the other the methods, quick amounts and a keypad.
+	// Each method holds one amount; several methods make a split payment. The server checks it all
+	// again (settle), with the amount the cashier saw.
 	async pay(lines) {
 		const o = this.order;
 		const bill = await call("get_bill", { order: o.name, lines: lines ? JSON.stringify(lines) : null }, true);
 		const modes = bill.payment_modes;
-		const fields = [{ fieldname: "summary", fieldtype: "HTML" }];
-		modes.forEach((m, i) => {
-			fields.push({ fieldname: `p_${i}`, fieldtype: "Currency", label: __(m.mode_of_payment), default: m.default ? bill.payable : 0 });
-		});
-		fields.push({ fieldname: "quick", fieldtype: "HTML" }, { fieldname: "change", fieldtype: "HTML" });
-		// Partial payment (D-202): what is not paid stays owed by the order's named customer, when the
-		// POS Profile allows it. Ticked by the cashier, never assumed.
-		if (bill.on_account_customer) {
-			fields.push({
-				fieldname: "on_account",
-				fieldtype: "Check",
-				label: __("Leave the rest on the account of {0}", [bill.on_account_customer_name || bill.on_account_customer]),
-				hidden: 1,
-			});
-		}
-		// One id per dialog: a retried click after a lost answer returns the same invoice.
+		const payable = flt(bill.payable);
+		const amounts = modes.map(() => 0);
+		let current = Math.max(modes.findIndex((m) => m.default), 0);
+		let entry = "";
+		let on_account = false;
+		// The answer to Complete did not arrive: the amounts stay as sent until it is pressed again.
+		let unsure = false;
+		// One id per dialog: a retried click after a lost answer returns the same invoice (the server
+		// checks it is the same amounts on the same methods).
 		const request_id = frappe.utils.get_random(20);
-		const d = new frappe.ui.Dialog({
-			title: lines ? __("Pay Selected Items") : __("Pay Bill"),
-			size: "large",
-			fields,
-			primary_action_label: __("Settle"),
-			primary_action: async (v) => {
-				const payments = modes.map((m, i) => ({ mode_of_payment: m.mode_of_payment, amount: v[`p_${i}`] || 0 }));
-				const owed = remaining() > 0.005 && v.on_account ? remaining() : 0;
+		const P = cint((frappe.boot.sysdefaults || {}).currency_precision) || 2;
+		const EPS = 0.5 / 10 ** P;
+		const round = (v) => flt(v, P);
+		// Typed and quick amounts are plain "12.5" strings: read with a point whatever the number format.
+		const num = (v) => round(typeof v === "number" ? v : parseFloat(String(v)) || 0);
+		const is_cash = (i) => i >= 0 && modes[i].type === "Cash";
+		// The cash method for "Exact Amount in Cash": the default one when it is cash; none: no fast path.
+		const cash = is_cash(modes.findIndex((m) => m.default)) ? modes.findIndex((m) => m.default) : modes.findIndex((m) => m.type === "Cash");
+		const paid = () => amounts.reduce((s, a) => s + flt(a), 0);
+		const left = () => round(payable - paid());
+		const non_cash = () => amounts.reduce((s, a, i) => (is_cash(i) ? s : s + flt(a)), 0);
+		// What the highlighted method needs to complete the bill, with the other methods' amounts.
+		const need = () => Math.max(round(payable - (paid() - flt(amounts[current]))), 0);
+		const busy = () => !!this._settling || unsure;
+		let quicks = [];
+		const quick = () => {
+			const n = need();
+			if (!n) return [];
+			// Rounded-up notes only for cash: a card is charged the exact amount.
+			const ups = is_cash(current) ? [50, 100, 200, 500, 1000].map((step) => Math.ceil(n / step) * step).filter((v) => v > n + EPS) : [];
+			return [n, ...[...new Set(ups)].slice(0, 3)];
+		};
+
+		const d = new frappe.ui.Dialog({ title: __("Payment"), size: "extra-large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
+		const $w = d.fields_dict.html.$wrapper;
+		const where = o.order_type === "Dine In" ? __("Table {0}", [esc(o.resto_table)], "Resto") : __(o.order_type, null, "Resto");
+		d.set_title(`${lines ? __("Pay Selected Items") : __("Payment")} · ${esc(o.name)}`);
+		const items = bill.items
+			.map((i) => `<div class="rf-prow"><span>${esc(i.item_name)} × ${fmt_qty(i.qty)}</span><span class="rf-spacer"></span><span>${money(i.amount)}</span></div>`)
+			.join("");
+		const taxes = bill.taxes.map((t) => `<div class="rf-trow"><span>${esc(t.description)}</span><span class="rf-spacer"></span><span>${money(t.amount)}</span></div>`).join("");
+		$w.html(`
+			<div class="rf-root rf-pay">
+				<section class="rf-pbill">
+					<div class="rf-muted">${where} · ${esc(o.name)}</div>
+					<div class="rf-pcust"><b>${esc(bill.on_account_customer_name || o.customer_name || __("Walk-in", null, "Resto"))}</b><span class="rf-spacer"></span>
+						<button class="rf-btn rf-sm" data-p="customer">${__("Change Customer")}</button></div>
+					<div class="rf-plines">${items}
+						<span class="rf-spacer"></span>
+						<div class="rf-totals rf-ptot">
+							<div class="rf-trow"><span>${__("Items Total")}</span><span class="rf-spacer"></span><span>${money(bill.total)}</span></div>
+							${bill.discount ? `<div class="rf-trow"><span>${__("Discount")}</span><span class="rf-spacer"></span><span dir="ltr">−${money(bill.discount)}</span></div>` : ""}
+							${taxes}
+							${bill.rounding_adjustment ? `<div class="rf-trow"><span>${__("Rounding")}</span><span class="rf-spacer"></span><span>${money(bill.rounding_adjustment)}</span></div>` : ""}
+							<div class="rf-grand"><b>${__("To Pay")}</b><span class="rf-spacer"></span><b class="rf-gv">${money(payable)}</b></div>
+							${bill.guests > 1 ? `<div class="rf-trow rf-muted"><span>${__("Per Guest")} (${bill.guests})</span><span class="rf-spacer"></span><span>${money(bill.per_guest)}</span></div>` : ""}
+						</div>
+					</div>
+					<div class="rf-ptiles"><div class="rf-ptile b"><span>${__("Paid", null, "Resto")}</span><b class="rf-paid"></b></div>
+						<div class="rf-ptile rf-rest"><span></span><b></b></div></div>
+				</section>
+				<section class="rf-pkeys">
+					<div class="rf-pmodes">${modes.map((m, i) => `<button class="rf-mth" data-m="${i}"><span>${esc(__(m.mode_of_payment))}</span><small></small></button>`).join("")}</div>
+					<div><span class="rf-muted rf-plabel">${__("Quick Amounts")}</span><div class="rf-quicks"></div></div>
+					<div class="rf-pinput">
+						<div class="rf-pentry"><span class="rf-pmode"></span><span class="rf-spacer"></span><b dir="ltr" class="rf-pval"></b></div>
+						<div class="rf-pad">
+							<div class="rf-keys">${["7", "8", "9", "4", "5", "6", "1", "2", "3", "00", "0", "."].map((k) => `<button class="rf-k" data-k="${k}">${k}</button>`).join("")}</div>
+							<div class="rf-kside">
+								<button class="rf-k rf-kdel" data-k="back" aria-label="${__("Delete")}">⌫</button>
+								<button class="rf-k rf-kclr" data-k="clear">${__("Clear")}</button>
+								<button class="rf-k rf-kadd" data-k="add">${__("Add", null, "Resto")}</button>
+								<div class="rf-added"></div>
+							</div>
+						</div>
+					</div>
+					${bill.on_account_customer ? `<label class="rf-onacc" style="display:none"><input type="checkbox"> <span>${__("Leave the rest on the account of {0}", [esc(bill.on_account_customer_name || bill.on_account_customer)])}</span></label>` : ""}
+					<div class="rf-pnote rf-muted"></div>
+					<div class="rf-pacts">
+						<button class="rf-btn rf-lg" data-p="exact"><span>${__("Exact Amount in Cash")}</span><kbd dir="ltr">Enter</kbd></button>
+						<button class="rf-btn rf-btn-p rf-lg rf-pdone" data-p="done"></button>
+					</div>
+					${lines ? "" : `<button class="rf-btn rf-sm rf-psplit" data-p="split">${__("Split by Items")}</button>`}
+				</section>
+			</div>`);
+
+		const draw = () => {
+			const rest = left();
+			$w.find(".rf-mth").each((i, el) => {
+				$(el).toggleClass("on", i === current).find("small").text(flt(amounts[i]) ? money(amounts[i]) : "");
+			});
+			quicks = quick();
+			$w.find(".rf-quicks").html(
+				quicks
+					.map((v, i) => `<button class="rf-qa ${i === 0 ? "exact" : ""}" data-q="${i}">${money(v)}${i === 0 ? ` ${__("exact", null, "Resto")}` : ""}</button>`)
+					.join("")
+			);
+			$w.find(".rf-pmode").text(__(modes[current].mode_of_payment));
+			$w.find(".rf-pval").text(entry || "0");
+			$w.find(".rf-added").html(
+				amounts.some((a) => flt(a))
+					? `<span class="rf-muted">${__("Added", null, "Resto")}</span>` +
+							modes.map((m, i) => (flt(amounts[i]) ? `<div class="rf-trow"><b>${esc(__(m.mode_of_payment))}</b><span class="rf-spacer"></span><span>${money(amounts[i])}</span></div>` : "")).join("")
+					: ""
+			);
+			$w.find(".rf-paid").text(money(paid()));
+			const $rest = $w.find(".rf-rest");
+			if (rest > EPS) {
+				$rest.removeClass("g").addClass("r").find("span").text(__("Remaining"));
+				$rest.find("b").text(money(rest));
+			} else {
+				$rest.removeClass("r").addClass("g").find("span").text(__("Change", null, "Resto"));
+				$rest.find("b").text(money(-rest));
+			}
+			const $acc = $w.find(".rf-onacc");
+			$acc.toggle(rest > EPS);
+			const over = non_cash() > payable + EPS;
+			let note = "";
+			if (unsure) note = __("The answer did not arrive. Press Complete Payment again to check: the bill is not taken twice.");
+			else if (over) note = __("Card and bank payments cannot be more than the bill; only cash can give change");
+			else if (rest > EPS && !bill.on_account_customer && bill.allow_partial_payment) {
+				note = __("To leave the rest owed, choose the customer in Guests and Customer first (not the walk-in customer).");
+			}
+			$w.find(".rf-pnote").text(note).toggleClass("rf-warn", unsure || over);
+			const done = $w.find(".rf-pdone");
+			done.html(
+				rest > EPS
+					? on_account ? __("Complete Payment · {0} on account", [money(rest)]) : __("Complete Payment · {0} left", [money(rest)])
+					: __("Complete Payment · Change {0}", [money(-rest)])
+			);
+			done.prop("disabled", !!this._settling || over || (rest > EPS && !(on_account && $acc.is(":visible"))));
+			$w.find("[data-p=exact]").toggle(cash >= 0).prop("disabled", busy());
+			$w.find(".rf-k, .rf-qa, .rf-mth, .rf-onacc input, [data-p=customer], [data-p=split]").prop("disabled", busy());
+		};
+		const set_amount = (v) => {
+			let a = Math.max(num(v), 0);
+			if (!is_cash(current) && a > need() + EPS) {
+				a = need();
+				frappe.show_alert({ message: __("Card and bank payments cannot be more than the bill; only cash can give change"), indicator: "orange" });
+			}
+			amounts[current] = a;
+			entry = "";
+			draw();
+		};
+		const key = (k) => {
+			if (busy()) return;
+			if (k === "back") entry = entry.slice(0, -1);
+			else if (k === "clear") {
+				entry = "";
+				amounts[current] = 0;
+			} else if (k === "add") return set_amount(entry || need());
+			else if (k === "." && entry.includes(".")) return;
+			else if ((entry + k).length <= 10) entry = (entry === "0" && k !== "." ? "" : entry) + k;
+			draw();
+		};
+		const settle = async () => {
+			if (this._settling) return;
+			const rest = left();
+			const owed = rest > EPS && on_account ? rest : 0;
+			if ((rest > EPS && !owed) || non_cash() > payable + EPS) return;
+			// What is sent is what was on the screen when Complete was pressed.
+			const payments = modes.map((m, i) => ({ mode_of_payment: m.mode_of_payment, amount: round(amounts[i]) }));
+			this._settling = true;
+			draw();
+			let r;
+			try {
 				let ok = {};
 				if (owed && bill.on_account_needs_approval) {
 					// The customer has no credit limit: a manager approves this amount on account.
-					ok = await ask_approval(
-						this.floor,
-						__("{0} on the account of {1} (no credit limit)", [money(owed), bill.on_account_customer_name || bill.on_account_customer])
-					);
+					ok = await ask_approval(this.floor, __("{0} on the account of {1} (no credit limit)", [money(owed), bill.on_account_customer_name || bill.on_account_customer]));
 					if (!ok) return;
 				}
-				d.get_primary_btn().prop("disabled", true);
-				try {
-					const r = await call(
-						"settle",
-						{
-							order: o.name,
-							payments: JSON.stringify(payments),
-							lines: lines ? JSON.stringify(lines) : null,
-							expected: bill.payable,
-							request_id,
-							on_account: owed ? 1 : 0,
-							...ok,
-						},
-						true
-					);
-					d.hide();
-					this.receipt_mode = r.receipt_mode;
-					const print_receipt = () => this.print_receipt(r.sales_invoice, r.receipt_mode);
-					// Printed once by itself, on the device that prints receipts: a retried payment (same
-					// invoice) does not print it again.
-					const auto = r.receipt_mode === "auto" && !r.receipt_printed && this.prints_here();
-					frappe.msgprint({
-						title: __("Paid"),
-						indicator: "green",
-						message: `${__("Invoice")} <a href="/app/sales-invoice/${esc(r.sales_invoice)}">${esc(r.sales_invoice)}</a><br>
-							${r.change_amount ? `<b>${__("Change", null, "Resto")}: ${money(r.change_amount)}</b>` : ""}
-							${r.outstanding_amount > 0.005 ? `<b class="text-warning">${__("On account of {0}: {1}", [esc(bill.on_account_customer_name || bill.on_account_customer), money(r.outstanding_amount)])}</b>` : ""}`,
-						primary_action: {
-							// The receipt printed by itself (cashier printer, or this browser): this prints it again.
-							label: r.receipt_mode === "server" || auto || r.receipt_printed ? __("Print Again") : __("Print Receipt"),
-							action: () => print_receipt(),
-						},
-					});
-					if (auto) print_receipt();
-					if (r.status === "Paid") this.close_order();
-					else this.load_order(o.name);
-				} finally {
-					d.get_primary_btn().prop("disabled", false);
-				}
+				r = await call(
+					"settle",
+					{
+						order: o.name,
+						payments: JSON.stringify(payments),
+						lines: lines ? JSON.stringify(lines) : null,
+						expected: bill.payable,
+						request_id,
+						on_account: owed ? 1 : 0,
+						...ok,
+					},
+					true,
+					60000
+				);
+			} catch (e) {
+				// Not reached: it may have been billed. The amounts stay as sent; pressing again asks
+				// the server with the same id, which returns that invoice or bills it once.
+				if (e && e.network) unsure = true;
+				else if (!(e && "network" in e)) console.error(e);
+				// refused: the server's message is shown, the window stays as it was
+			} finally {
+				this._settling = false;
+				draw();
+			}
+			if (!r) return;
+			unsure = false;
+			d.hide();
+			this.paid_dialog(r, bill);
+			if (r.status === "Paid") this.close_order();
+			else this.load_order(o.name);
+		};
+		const exact_cash = () => {
+			if (cash < 0 || busy()) return;
+			const others = amounts.reduce((s, a, i) => (i === cash ? s : s + flt(a)), 0);
+			current = cash;
+			amounts[cash] = Math.max(round(payable - others), 0);
+			entry = "";
+			draw();
+			settle();
+		};
+
+		// A method tapped after typing takes the typed amount (Enter or Add puts it there).
+		$w.on("click", ".rf-mth", (e) => {
+			if (busy()) return;
+			current = cint($(e.currentTarget).attr("data-m"));
+			draw();
+		});
+		$w.on("click", ".rf-qa", (e) => {
+			if (busy()) return;
+			const v = quicks[cint($(e.currentTarget).attr("data-q"))];
+			if (v != null) set_amount(v);
+		});
+		$w.on("click", ".rf-k", (e) => key($(e.currentTarget).attr("data-k")));
+		$w.on("change", ".rf-onacc input", (e) => {
+			if (busy()) return;
+			on_account = $(e.currentTarget).is(":checked");
+			draw();
+		});
+		$w.on("click", "[data-p]", (e) => {
+			const p = $(e.currentTarget).attr("data-p");
+			if (p === "done") return settle();
+			if (p === "exact") return exact_cash();
+			if (busy()) return;
+			d.hide();
+			if (p === "split") return this.split();
+			if (p === "customer") return this.edit_info();
+		});
+		// The keyboard: digits (Arabic ones too) and the point type, Backspace deletes. Enter adds what
+		// is typed to the highlighted method; with nothing typed it pays when the bill is covered (or
+		// the rest goes on account), pays the exact amount in cash when cash is highlighted and nothing
+		// is added yet, and otherwise puts what is left on the highlighted method (Enter again pays).
+		d.$wrapper.on("keydown", (e) => {
+			if ($(e.target).is("input[type=checkbox], [data-p=customer], [data-p=split]")) return;
+			const k = String(e.key || "")
+				.replace(/[\u0660-\u0669]/g, (c) => String(c.charCodeAt(0) - 0x660))
+				.replace(/[\u06f0-\u06f9]/g, (c) => String(c.charCodeAt(0) - 0x6f0));
+			if (/^[0-9.]$/.test(k)) key(k);
+			else if (k === "Backspace") key("back");
+			else if (k === "Enter") {
+				e.preventDefault();
+				if (this._settling) return;
+				if (unsure) settle();
+				else if (entry) key("add");
+				else if (left() <= EPS) settle();
+				else if (!paid() && is_cash(current) && current === cash) exact_cash();
+				else if (on_account && $w.find(".rf-onacc").is(":visible")) settle();
+				else key("add");
+			} else return;
+			e.preventDefault();
+		});
+		draw();
+		d.show();
+		setTimeout(() => d.$wrapper.find(".modal-content").attr("tabindex", -1).trigger("focus"), 200);
+	}
+
+	// Paid: the real invoice number, the change, what is left owed, and the receipt.
+	paid_dialog(r, bill) {
+		this.receipt_mode = r.receipt_mode;
+		const print_receipt = () => this.print_receipt(r.sales_invoice, r.receipt_mode);
+		// Printed once by itself, on the device that prints receipts: a retried payment (same
+		// invoice) does not print it again.
+		const auto = r.receipt_mode === "auto" && !r.receipt_printed && this.prints_here();
+		frappe.msgprint({
+			title: __("Paid"),
+			indicator: "green",
+			message: `<div class="rf-paidmsg">${__("Invoice")} <a href="/app/sales-invoice/${esc(r.sales_invoice)}"><b>${esc(r.sales_invoice)}</b></a>
+				${r.change_amount ? `<div class="rf-paidchg">${__("Change", null, "Resto")}: <b>${money(r.change_amount)}</b></div>` : ""}
+				${r.outstanding_amount > 0.005 ? `<div class="text-warning"><b>${__("On account of {0}: {1}", [esc(bill.on_account_customer_name || bill.on_account_customer), money(r.outstanding_amount)])}</b></div>` : ""}</div>`,
+			primary_action: {
+				// The receipt printed by itself (cashier printer, or this browser): this prints it again.
+				label: r.receipt_mode === "server" || auto || r.receipt_printed ? __("Print Again") : __("Print Receipt"),
+				action: () => print_receipt(),
 			},
 		});
-		if (!lines) {
-			d.set_secondary_action_label(__("Split by Items"));
-			d.set_secondary_action(() => { d.hide(); this.split(); });
-		}
-		const taxes = bill.taxes.map((t) => `<tr><td>${esc(t.description)}</td><td class="rf-amt">${money(t.amount)}</td></tr>`).join("");
-		d.fields_dict.summary.$wrapper.html(`
-			<table class="table table-condensed rf-bill">
-				<tr><td>${__("Items Total")}</td><td class="rf-amt">${money(bill.total)}</td></tr>
-				${bill.discount ? `<tr><td>${__("Discount")}</td><td class="rf-amt"><span dir="ltr">−${money(bill.discount)}</span></td></tr>` : ""}
-				${taxes}
-				${bill.rounding_adjustment ? `<tr><td>${__("Rounding")}</td><td class="rf-amt">${money(bill.rounding_adjustment)}</td></tr>` : ""}
-				<tr class="rf-grand"><td>${__("To Pay")}</td><td class="rf-amt">${money(bill.payable)}</td></tr>
-				${bill.guests > 1 ? `<tr class="text-muted"><td>${__("Per Guest")} (${bill.guests})</td><td class="rf-amt">${money(bill.per_guest)}</td></tr>` : ""}
-			</table>`);
-		const remaining = () => bill.payable - modes.reduce((s, m, i) => s + (d.get_value(`p_${i}`) || 0), 0);
-		const update_change = () => {
-			const diff = -remaining();
-			let note = "";
-			if (diff < -0.005 && !bill.on_account_customer && bill.allow_partial_payment) {
-				note = `<p class="text-muted">${__("To leave the rest owed, choose the customer in Guests and Customer first (not the walk-in customer).")}</p>`;
-			}
-			d.fields_dict.change.$wrapper.html(
-				(diff >= -0.005
-					? `<h4>${__("Change", null, "Resto")}: ${money(Math.max(diff, 0))}</h4>`
-					: `<h4 class="text-danger">${__("Remaining")}: ${money(-diff)}</h4>`) + note
-			);
-			if (d.fields_dict.on_account) d.set_df_property("on_account", "hidden", diff < -0.005 ? 0 : 1);
-		};
-		modes.forEach((m, i) => d.fields_dict[`p_${i}`].$input.on("input change", update_change));
-		// "All by card" and friends: one tap puts the whole bill on one method and clears the others.
-		d.fields_dict.quick.$wrapper.html(
-			`<div class="rf-quick">${modes
-				.map((m, i) => `<button class="btn btn-default btn-sm" data-i="${i}">${__("All by {0}", [esc(__(m.mode_of_payment))])}</button>`)
-				.join("")}</div>`
-		);
-		d.fields_dict.quick.$wrapper.find("button").on("click", async (e) => {
-			const pick = cint($(e.currentTarget).attr("data-i"));
-			for (let i = 0; i < modes.length; i++) await d.set_value(`p_${i}`, i === pick ? bill.payable : 0);
-			update_change();
-		});
-		update_change();
-		d.show();
+		if (auto) print_receipt();
 	}
 
 	split() {
@@ -1504,58 +2586,302 @@ class RestoFloor {
 
 	static css() {
 		return `
-		.rf-shift { flex-basis:100%; border-radius:8px; padding:6px 10px; margin-bottom:6px; font-weight:600; display:flex; gap:10px; align-items:center; }
-		.rf-shift-open { background:var(--green-50, #f0fff4); color:var(--green-800, #276749); border:1px solid var(--green-300, #9ae6b4); }
-		.rf-shift-none { background:var(--yellow-50, #fffff0); color:var(--yellow-800, #975a16); border:2px solid var(--yellow-400, #f6e05e); }
 		.rf-cust { display:block; width:100%; text-align:start; margin-bottom:4px; white-space:normal; }
 		.rf-cust-picked { font-weight:600; color:var(--green-700, #2f855a); margin-bottom:6px; }
 		.rf-metrics { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:10px; }
 		.rf-metric { border:1px solid var(--border-color); border-radius:8px; padding:6px 10px; }
 		.rf-print-alert { flex-basis:100%; border-radius:8px; padding:6px 10px; margin-bottom:6px; font-weight:600; background:var(--red-100, #fed7d7); color:var(--red-800, #9b2c2c); border:2px solid var(--red-500, #f56565); }
-		.resto-floor .rf-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
-		.rf-count { opacity:.7; font-size:11px; margin-inline-start:4px; }
-		.rf-grid { display:grid; gap:12px; }
-		.rf-table, .rf-ocard { position:relative; border-radius:10px; padding:12px; min-height:110px; cursor:pointer; border:2px solid transparent; background:var(--bg-light-gray); user-select:none; }
+		.rf-offline { position:sticky; top:var(--navbar-height, 48px); z-index:5; height:40px; line-height:40px; padding:0 12px; overflow:hidden;
+			white-space:nowrap; text-overflow:ellipsis; background:var(--rf-amber-soft, #FFF5E0); color:var(--rf-amber-ink, #78350F); font-weight:700; text-align:center; }
+		.rf-root.rf-off .rf-order { height:calc(100vh - var(--navbar-height, 48px) - 40px); height:calc(100dvh - var(--navbar-height, 48px) - 40px); }
 		.rf-amt { text-align:end; white-space:nowrap; }
 		.rf-quick { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
-		.rf-table.round { border-radius:50%; text-align:center; display:flex; flex-direction:column; justify-content:center; aspect-ratio:1; }
-		.rf-table.free { background:var(--green-50, #e9f9ee); border-color:var(--green-300, #9ae6b4); }
-		.rf-table.occupied, .rf-ocard.occupied { background:var(--blue-50, #ebf8ff); border-color:var(--blue-400, #63b3ed); }
-		.rf-table.bill, .rf-ocard.bill { background:var(--orange-50, #fffaf0); border-color:var(--orange-400, #f6ad55); }
-		.rf-table.reserved { background:var(--purple-50, #faf5ff); border-color:var(--purple-300, #d6bcfa); }
-		.rf-name { font-weight:700; font-size:16px; }
-		.rf-amount { font-weight:600; }
-		.rf-waiter, .rf-seats { font-size:12px; opacity:.75; }
-		.rf-ready { position:absolute; top:6px; inset-inline-end:6px; background:var(--green-600, #38a169); color:#fff; border-radius:10px; padding:0 8px; font-size:11px; }
-		.rf-legend { margin-top:14px; font-size:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-		.rf-dot { display:inline-block; width:12px; height:12px; border-radius:3px; margin-inline-end:4px; }
-		.rf-dot.free { background:#9ae6b4 } .rf-dot.occupied { background:#63b3ed } .rf-dot.bill { background:#f6ad55 } .rf-dot.reserved { background:#d6bcfa }
-		.rf-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr)); gap:12px; }
-		.rf-ohead { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
-		.rf-otitle { flex:1; font-weight:700; font-size:16px; }
-		.rf-ocols { display:grid; grid-template-columns: 1.4fr 1fr; gap:14px; }
-		@media (max-width: 900px) { .rf-ocols { grid-template-columns: 1fr; } }
-		.rf-groups { display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }
-		.rf-items { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px,1fr)); gap:8px; max-height:70vh; overflow:auto; }
-		.rf-item { border:1px solid var(--border-color); border-radius:8px; padding:8px; cursor:pointer; text-align:center; background:var(--card-bg); }
+		.rf-bill td { padding:4px 8px !important; }
+		/* ---- the floor's look (D-214): its own palette, Frappe's colours in dark mode ---- */
+		.rf-page .page-head { display:none; }
+		.rf-page .container.page-body, .rf-page .page-body { max-width:100% !important; width:100%; padding:0 !important; }
+		.rf-page .layout-main-section-wrapper, .rf-page .layout-main, .rf-page .page-content { padding:0 !important; margin:0 !important; }
+		.rf-page .layout-main-section { border:0 !important; background:transparent !important; padding:0 !important; box-shadow:none !important; }
+		.rf-root {
+			--rf-bg:#F6F5F2; --rf-card:#fff; --rf-ink:#1C1B19; --rf-ink2:#3A3732; --rf-muted:#5E5A53; --rf-line:#E4E1DA; --rf-line2:#F1EFEA; --rf-soft:#F1EFEA;
+			--rf-acc:#C2410C; --rf-acc-soft:#FFF1E8; --rf-acc-ink:#9A3412; --rf-acc-tint:#FFFBF7;
+			--rf-green:#15803D; --rf-green-soft:#E9F7EE; --rf-green-ink:#14532D; --rf-green-line:#BFE3CB;
+			--rf-blue:#1D4ED8; --rf-blue-soft:#EAF0FF; --rf-blue-ink:#1E3A8A;
+			--rf-amber:#B45309; --rf-amber-soft:#FFF5E0; --rf-amber-ink:#78350F;
+			--rf-red:#B91C1C; --rf-red-soft:#FDECEC; --rf-red-ink:#7F1D1D;
+			--rf-purple:#7E22CE; --rf-purple-soft:#F5EDFF; --rf-purple-ink:#581C87;
+			background:var(--rf-bg); color:var(--rf-ink); min-height:calc(100vh - var(--navbar-height, 48px));
+			font-family:var(--font-stack, inherit);
+		}
+		[data-theme="dark"] .rf-root {
+			--rf-bg:var(--bg-color); --rf-card:var(--card-bg); --rf-ink:var(--text-color); --rf-ink2:var(--text-color); --rf-muted:var(--text-muted);
+			--rf-line:var(--border-color); --rf-line2:var(--border-color); --rf-soft:var(--control-bg);
+			--rf-acc-soft:#3b2116; --rf-acc-ink:#fdba8c; --rf-acc-tint:#2a1a12;
+			--rf-green-soft:#12301f; --rf-green-ink:#86efac; --rf-green-line:#1f5134;
+			--rf-blue-soft:#172554; --rf-blue-ink:#93c5fd; --rf-amber-soft:#3a2a0c; --rf-amber-ink:#fcd34d;
+			--rf-red-soft:#3b1414; --rf-red-ink:#fca5a5; --rf-purple-soft:#2e1446; --rf-purple-ink:#d8b4fe;
+			--rf-red:#ef4444; --rf-green:#22c55e; --rf-blue:#3b82f6; --rf-amber:#f59e0b; --rf-purple:#a855f7;
+		}
+		.rf-root svg { width:18px; height:18px; flex-shrink:0; }
+		.rf-root button { font-family:inherit; }
+		.rf-spacer { flex:1; }
+		.rf-muted { color:var(--rf-muted); }
+		.rf-empty { color:var(--rf-muted); padding:16px; }
+		.rf-ib { width:44px; height:44px; border-radius:10px; border:1px solid var(--rf-line); background:var(--rf-card); color:var(--rf-ink2);
+			display:inline-flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; padding:0; }
+		.rf-ib.rf-flat { border:0; width:44px; height:44px; }
+		.rf-ib.g { color:var(--rf-green-ink); }
+		.rf-btn { min-height:44px; padding:0 16px; border-radius:10px; border:1px solid var(--rf-line); background:var(--rf-card); color:var(--rf-ink);
+			font-weight:700; font-size:15px; display:inline-flex; align-items:center; justify-content:center; gap:8px; cursor:pointer; white-space:nowrap; }
+		.rf-btn:disabled { opacity:.5; cursor:not-allowed; }
+		.rf-btn-p { background:var(--rf-acc); border-color:var(--rf-acc); color:#fff; }
+		.rf-btn-d { background:var(--rf-ink); border-color:var(--rf-ink); color:var(--rf-card); }
+		.rf-btn.rf-sm, .rf-ib.rf-sm { min-height:44px; height:44px; font-size:13px; padding:0 12px; }
+		.rf-ib.rf-sm { width:44px; padding:0; }
+		.rf-btn.rf-lg { min-height:52px; }
+		.rf-btn.rf-xl { min-height:56px; font-size:17px; width:100%; }
+		.rf-pill { height:36px; padding:0 12px; border-radius:999px; border:0; display:inline-flex; align-items:center; gap:8px; font-size:14px; font-weight:600; white-space:nowrap; }
+		button.rf-pill { cursor:pointer; height:44px; }
+		.rf-pill-green { background:var(--rf-green-soft); color:var(--rf-green-ink); }
+		.rf-pill-amber { background:var(--rf-amber-soft); color:var(--rf-amber-ink); }
+		.rf-pill-gray { background:var(--rf-soft); color:var(--rf-ink2); }
+		.rf-net.ok svg { color:var(--rf-green); }
+		.rf-dotc { width:8px; height:8px; border-radius:50%; background:currentColor; display:inline-block; }
+		.rf-pill-green .rf-dotc { background:var(--rf-green); }
+		.rf-cnt { min-width:22px; height:22px; padding:0 6px; border-radius:999px; background:var(--rf-soft); color:var(--rf-ink); font-size:12px; font-weight:700;
+			display:inline-flex; align-items:center; justify-content:center; }
+		.rf-head { min-height:64px; background:var(--rf-card); border-bottom:1px solid var(--rf-line); display:flex; align-items:center; gap:12px; padding:8px 20px; flex-wrap:wrap; }
+		.rf-brand { display:flex; align-items:center; gap:10px; }
+		.rf-brand > div { display:flex; flex-direction:column; line-height:1.25; }
+		.rf-brand small, .rf-otitle small, .rf-custtxt small { font-size:13px; color:var(--rf-muted); }
+		.rf-logo { width:40px; height:40px; border-radius:10px; background:var(--rf-acc); color:#fff; display:flex; align-items:center; justify-content:center; }
+		.rf-logo svg { width:22px; height:22px; }
+		.rf-userbtn { gap:10px; padding:0 10px; }
+		.rf-av { width:30px; height:30px; border-radius:50%; background:var(--rf-acc-soft); color:var(--rf-acc-ink); display:inline-flex; align-items:center; justify-content:center; font-size:14px; }
+		.rf-av.b { width:34px; height:34px; background:var(--rf-blue-soft); color:var(--rf-blue-ink); }
+		.rf-alerts:empty { display:none; }
+		.rf-alerts { padding:12px 20px 0; display:flex; flex-direction:column; gap:8px; }
+		.rf-banner { display:flex; align-items:center; gap:14px; padding:12px 16px; border-radius:12px; background:var(--rf-amber-soft); color:var(--rf-amber-ink); border:1px solid var(--rf-amber); }
+		.rf-banner > div { flex:1; display:flex; flex-direction:column; gap:2px; }
+		.rf-banner.soft { border-color:var(--rf-line); background:var(--rf-card); color:var(--rf-ink2); justify-content:space-between; }
+		.rf-bar { min-height:72px; display:flex; align-items:center; gap:8px; padding:8px 20px; flex-wrap:wrap; }
+		.rf-tabs { display:flex; gap:4px; background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; padding:4px; flex-wrap:wrap; }
+		.rf-tab { min-height:44px; padding:0 16px; border-radius:10px; border:0; background:transparent; color:var(--rf-muted); font-weight:700; font-size:15px;
+			display:inline-flex; align-items:center; gap:8px; cursor:pointer; }
+		.rf-tab.on { background:var(--rf-ink); color:var(--rf-card); }
+		.rf-tab.on .rf-cnt { background:var(--rf-ink2); color:var(--rf-card); }
+		.rf-acts { display:flex; gap:8px; flex-wrap:wrap; }
+		.rf-main { display:flex; gap:20px; padding:0 20px 20px; align-items:flex-start; }
+		.rf-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:16px; }
+		.rf-side { width:340px; flex-shrink:0; background:var(--rf-card); border:1px solid var(--rf-line); border-radius:14px; overflow:hidden; }
+		.rf-side-h { height:56px; display:flex; align-items:center; gap:8px; padding:0 16px; border-bottom:1px solid var(--rf-line); font-size:16px; }
+		.rf-side-l { display:flex; flex-direction:column; max-height:calc(100vh - 260px); overflow:auto; }
+		.rf-grid { display:grid; gap:16px; }
+		.rf-grid.locked .rf-tbl { opacity:.5; filter:grayscale(.6); }
+		.rf-tbl { position:relative; border-radius:14px; border:2px solid var(--rf-line); padding:16px; display:flex; flex-direction:column; gap:10px; min-height:168px;
+			text-align:start; cursor:pointer; background:var(--rf-card); color:var(--rf-ink); user-select:none; }
+		.rf-tbl:active { transform:scale(.98); }
+		.rf-tbl.round { border-radius:28px; }
+		.rf-ttop, .rf-tfoot { display:flex; align-items:center; gap:8px; width:100%; }
+		.rf-ttop { flex-wrap:wrap; row-gap:4px; }
+		.rf-tbl { min-width:0; }
+		.rf-main { container-type:inline-size; }
+		@container (max-width:1180px) { .rf-side { width:260px; } }
+		@container (max-width:900px) { .rf-side { display:none; } }
+		.rf-tfoot { margin-top:auto; align-items:baseline; flex-wrap:wrap; row-gap:2px; }
+		.rf-tname { font-size:28px; line-height:32px; }
+		.rf-tsub { font-size:14px; color:var(--rf-ink2); }
+		.rf-tamt { font-size:22px; white-space:nowrap; }
+		.rf-tago { font-size:14px; font-weight:700; white-space:nowrap; }
+		@media (max-width:1180px) { .rf-side { width:280px; } .rf-main { gap:14px; padding:0 14px 14px; } .rf-tbl { padding:12px; } .rf-tamt { font-size:19px; } }
+		.rf-thint { font-size:14px; color:var(--rf-muted); }
+		.rf-st { height:26px; padding:0 10px; border-radius:999px; font-size:13px; font-weight:700; display:inline-flex; align-items:center; white-space:nowrap; }
+		.rf-tbl.free { border-color:var(--rf-green-line); }
+		.rf-tbl.free .rf-st { background:var(--rf-green-soft); color:var(--rf-green-ink); }
+		.rf-tbl.occupied { background:var(--rf-blue-soft); border-color:var(--rf-blue); }
+		.rf-tbl.occupied .rf-st { background:var(--rf-blue); color:#fff; } .rf-tbl.occupied .rf-tago { color:var(--rf-blue-ink); }
+		.rf-tbl.bill { background:var(--rf-amber-soft); border-color:var(--rf-amber); }
+		.rf-tbl.bill .rf-st { background:var(--rf-amber); color:#fff; } .rf-tbl.bill .rf-tago { color:var(--rf-amber-ink); }
+		.rf-tbl.reserved { background:var(--rf-purple-soft); border-color:var(--rf-purple); }
+		.rf-tbl.reserved .rf-st { background:var(--rf-purple); color:#fff; } .rf-tres { color:var(--rf-purple-ink); font-weight:700; font-size:14px; }
+		.rf-ready { position:absolute; bottom:-10px; inset-inline-start:12px; background:var(--rf-green); color:#fff; border-radius:999px; padding:2px 10px; font-size:12px; font-weight:700; }
+		.rf-legend { display:flex; gap:20px; align-items:center; font-size:14px; color:var(--rf-ink2); flex-wrap:wrap; }
+		.rf-legend span { display:inline-flex; align-items:center; gap:6px; }
+		.rf-legend i { width:12px; height:12px; border-radius:4px; display:inline-block; }
+		.rf-legend i.free { background:var(--rf-green-soft); border:2px solid var(--rf-green); } .rf-legend i.occupied { background:var(--rf-blue); }
+		.rf-legend i.bill { background:var(--rf-amber); } .rf-legend i.reserved { background:var(--rf-purple); }
+		.rf-orow { all:unset; box-sizing:border-box; cursor:pointer; display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-bottom:1px solid var(--rf-line2); }
+		.rf-orow1, .rf-orow2 { display:flex; align-items:center; gap:8px; }
+		.rf-orow1 { font-size:15px; } .rf-orow2 { font-size:13px; color:var(--rf-muted); flex-wrap:wrap; }
+		.rf-st.k-takeaway { background:var(--rf-acc-soft); color:var(--rf-acc-ink); }
+		.rf-st.k-delivery { background:var(--rf-blue-soft); color:var(--rf-blue-ink); }
+		.rf-st.k-rebill { background:var(--rf-red-soft); color:var(--rf-red-ink); }
+		.rf-ok { color:var(--rf-green-ink); font-weight:700; } .rf-warn { color:var(--rf-amber-ink); font-weight:700; font-size:13px; }
+		.rf-olist { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:12px; }
+		.rf-olist .rf-orow { background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; }
+		.rf-root.rf-mdlg { min-height:0; background:transparent; }
+		.rf-menu-list { display:flex; flex-direction:column; gap:8px; }
+		.rf-menu-btn { width:100%; justify-content:flex-start; min-height:48px; }
+		.rf-menu-btn.rf-danger { color:var(--rf-red-ink); border-color:var(--rf-red-soft); margin-top:8px; }
+		.rf-acting [data-act] { opacity:.6; pointer-events:none; }
+		.rf-unsent { display:inline-flex; align-self:flex-start; height:22px; align-items:center; padding:0 8px; border-radius:999px; font-size:12px; font-weight:700;
+			background:var(--rf-acc-soft); color:var(--rf-acc-ink); }
+		.rf-orow.bill { background:var(--rf-amber-soft); }
+		.rf-onote { padding:8px 14px; background:var(--rf-amber-soft); color:var(--rf-amber-ink); font-size:14px; border-bottom:1px solid var(--rf-line2); white-space:pre-wrap; }
+		.rf-fire { width:100%; border-color:var(--rf-amber); color:var(--rf-amber-ink); }
+		html[dir="ltr"] .rf-root .rf-back svg { transform:scaleX(-1); }
+
+		/* the order */
+		.rf-order { flex-direction:column; height:calc(100vh - var(--navbar-height, 48px)); height:calc(100dvh - var(--navbar-height, 48px)); }
+		.rf-ohead { flex-shrink:0; }
+		.rf-otitle { display:flex; flex-direction:column; line-height:1.3; }
+		.rf-otitle strong { font-size:18px; }
+		.rf-custchip { min-height:48px; display:flex; align-items:center; gap:4px; padding-block:0; padding-inline:6px 4px; border:1px solid var(--rf-line); border-radius:12px; background:var(--rf-card); }
+		.rf-custtxt { display:flex; flex-direction:column; padding:0 6px; min-width:110px; line-height:1.3; font-size:14px; }
+		.rf-ocols { flex:1; min-height:0; display:flex; }
+		.rf-menu { flex:1; min-width:0; display:flex; flex-direction:column; gap:14px; padding:16px 20px; }
+		.rf-srow { display:flex; gap:10px; align-items:center; }
+		.rf-sbox { flex:1; height:48px; display:flex; align-items:center; gap:10px; padding:0 14px; background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; margin:0; }
+		.rf-sbox svg { color:var(--rf-muted); }
+		.rf-sbox input { flex:1; border:0; outline:0; font-size:15px; background:transparent; color:var(--rf-ink); min-width:0; }
+		.rf-sbox kbd { height:26px; padding:0 8px; border-radius:6px; background:var(--rf-soft); color:var(--rf-ink2); font-size:12px; font-weight:700; display:flex; align-items:center; box-shadow:none; }
+		.rf-scan { width:48px; height:48px; }
+		.rf-groups { display:flex; gap:8px; flex-wrap:wrap; flex-shrink:0; max-height:104px; overflow-y:auto; }
+		.rf-chip { min-height:44px; padding:0 14px; border-radius:999px; border:1px solid var(--rf-line); background:var(--rf-card); color:var(--rf-ink2); font-weight:700; font-size:14px;
+			display:inline-flex; align-items:center; cursor:pointer; white-space:nowrap; }
+		.rf-chip.on { background:var(--rf-ink); border-color:var(--rf-ink); color:var(--rf-card); }
+		.rf-items { flex:1; min-height:0; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; align-content:start; }
+		.rf-item { position:relative; border:1px solid var(--rf-line); background:var(--rf-card); border-radius:12px; padding:10px; display:flex; flex-direction:column; gap:8px;
+			cursor:pointer; text-align:start; color:var(--rf-ink); }
 		.rf-item:active { transform:scale(.97); }
-		.rf-item img { width:100%; height:70px; object-fit:cover; border-radius:6px; }
-		.rf-iname { font-weight:600; font-size:13px; }
-		.rf-irate { font-size:12px; opacity:.8; }
-		.rf-cart { border:1px solid var(--border-color); border-radius:10px; padding:10px; display:flex; flex-direction:column; max-height:80vh; }
-		.rf-lines { flex:1; overflow:auto; }
-		.rf-line { display:grid; grid-template-columns: 1fr auto auto auto; gap:6px; align-items:center; padding:6px 0; border-bottom:1px dashed var(--border-color); }
-		.rf-line.void { opacity:.45; text-decoration:line-through; }
-		.rf-mod { font-size:12px; opacity:.8; }
-		.rf-lmeta { font-size:11px; display:flex; gap:6px; flex-wrap:wrap; }
-		.rf-status { padding:0 6px; border-radius:8px; background:var(--gray-100); }
-		.rf-status.s-Ready { background:#c6f6d5 } .rf-status.s-InProgress { background:#feebc8 } .rf-status.s-Sent { background:#bee3f8 } .rf-status.s-Void { background:#fed7d7 }
-		.rf-hold { color:var(--orange-600, #dd6b20); font-weight:600; }
-		.rf-lqty { display:flex; gap:4px; align-items:center; }
-		.rf-totals > div { display:flex; justify-content:space-between; padding:2px 0; }
-		.rf-grand { font-weight:700; font-size:16px; }
-		.rf-buttons { display:grid; grid-template-columns: repeat(2, 1fr); gap:6px; margin-top:8px; }
-		.rf-buttons .btn { padding:10px 4px; }
-		.rf-bill td { padding:4px 8px !important; }`;
+		.rf-item img, .rf-ph { width:100%; height:58px; border-radius:8px; object-fit:cover; }
+		.rf-ph { display:flex; align-items:center; justify-content:center; font-weight:800; font-size:20px; }
+		.rf-ph.c0 { background:var(--rf-acc-soft); color:var(--rf-acc-ink); } .rf-ph.c1 { background:var(--rf-purple-soft); color:var(--rf-purple-ink); }
+		.rf-ph.c2 { background:var(--rf-blue-soft); color:var(--rf-blue-ink); } .rf-ph.c3 { background:var(--rf-amber-soft); color:var(--rf-amber-ink); }
+		.rf-ph.c4 { background:var(--rf-green-soft); color:var(--rf-green-ink); } .rf-ph.c5 { background:var(--rf-soft); color:var(--rf-ink2); }
+		.rf-iname { font-size:14px; font-weight:700; line-height:20px; min-height:40px; }
+		.rf-irate { font-size:15px; font-weight:800; }
+		.rf-bdg { position:absolute; top:8px; inset-inline-start:8px; min-width:26px; height:26px; border-radius:999px; background:var(--rf-acc); color:#fff; font-size:13px; font-weight:800;
+			display:flex; align-items:center; justify-content:center; padding:0 6px; }
+		.rf-cart { width:430px; flex-shrink:0; background:var(--rf-card); border-inline-start:1px solid var(--rf-line); display:flex; flex-direction:column; min-height:0; }
+		.rf-chead { min-height:52px; flex-shrink:0; display:flex; align-items:center; gap:8px; padding:0 14px; border-bottom:1px solid var(--rf-line); font-size:16px; }
+		.rf-ccount { font-size:13px; color:var(--rf-muted); }
+		.rf-lines { flex:1; min-height:0; overflow:auto; }
+		.rf-ln { display:flex; flex-direction:column; gap:6px; padding:8px 14px; border-bottom:1px solid var(--rf-line2); }
+		.rf-ln.fresh { background:var(--rf-acc-tint); }
+		.rf-ln.void { opacity:.5; } .rf-ln.void .rf-lnm b, .rf-ln.void .rf-lamt { text-decoration:line-through; }
+		.rf-ln.pending { opacity:.75; }
+		.rf-ln1, .rf-ln2 { display:flex; align-items:center; gap:8px; }
+		.rf-ln1 { align-items:flex-start; }
+		.rf-lnm { flex:1; display:flex; flex-direction:column; gap:2px; font-size:15px; }
+		.rf-lnm small { font-size:13px; color:var(--rf-muted); }
+		.rf-lamt { font-size:15px; white-space:nowrap; }
+		.rf-tag { height:24px; padding:0 8px; border-radius:999px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:4px; white-space:nowrap;
+			background:var(--rf-blue-soft); color:var(--rf-blue-ink); }
+		.rf-tag svg { width:12px; height:12px; }
+		.rf-tag.t-new { background:var(--rf-acc-soft); color:var(--rf-acc-ink); }
+		.rf-tag.t-saving { background:var(--rf-soft); color:var(--rf-ink2); } .rf-tag.t-saving svg { animation:rf-spin 1s linear infinite; }
+		.rf-tag.t-Ready, .rf-tag.t-Served { background:var(--rf-green-soft); color:var(--rf-green-ink); }
+		.rf-tag.t-Void { background:var(--rf-red-soft); color:var(--rf-red-ink); }
+		.rf-tag.t-bill { background:var(--rf-amber-soft); color:var(--rf-amber-ink); vertical-align:middle; }
+		@keyframes rf-spin { to { transform:rotate(360deg); } }
+		.rf-hint { font-size:13px; color:var(--rf-muted); }
+		.rf-stp { display:flex; align-items:center; border:1px solid var(--rf-line); border-radius:10px; overflow:hidden; height:44px; }
+		.rf-stp button { width:44px; height:44px; border:0; background:var(--rf-card); color:var(--rf-ink); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+		.rf-stp span { min-width:36px; text-align:center; font-weight:800; font-size:15px; }
+		.rf-del { color:var(--rf-red); }
+		.rf-cfoot { flex-shrink:0; border-top:1px solid var(--rf-line); padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+		.rf-totals { display:flex; flex-direction:column; gap:4px; font-size:14px; color:var(--rf-ink2); }
+		.rf-trow { display:flex; }
+		.rf-grand { display:flex; align-items:baseline; padding:10px 12px; border-radius:12px; background:var(--rf-bg); color:var(--rf-ink); margin-top:4px; font-size:16px; }
+		.rf-gv { font-size:26px; }
+		.rf-cbtns { display:flex; flex-direction:column; gap:8px; }
+		.rf-c2 { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+		@media (max-width: 1100px) {
+			.rf-cart { width:360px; } .rf-side { width:280px; } .rf-hide-sm { display:none !important; }
+			.rf-items { grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); }
+		}
+		@media (max-width: 820px) {
+			.rf-main { flex-direction:column; } .rf-side { width:100%; }
+			.rf-order { height:auto; } .rf-ocols { flex-direction:column; } .rf-cart { width:100%; border-inline-start:0; border-top:1px solid var(--rf-line); }
+			.rf-items { max-height:55vh; } .rf-grid { grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)) !important; }
+			.rf-grid .rf-tbl { grid-row:auto !important; grid-column:auto !important; }
+		}
+
+		/* payment */
+		.rf-root.rf-pay { min-height:0; background:transparent; display:flex; gap:0; margin:-4px; }
+		.rf-pbill { width:380px; flex-shrink:0; background:var(--rf-bg); border-inline-end:1px solid var(--rf-line); display:flex; flex-direction:column; padding:16px; gap:12px; border-radius:12px; }
+		.rf-pcust { display:flex; align-items:center; gap:10px; min-height:48px; padding:0 12px; background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; }
+		.rf-plines { flex:1; min-height:200px; max-height:46vh; overflow:auto; background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; display:flex; flex-direction:column; font-size:14px; }
+		.rf-prow { display:flex; padding:10px 12px; border-bottom:1px solid var(--rf-line2); gap:8px; }
+		.rf-ptot { padding:10px 12px; border-top:1px solid var(--rf-line); }
+		.rf-ptiles { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+		.rf-ptile { border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:2px; font-size:13px; }
+		.rf-ptile b { font-size:24px; }
+		.rf-ptile.b { background:var(--rf-blue-soft); color:var(--rf-blue-ink); }
+		.rf-ptile.g { background:var(--rf-green-soft); color:var(--rf-green-ink); }
+		.rf-ptile.r { background:var(--rf-red-soft); color:var(--rf-red-ink); }
+		.rf-pkeys { flex:1; min-width:0; display:flex; flex-direction:column; gap:14px; padding:16px 20px; }
+		.rf-pmodes { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px; }
+		.rf-mth { min-height:64px; border-radius:12px; border:2px solid var(--rf-line); background:var(--rf-card); color:var(--rf-ink); font-weight:800; font-size:15px;
+			display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; cursor:pointer; }
+		.rf-mth small { font-size:13px; color:var(--rf-acc-ink); min-height:16px; }
+		.rf-mth.on { border-color:var(--rf-acc); background:var(--rf-acc-soft); }
+		.rf-plabel { font-size:13px; display:block; margin-bottom:6px; }
+		.rf-quicks { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; }
+		.rf-qa { min-height:48px; border-radius:10px; border:1px solid var(--rf-line); background:var(--rf-card); color:var(--rf-ink); font-weight:800; font-size:15px; cursor:pointer; }
+		.rf-qa.exact { border-color:var(--rf-acc); background:var(--rf-acc-soft); color:var(--rf-acc-ink); }
+		.rf-pinput { display:flex; flex-direction:column; gap:10px; }
+		.rf-pentry { height:56px; border-radius:10px; background:var(--rf-bg); border:1px solid var(--rf-line); display:flex; align-items:center; padding:0 16px; gap:8px; }
+		.rf-pentry .rf-pmode { font-size:14px; color:var(--rf-muted); } .rf-pval { font-size:26px; }
+		.rf-pad { display:flex; gap:14px; }
+		.rf-keys { flex:1; display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
+		.rf-kside { width:170px; display:flex; flex-direction:column; gap:8px; }
+		.rf-k { min-height:52px; border-radius:10px; border:1px solid var(--rf-line); background:var(--rf-card); color:var(--rf-ink); font-size:22px; font-weight:800; cursor:pointer; }
+		.rf-k:active, .rf-qa:active, .rf-mth:active { transform:scale(.97); }
+		.rf-kdel { color:var(--rf-red); } .rf-kclr { font-size:17px; color:var(--rf-acc-ink); }
+		.rf-kadd { flex:1; background:var(--rf-ink); border-color:var(--rf-ink); color:var(--rf-card); font-size:18px; }
+		.rf-added { display:flex; flex-direction:column; gap:6px; font-size:14px; }
+		.rf-added:not(:empty) { padding:10px; border:1px solid var(--rf-line); border-radius:10px; }
+		.rf-onacc { display:flex; align-items:center; gap:8px; font-weight:700; margin:0; }
+		.rf-pnote:empty { display:none; }
+		.rf-pacts { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1.4fr); gap:10px; }
+		.rf-pacts .rf-btn { min-height:56px; }
+		.rf-pacts kbd { height:24px; padding:0 8px; border-radius:6px; background:var(--rf-soft); color:var(--rf-ink2); font-size:12px; display:flex; align-items:center; box-shadow:none; }
+		.rf-pdone { font-size:17px; }
+		.rf-psplit { align-self:flex-start; }
+		.rf-paidmsg { font-size:16px; display:flex; flex-direction:column; gap:8px; }
+		.rf-paidchg { font-size:22px; }
+		@media (max-width: 900px) { .rf-root.rf-pay { flex-direction:column; } .rf-pbill { width:auto; } .rf-quicks { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+		/* invoices (D-215) */
+		.rf-inv { flex:1; min-height:0; display:flex; gap:16px; padding:0 16px 16px; }
+		.rf-inv-l { flex:1.15; min-width:0; display:flex; flex-direction:column; gap:10px; }
+		.rf-inv-d { flex:1; min-width:0; overflow:auto; background:var(--rf-card); border:1px solid var(--rf-line); border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:12px; }
+		.rf-inv-tabs { flex-wrap:wrap; }
+		.rf-inv-kpi { display:flex; gap:10px; } .rf-inv-kpi:empty { display:none; }
+		.rf-kpi { flex:1; background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; padding:10px 14px; display:flex; flex-direction:column; gap:4px; }
+		.rf-kpi span { font-size:13px; color:var(--rf-muted); } .rf-kpi b { font-size:20px; }
+		.rf-chips { display:flex; gap:8px; flex-wrap:wrap; } .rf-chips:empty { display:none; }
+		.rf-inv-list { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; gap:8px; }
+		.rf-inv-l > * { flex-shrink:0; } .rf-inv-l > .rf-inv-list { flex:1 1 0; min-height:120px; } .rf-inv-l .rf-sbox { flex:none; }
+		.rf-invr { flex-shrink:0; }
+		.rf-invr { all:unset; box-sizing:border-box; cursor:pointer; display:flex; flex-direction:column; gap:6px; padding:12px 14px; min-height:44px;
+			background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; }
+		.rf-invr.on { border-color:var(--rf-acc); box-shadow:0 0 0 1px var(--rf-acc); }
+		.rf-invr .rf-orow1 .rf-muted { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+		.rf-inv-more { align-self:center; }
+		.rf-invd-h { display:flex; align-items:center; gap:10px; flex-wrap:wrap; } .rf-invd-n { font-size:20px; }
+		.rf-invd-t { width:100%; border-collapse:collapse; font-size:14px; }
+		.rf-invd-t th { text-align:start; color:var(--rf-muted); font-weight:700; padding:6px 4px; border-bottom:1px solid var(--rf-line); }
+		.rf-invd-t td { padding:8px 4px; border-bottom:1px solid var(--rf-line2); }
+		.rf-invd-t th:not(:first-child), .rf-invd-t td:not(:first-child) { text-align:end; white-space:nowrap; }
+		.rf-tots { display:flex; flex-direction:column; gap:6px; padding-top:8px; border-top:1px solid var(--rf-line); }
+		.rf-tbig { font-size:18px; }
+		.rf-here.on { border-color:var(--rf-green); color:var(--rf-green-ink); background:var(--rf-green-soft); }
+		.rf-st.k-ok { background:var(--rf-green-soft); color:var(--rf-green-ink); }
+		.rf-st.k-warn { background:var(--rf-amber-soft); color:var(--rf-amber-ink); }
+		.rf-st.k-void { background:var(--rf-red-soft); color:var(--rf-red-ink); }
+		@media (max-width:900px) { .rf-inv { flex-direction:column; overflow:auto; } .rf-inv-l, .rf-inv-d { flex:none; } .rf-inv-list { max-height:60vh; } }
+`;
 	}
 }

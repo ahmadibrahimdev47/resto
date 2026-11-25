@@ -57,7 +57,8 @@
   "column_break_7",
   "notes",
   "print_sides",
-  "cancel_reason"
+  "cancel_reason",
+  "client_ops"
  ],
  "fields": [
   {
@@ -395,13 +396,22 @@
    "read_only": 1,
    "no_copy": 1,
    "label": "Cancel Reason"
+  },
+  {
+   "fieldname": "client_ops",
+   "fieldtype": "Small Text",
+   "label": "Floor Changes Applied",
+   "hidden": 1,
+   "read_only": 1,
+   "no_copy": 1,
+   "description": "The ids of the floor screen's last changes, so a change sent again after the connection dropped is applied once."
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-22 18:00:00.000000",
+ "modified": "2026-11-25 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",

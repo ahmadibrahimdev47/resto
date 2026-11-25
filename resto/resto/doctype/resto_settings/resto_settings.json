@@ -185,7 +185,7 @@
    "fieldname": "require_pos_shift",
    "fieldtype": "Check",
    "label": "Require an Open Shift",
-   "description": "The cashier opens a shift on the floor screen (Open Shift) before settling a bill, so the shift closing counts it."
+   "description": "No order is taken, sent or billed without an open shift: a cashier or manager opens their own (Open Shift on the floor screen); a waiter works while any cashier's shift is open. The shift closing counts every bill."
   },
   {
    "default": "0",
@@ -419,7 +419,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-25 18:00:00.000000",
+ "modified": "2026-11-25 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

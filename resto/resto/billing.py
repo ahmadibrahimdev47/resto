@@ -420,6 +420,18 @@ def _sent_total(payments):
 	return sum(flt(p.get("amount")) for p in payments or [])
 
 
+def _by_mode(payments):
+	"""{mode: amount} of a payment list (sent, or an invoice's rows), zero amounts left out."""
+	if isinstance(payments, str):
+		payments = json.loads(payments)
+	out = {}
+	for p in payments or []:
+		mode, amount = p.get("mode_of_payment"), flt(p.get("amount"))
+		if amount:
+			out[mode] = out.get(mode, 0) + amount
+	return out
+
+
 def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0, approver=None, pin=None):
 	"""Create and submit the POS Sales Invoice, then mark the billed lines.
 
@@ -434,8 +446,12 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 		done = next((d for d in order.invoices if d.request_id == request_id and not d.cancelled), None)
 		if done:
 			si = frappe.get_doc("Sales Invoice", done.sales_invoice)
-			# The same click again, after a lost answer: the same payment, or it is not the same click.
-			if payments and abs(_sent_total(payments) - flt(si.paid_amount)) > 0.005:
+			# The same click again, after a lost answer: the same amounts on the same methods, or it is
+			# not the same click (a card taken where the invoice says cash would go unseen).
+			sent, kept = _by_mode(payments), _by_mode([p.as_dict() for p in si.payments])
+			if payments and (
+				set(sent) != set(kept) or any(abs(sent[m] - kept[m]) > 0.005 for m in sent)
+			):
 				frappe.throw(
 					_("This bill was already settled as invoice {0} with {1} paid; check it before taking another payment").format(
 						si.name, frappe.format(si.paid_amount, "Currency")

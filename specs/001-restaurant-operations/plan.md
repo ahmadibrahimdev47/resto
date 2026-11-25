@@ -93,5 +93,5 @@ Orders and totals, routing, send/void tickets, move/merge, billing with service 
 split by lines, POSNext shift link, prep stock entries, waste stock entries.
 
 ## Deploy
-Commit → push → `git pull` on the VM → `bench --site erp.local migrate` → user restarts
+Commit → push → `git pull` on the server → `bench --site <site> migrate` → restart
 (`sudo supervisorctl restart all`) when hooks or Python modules change.

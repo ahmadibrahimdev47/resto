@@ -23,6 +23,8 @@ class TestFloorCustomers(IntegrationTestCase):
 		fx.ensure_setup()
 
 	def setUp(self):
+		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 		frappe.set_user(CASHIER)
 
 	def tearDown(self):
@@ -191,23 +193,68 @@ class TestFloorShift(IntegrationTestCase):
 		self.assertRaises(frappe.ValidationError, frappe.get_doc("Sales Invoice", paid["sales_invoice"]).cancel)
 		self.assertRaises(frappe.ValidationError, frappe.get_doc("Journal Entry", je).cancel)
 
-	def test_a_bill_needs_an_open_shift_when_required(self):
+	def test_no_order_without_an_open_shift_when_required(self):
 		frappe.set_user("Administrator")
+		order = floor.create_order(order_type="Takeaway")  # made while shifts were not required
 		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 1)
 		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		dish = json.dumps([{"item_code": "DISH-FRIES", "qty": 1}])
+		# No shift open anywhere: neither the cashier nor a waiter can start or add to an order (D-211).
 		frappe.set_user(CASHIER)
-		order, bill = self.takeaway()
-		pay = json.dumps([{"mode_of_payment": "Cash", "amount": bill["payable"]}])
-		self.assertRaises(frappe.ValidationError, floor.settle, order, pay, None, bill["payable"])
+		self.assertFalse(floor.get_floor()["can_order"])
+		self.assertRaises(frappe.ValidationError, floor.create_order, order_type="Takeaway")
+		self.assertRaises(frappe.ValidationError, floor.add_items, order, dish)
+		frappe.set_user("waiter@resto.test")
+		self.assertRaises(frappe.ValidationError, floor.create_order, order_type="Takeaway")
+
+		# The cashier opens their shift: both can work, and the bill is on that shift.
+		frappe.set_user(CASHIER)
 		name = shift.open_shift(json.dumps({"Cash": 0}))
-		r = floor.settle(order, pay, None, bill["payable"])
+		frappe.set_user("waiter@resto.test")
+		self.assertTrue(floor.get_floor()["can_order"])
+		floor.add_items(order, dish)
+		frappe.set_user(CASHIER)
+		bill = floor.get_bill(order)
+		r = floor.settle(order, json.dumps([{"mode_of_payment": "Cash", "amount": bill["payable"]}]), None, bill["payable"])
 		self.assertEqual(frappe.db.get_value("Sales Invoice", r["sales_invoice"], "resto_shift"), name)
 		data = shift.closing_data()
 		shift.close_shift(json.dumps({x["mode_of_payment"]: x["expected_amount"] for x in data["rows"]}))
-		order2, bill2 = self.takeaway()
-		self.assertRaises(
-			frappe.ValidationError, floor.settle, order2, json.dumps([{"mode_of_payment": "Cash", "amount": bill2["payable"]}]), None, bill2["payable"]
-		)
+		# Closed: nothing new until a shift is open again.
+		self.assertRaises(frappe.ValidationError, floor.create_order, order_type="Takeaway")
+		frappe.set_user("waiter@resto.test")
+		self.assertRaises(frappe.ValidationError, floor.create_order, order_type="Takeaway")
+		# Nor from the order form or the REST API.
+		form = frappe.get_doc({"doctype": "Resto Order", "order_type": "Takeaway", "items": [{"item_code": "DISH-FRIES", "qty": 1}]})
+		self.assertRaises(frappe.ValidationError, form.insert)
+
+	def test_taps_come_together_and_the_order_comes_back(self):
+		order = floor.create_order(order_type="Takeaway")
+		view = floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 3}, {"item_code": "DRK-COLA", "qty": 1}]), 1)
+		self.assertEqual(view["name"], order)
+		self.assertEqual(sorted((d["item_code"], d["qty"]) for d in view["items"]), [("DISH-FRIES", 3), ("DRK-COLA", 1)])
+		self.assertAlmostEqual(flt(view["net_total"]), 3 * 40 + 25, 2)
+		line = next(d["name"] for d in view["items"] if d["item_code"] == "DRK-COLA")
+		view = floor.update_line(order, line, 2, view=1)
+		self.assertEqual(next(d["qty"] for d in view["items"] if d["name"] == line), 2)
+		view = floor.remove_line(order, line, 1)
+		self.assertEqual([d["item_code"] for d in view["items"]], ["DISH-FRIES"])
+
+	def test_a_change_sent_again_after_the_connection_dropped_counts_once(self):
+		order = floor.create_order(order_type="Takeaway")
+		items = json.dumps([{"item_code": "DISH-FRIES", "qty": 2}])
+		floor.add_items(order, items, 1, "op-a1")
+		view = floor.add_items(order, items, 1, "op-a1")  # the answer was lost; the screen sends it again
+		self.assertEqual([(d["item_code"], d["qty"]) for d in view["items"]], [("DISH-FRIES", 2)])
+		line = view["items"][0]["name"]
+		# + and − send a step: what another screen added meanwhile stays.
+		floor.update_line(order, line, step=1, view=1, op="op-s1")
+		self.assertEqual(floor.update_line(order, line, step=1, view=1, op="op-s1")["items"][0]["qty"], 3)
+		self.assertEqual(floor.update_line(order, line, step=-1, view=1, op="op-s2")["items"][0]["qty"], 2)
+		floor.remove_line(order, line, 1, "op-r1")
+		self.assertEqual(floor.remove_line(order, line, 1, "op-r1")["items"], [])
+		floor.add_items(order, items, 1, "op-a2")  # a new change is applied
+		self.assertEqual(len(floor.get_order(order)["items"]), 1)
+		self.assertRaises(frappe.ValidationError, floor.add_items, order, items, 1, "bad id; drop")
 
 	def test_a_debt_paid_to_the_cashier_is_in_the_drawer(self):
 		# A bill left partly on account (by the manager, who gives credit to any named customer).
@@ -255,12 +302,52 @@ class TestFloorShift(IntegrationTestCase):
 		result = shift.close_shift(json.dumps({r["mode_of_payment"]: 0 for r in data["rows"]}))
 		self.assertAlmostEqual(next(r for r in result["rows"] if r["mode_of_payment"] == "Cash")["difference"], -10, 2)
 
+	def test_invoice_history_live_figures_and_shift_history(self):
+		from resto.resto import history
+
+		name = shift.open_shift(json.dumps({"Cash": 0}))
+		order, bill = self.takeaway(2)
+		paid = floor.settle(order, json.dumps([{"mode_of_payment": "Cash", "amount": bill["payable"]}]), None, bill["payable"])
+		si = paid["sales_invoice"]
+
+		found = history.invoices(txt=si)["invoices"]
+		self.assertEqual([r.name for r in found], [si])
+		self.assertEqual(found[0].modes, ["Cash"])
+		self.assertAlmostEqual(found[0].total, flt(bill["payable"]), 2)
+		self.assertIn(si, [r.name for r in history.invoices(status="paid")["invoices"]])
+		self.assertNotIn(si, [r.name for r in history.invoices(status="unpaid")["invoices"]])
+		self.assertNotIn(si, [r.name for r in history.invoices(period="yesterday")["invoices"]])
+		self.assertIn(si, [r.name for r in history.invoices(txt=si, period="any")["invoices"]])
+
+		live = history.live()
+		self.assertEqual(live["shift"], name)
+		self.assertGreaterEqual(live["sales_count"], 1)
+		self.assertAlmostEqual(live["net_cash"], flt(bill["payable"]), 2)
+		# Counted blind: the running money is not shown to the cashier.
+		frappe.set_user("Administrator")
+		frappe.db.set_single_value("Resto Settings", "blind_shift_count", 1)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.set_user(CASHIER)
+		self.assertNotIn("net_cash", history.live())
+
+		rows = history.shifts()
+		self.assertEqual(rows[0].name, name)
+		self.assertIsNone(rows[0].net_sales)  # open: its figures are the live ones
+		self.assertTrue(all(r.user == CASHIER for r in rows))
+		# A waiter has no history to see.
+		frappe.set_user("waiter@resto.test")
+		self.assertRaises(frappe.PermissionError, history.invoices)
+
 
 class TestSameDishTappedAgain(IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
 		fx.ensure_setup()
+
+	def setUp(self):
+		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 
 	def lines(self, order):
 		return [(d.item_code, d.qty, d.kitchen_status) for d in frappe.get_doc("Resto Order", order).items]

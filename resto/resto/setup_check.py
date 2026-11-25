@@ -162,12 +162,14 @@ class SetupCheck:
 		users = set(frappe.get_all("POS Profile User", {"parent": p.name, "parenttype": "POS Profile"}, pluck="user"))
 		if users:
 			cashiers = set(
-				frappe.get_all("Has Role", {"role": "Resto Cashier", "parenttype": "User"}, pluck="parent")
+				frappe.get_all(
+					"Has Role", {"role": ("in", ("Resto Cashier", "Resto Manager")), "parenttype": "User"}, pluck="parent"
+				)
 			) - {"Administrator"}
 			enabled = set(frappe.get_all("User", {"name": ("in", list(cashiers) or [""]), "enabled": 1}, pluck="name"))
 			missing = sorted(enabled - users)
 			if missing:
-				self.warn(area, _("Cashiers who cannot open a shift (not users of POS Profile {0}): {1}").format(p.name, short(missing)))
+				self.warn(area, _("Cashiers or managers who cannot open a shift, so cannot take orders (not users of POS Profile {0}): {1}").format(p.name, short(missing)))
 		# Each payment method needs its account: the shift's drawer expenses are paid from it.
 		for m in frappe.get_all("POS Payment Method", {"parent": p.name, "parenttype": "POS Profile"}, pluck="mode_of_payment"):
 			if not frappe.db.get_value("Mode of Payment Account", {"parent": m, "company": p.company}, "default_account"):
