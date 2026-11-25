@@ -7,7 +7,7 @@ import json
 
 import frappe
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_to_date, get_datetime, now_datetime
+from frappe.utils import add_to_date, flt, get_datetime, now_datetime
 
 from resto.resto import floor
 from resto.tests import fixtures as fx
@@ -69,6 +69,33 @@ class TestOfflinePrint(IntegrationTestCase):
 		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 2}), op="offlineSend2")
 		self.assertEqual([(d.qty, d.kitchen_status) for d in self.lines(order)], [(2, "Sent"), (1, "Not Sent")])
 		self.assertEqual(frappe.db.get_value("Resto Order", order, "net_total"), before, "the bill is unchanged")
+
+	def test_the_lines_the_device_printed_are_matched_first(self):
+		# A plain line from another screen, then the line this device printed (with a note).
+		order = floor.create_order(order_type="Takeaway", customer_name="Offline Guest")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1, "notes": "mine"}]))
+		mine = next(d.name for d in self.lines(order) if d.notes == "mine")
+		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 1}), op="offlineSend7", lines=json.dumps([mine]))
+		self.assertEqual({d.notes or "": d.kitchen_status for d in self.lines(order)}, {"": "Not Sent", "mine": "Sent"})
+
+	def test_the_rest_of_a_split_line_keeps_its_price(self):
+		order = floor.create_order(order_type="Takeaway", customer_name="Offline Guest")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 3}]))
+		line = self.lines(order)[0]
+		frappe.db.set_value("Resto Order Item", line.name, "rate", flt(line.rate) + 7)  # priced before a change
+		rate = flt(line.rate) + 7
+		floor.send_to_kitchen(order, printed=json.dumps({"DISH-FRIES": 2}), op="offlineSend8")
+		self.assertEqual([flt(d.rate) for d in self.lines(order)], [rate, rate])
+
+	def test_a_void_carries_the_number_of_the_ticket_it_cancels(self):
+		order = self.order_with("one")
+		floor.send_to_kitchen(order)
+		line = self.lines(order)[0]
+		frappe.db.set_value("Resto Kitchen Ticket", line.ticket, "order_no", 999)  # as an order merged in
+		floor.void_line(order, line.name, "Wrong dish")
+		void = frappe.get_all("Resto Kitchen Ticket", filters={"resto_order": order, "ticket_type": "Void"}, pluck="order_no")
+		self.assertEqual(void, [999])
 
 	def test_printed_but_not_on_the_order_is_noted_for_the_cashier(self):
 		order = self.order_with("one")

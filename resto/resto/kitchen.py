@@ -43,7 +43,7 @@ TRANSITIONS = {
 }
 
 
-def send_lines(order, course=None, printed=None, at=None):
+def send_lines(order, course=None, printed=None, at=None, lines=None):
 	"""Send unsent lines (not held, or of the fired course) to their stations.
 
 	printed: {item: qty} printed by a floor screen without a connection (D-219): only unsent lines
@@ -51,9 +51,12 @@ def send_lines(order, course=None, printed=None, at=None):
 	their tickets are marked printed, so no printer prints them again. A plain line (nothing of its
 	own) with more dishes than printed is split: the printed part is sent, the rest stays unsent.
 	What was printed but not found is left in order.flags.resto_printed_left. at: when it was sent.
+	lines: the names of printed lines the device had from the server: matched first, then the others,
+	newest first (the dishes just added are the ones printed).
 
 	Returns the created tickets. The caller saves the order.
 	"""
+	named = set(lines or [])
 	lines = [
 		d
 		for d in order.items
@@ -61,6 +64,7 @@ def send_lines(order, course=None, printed=None, at=None):
 	]
 	if printed is not None:
 		left, chosen = dict(printed), []
+		lines = sorted(lines, key=lambda d: (d.name not in named, -cint(d.idx)))
 		for d in lines:
 			have = flt(left.get(d.item_code))
 			if have >= flt(d.qty) - 1e-9:
@@ -68,7 +72,7 @@ def send_lines(order, course=None, printed=None, at=None):
 				chosen.append(d)
 			elif have > 1e-9 and _plain(d):
 				# The same dish tapped again (here or on another screen) after the paper was printed.
-				order.append(
+				rest = order.append(
 					"items",
 					{
 						"item_code": d.item_code,
@@ -78,6 +82,8 @@ def send_lines(order, course=None, printed=None, at=None):
 						"billed_qty": 0,
 					},
 				)
+				# The same price as the line it comes from (not today's price list).
+				rest.flags.resto_rate = d.rate
 				d.qty = have
 				left[d.item_code] = 0
 				chosen.append(d)
@@ -153,6 +159,11 @@ def void_lines(order, lines, reason):
 	return tickets
 
 
+def _void_order_no(rows):
+	ticket = next((d.ticket for d in rows if d.get("ticket")), None)
+	return frappe.db.get_value("Resto Kitchen Ticket", ticket, "order_no") if ticket else None
+
+
 def _strike_on_ticket(ticket, order_item):
 	frappe.db.sql(
 		"update `tabResto Kitchen Ticket Item` set voided = 1 where parent = %s and order_item = %s", (ticket, order_item)
@@ -183,7 +194,8 @@ def _make_ticket(order, station, ticket_type, rows, now, printed=False):
 			# Order tickets only: a void refers to the number of the ticket it cancels.
 			"daily_no": _daily_no(station, now) if ticket_type == "Order" else None,
 			# The order's number on every ticket of it (D-221), and which send this is (not on a void).
-			"order_no": order.get("order_no"),
+			# A void takes the number on the paper of what it cancels (an order merged in keeps its own).
+			"order_no": _void_order_no(rows) or order.get("order_no") if ticket_type == "Void" else order.get("order_no"),
 			"send_round": cint(order.get("send_rounds")) or None if ticket_type == "Order" else None,
 		}
 	)
@@ -680,7 +692,7 @@ def print_alerts():
 			"status": ("in", TO_PRINT_STATUSES),
 			"sent_at": ("between", (add_to_date(now, hours=-ALERT_HOURS), add_to_date(now, seconds=-UNPRINTED_SECONDS))),
 		},
-		fields=["name", "station", "resto_table", "resto_order", "order_type", "ticket_type", "sent_at", "daily_no"],
+		fields=["name", "station", "resto_table", "resto_order", "order_type", "ticket_type", "sent_at", "daily_no", "order_no"],
 		order_by="sent_at asc",
 		limit=30,
 	)

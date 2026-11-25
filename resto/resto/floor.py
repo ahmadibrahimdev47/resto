@@ -283,7 +283,10 @@ def _bill_rules(settings):
 		"rounding_method": frappe.get_system_settings("rounding_method") or "Banker's Rounding",
 		"exact": int(
 			not any(t.charge_type not in ("Actual", "On Net Total", "On Previous Row Amount", "On Previous Row Total") for t in taxes)
-			and not cint(frappe.db.get_single_value("Accounts Settings", "round_row_wise_tax"))
+			and not (
+				frappe.get_meta("Accounts Settings").has_field("round_row_wise_tax")
+				and cint(frappe.db.get_single_value("Accounts Settings", "round_row_wise_tax"))
+			)
 			and not frappe.db.exists("Item Tax", {"parenttype": ("in", ("Item", "Item Group"))})
 		),
 	}
@@ -615,14 +618,17 @@ def _plain_unsent_line(doc, it):
 
 
 @frappe.whitelist(methods=["POST"])
-def add_items(order, items, view=0, op=None):
+def add_items(order, items, view=0, op=None, kitchen_printed=0):
 	"""Add dishes; several taps come together in one call (D-210). view: return the order as the
-	floor shows it, instead of its name. op: the change's id, so a retry adds nothing (D-213)."""
+	floor shows it, instead of its name. op: the change's id, so a retry adds nothing (D-213).
+	kitchen_printed: these dishes were on a kitchen ticket printed without a connection (D-219): they
+	were cooked, so they are recorded even if the shift closed meanwhile."""
 	require_role(WAITER, CASHIER)
 	doc, done = _get_order_once(order, op)
 	if done:
 		return _order_view(doc) if cint(view) else doc.name
-	shift.require_ordering()
+	if not cint(kitchen_printed):
+		shift.require_ordering()
 	for it in _loads(items, []):
 		qty = flt(it.get("qty") or 1)
 		same = _plain_unsent_line(doc, it)
@@ -649,7 +655,7 @@ def add_items(order, items, view=0, op=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def update_line(order, line, qty=None, notes=None, course=None, hold=None, view=0, op=None, step=None):
+def update_line(order, line, qty=None, notes=None, course=None, hold=None, view=0, op=None, step=None, kitchen_printed=0):
 	"""step: add to the quantity the server has (+1 / -1 from the floor's buttons, D-213), so a change
 	made meanwhile on another screen is kept; at zero or below the line goes."""
 	require_role(WAITER, CASHIER)
@@ -675,8 +681,8 @@ def update_line(order, line, qty=None, notes=None, course=None, hold=None, view=
 		row.course = course or None
 	if hold is not None:
 		row.hold = cint(hold)
-	if qty is not None and flt(qty) > old_qty:
-		shift.require_ordering()  # more dishes is ordering
+	if qty is not None and flt(qty) > old_qty and not cint(kitchen_printed):
+		shift.require_ordering()  # more dishes is ordering (not when already cooked from a paper, D-219)
 	_reopen_if_billed(doc)
 	_save(doc)
 	return _order_view(doc) if cint(view) else doc.name
@@ -782,23 +788,33 @@ def remove_line(order, line, view=0, op=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def send_to_kitchen(order, printed=None, view=0, op=None, printed_at=None):
+def send_to_kitchen(order, printed=None, view=0, op=None, printed_at=None, lines=None):
 	"""printed: {item: qty} a floor screen printed itself while it had no connection (D-219), sent
 	from its outbox once the connection is back. Only those dishes are recorded as sent, at the time
 	they were printed (printed_at), and their tickets are not printed again. op: the send's id, so a
 	send that reached the server before its answer was lost is not recorded twice (the floor prints
-	it on the device then, with the same id)."""
+	it on the device then, with the same id). lines: the printed lines the device had from the server,
+	matched first."""
 	require_role(WAITER, CASHIER)
 	if printed is None:
 		# What was printed on paper is recorded even if the shift closed meanwhile: it was cooked.
 		shift.require_ordering()
 	doc, done = _get_order_once(order, op) if op else (_get_order(order), False)
 	if done:
+		if printed is not None:
+			# The send had reached the kitchen before the device printed it too: two papers.
+			doc.add_comment(
+				"Info",
+				_("A kitchen ticket was printed on a device after the same send had reached the kitchen: the kitchen may have these dishes on two papers."),
+			)
 		return _order_view(doc) if cint(view) else []
 	if printed is not None:
 		data = _loads(printed, {})
 		budget = {k: flt(v) for k, v in (data if isinstance(data, dict) else {}).items() if flt(v) > 0}
-		tickets = kitchen.send_lines(doc, printed=budget, at=_printed_at(doc, printed_at))
+		names = _loads(lines, []) if lines else []
+		tickets = kitchen.send_lines(
+			doc, printed=budget, at=_printed_at(doc, printed_at), lines=names if isinstance(names, list) else []
+		)
 	else:
 		tickets = kitchen.send_lines(doc)
 	_save(doc)
@@ -1330,7 +1346,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 		billing.check_on_account(doc, approver, pin, owed)
 	if doc.order_type != "Dine In" and any(d.kitchen_status == "Not Sent" for d in doc.active_lines()):
 		# Takeaway and delivery can be paid first; the kitchen still gets the order.
-		kitchen.send_lines(doc, course=None)
+		# Held dishes too, in the same send (one send of the order: no "Addition" on them).
 		for d in doc.items:
 			if d.kitchen_status == "Not Sent" and d.hold:
 				d.hold = 0

@@ -1925,10 +1925,11 @@ class RestoFloor {
 				// The change on its way to the server now cannot be called back: it is not discarded.
 				const busy = this._sending_op;
 				// What was printed for the kitchen was cooked: it stays, to be billed.
-				const ops = new Set(jobs.filter((j) => !j.kept).map((j) => j.op).filter((op) => op !== busy));
+				const kept = new Set(outbox().filter((j) => j && j.kept).map((j) => j.op));
+				const ops = new Set(jobs.map((j) => j.op).filter((op) => op !== busy && !kept.has(op)));
 				set_outbox(outbox().filter((j) => !(j && ops.has(j.op))));
 				d.hide();
-				if (jobs.some((j) => j.kept)) {
+				if (jobs.some((j) => kept.has(j.op))) {
 					frappe.show_alert({ message: __("The dishes printed for the kitchen are kept: they are sent when the connection is back."), indicator: "orange" }, 8);
 				}
 				if (busy && jobs.some((j) => j.op === busy)) {
@@ -2448,15 +2449,22 @@ class RestoFloor {
 		await this.flush_taps(!this.offline);
 		// The send's id: the same send printed here after its answer was lost is not recorded twice.
 		const op = act === "send" ? frappe.utils.get_random(20) : null;
-		if (!outbox().length && !this.offline) {
-			try {
-				return await this.do_action(act, e, op);
-			} catch (err) {
-				if (!(err && err.network)) throw err;
-				if (act === "send" && (await this.sent_meanwhile())) return;
+		if (act === "send") this._printing = true; // what is sent and what is on paper stay the same
+		try {
+			let tried = false;
+			if (!outbox().length && !this.offline) {
+				try {
+					return await this.do_action(act, e, op);
+				} catch (err) {
+					if (!(err && err.network)) throw err;
+					tried = true;
+					if (act === "send" && (await this.sent_meanwhile())) return;
+				}
 			}
+			return act === "send" ? await this.send_here(op, tried) : await this.bill_here();
+		} finally {
+			if (act === "send") this._printing = false;
 		}
-		return act === "send" ? this.send_here(op) : this.bill_here();
 	}
 
 	// The send's answer was lost (a time limit, the connection dropping): it may have reached the
@@ -2469,12 +2477,21 @@ class RestoFloor {
 			const fresh = await call("get_order", { order: o.name }, false, 5000);
 			const still = new Set((fresh.items || []).filter((d) => d.kitchen_status === "Not Sent").map((d) => d.name));
 			if (unsent.some((d) => still.has(d.name))) return false;
+			this.mark_sent(unsent);
 		} catch (e) {
 			return false;
 		}
 		frappe.show_alert({ message: __("Sent to the kitchen"), indicator: "green" });
 		this.reload_quietly(o.name);
 		return true;
+	}
+
+	// Lines the server took for the kitchen, shown so until the order is read again (a second press
+	// while the connection is down must not print them again).
+	mark_sent(lines) {
+		lines.forEach((d) => (d.kitchen_status = "Sent"));
+		this._gen++;
+		this.render_lines();
 	}
 
 	// The order read again after a change the server took; a failure here changes nothing (the next
@@ -2486,12 +2503,12 @@ class RestoFloor {
 	}
 
 	printing_wait() {
-		frappe.show_alert({ message: __("The kitchen ticket is printing: add it in a moment."), indicator: "orange" });
+		frappe.show_alert({ message: __("Sending to the kitchen: add it in a moment."), indicator: "orange" });
 	}
 
 	// The kitchen ticket printed on this device. The server records it when the connection is back,
 	// for these dishes only and without printing it again (send_to_kitchen with printed).
-	async send_here(op) {
+	async send_here(op, tried) {
 		const o = this.order;
 		const lines = o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold);
 		if (!lines.length) return frappe.show_alert({ message: __("Nothing new to send"), indicator: "blue" });
@@ -2502,25 +2519,21 @@ class RestoFloor {
 		const printed = {};
 		lines.forEach((d) => (printed[d.item_code] = flt(printed[d.item_code]) + flt(d.qty)));
 		const printed_at = frappe.datetime.now_datetime();
-		this._printing = true;
-		let ok = false;
-		try {
-			ok = await resto.print_html(this.ticket_html(o, lines));
-		} finally {
-			this._printing = false;
-		}
+		// The lines the device had from the server, matched first by the server.
+		const names = lines.filter((d) => d.name && !d._pending).map((d) => d.name);
+		const ok = await resto.print_html(this.ticket_html(o, lines, tried));
 		if (!ok) {
 			return frappe.msgprint(__("No connection, and this device could not print the kitchen ticket. Try again, or tell the kitchen."));
 		}
 		// The dishes went to the kitchen on paper: the changes that made them are sent, never
 		// discarded (the order must bill what was cooked).
-		set_outbox(outbox().map((j) => (j && j.args && j.args.order === o.name ? { ...j, ok: 1, kept: 1 } : j)));
+		set_outbox(outbox().map((j) => (j && j.args && j.args.order === o.name ? { ...j, ok: 1, kept: 1, args: { ...j.args, kitchen_printed: 1 } } : j)));
 		const what = lines.map((d) => `${fmt_qty(d.qty)} × ${d.item_name}`).join("، ");
 		lines.forEach((d) => (d.kitchen_status = "Sent")); // as shown until the server answers
 		this._gen++;
 		this.render_lines();
 		frappe.show_alert({ message: __("No connection: the kitchen ticket was printed here. Hand it to the kitchen; it is recorded when the connection is back."), indicator: "orange" }, 10);
-		this.sync_call("send_to_kitchen", { order: o.name, printed, printed_at }, __("Kitchen ticket printed on this device: {0}", [what]), { ok: 1, kept: 1, ...(op ? { op } : {}) });
+		this.sync_call("send_to_kitchen", { order: o.name, printed, printed_at, lines: names }, __("Kitchen ticket printed on this device: {0}", [what]), { ok: 1, kept: 1, ...(op ? { op } : {}) });
 	}
 
 	// The bill printed on this device, its total worked out here as the server does (Resto Settings,
@@ -2639,7 +2652,7 @@ class RestoFloor {
 			<div class="m s"><span>${esc(frappe.datetime.str_to_user(frappe.datetime.now_datetime()))}</span><span>${esc((this.floor && this.floor.user_name) || frappe.session.user)}</span></div>`;
 	}
 
-	ticket_html(o, lines) {
+	ticket_html(o, lines, tried) {
 		const rows = lines
 			.map((d) => {
 				const notes = [d.modifiers_text, d.sides_text || d.extras_text, d.notes, d.course ? __(d.course) : ""].filter(Boolean);
@@ -2648,7 +2661,7 @@ class RestoFloor {
 			.join("");
 		return this.paper(
 			__("Kitchen Ticket"),
-			`<h2>${__("Kitchen ticket, printed without a connection")}</h2>${this.paper_head(o)}<hr>${rows}<hr><div class="s">${__("Recorded in the system when the connection is back.")}</div>`
+			`<h2>${__("Kitchen ticket, printed without a connection")}</h2>${this.paper_head(o)}${cint(o.send_rounds) ? `<div class="big" style="text-align:center">*** ${__("Addition {0}", [cint(o.send_rounds) + 1])} ***</div>` : ""}${tried ? `<h2>${__("Sent first without an answer: check with the kitchen that these are not there twice.")}</h2>` : ""}<hr>${rows}<hr><div class="s">${__("Recorded in the system when the connection is back.")}</div>`
 		);
 	}
 
@@ -2672,7 +2685,9 @@ class RestoFloor {
 	async do_action(act, e, op) {
 		const o = this.order;
 		if (act === "send") {
+			const unsent = o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold);
 			const tickets = await call("send_to_kitchen", { order: o.name, op }, true, 15000);
+			if (tickets.length) this.mark_sent(unsent);
 			frappe.show_alert({ message: tickets.length ? __("Sent to {0} station(s)", [tickets.length]) : __("Nothing new to send"), indicator: tickets.length ? "green" : "blue" });
 			// Sent: a reload that fails now is not a send to make again (the next refresh draws it).
 			return this.reload_quietly(o.name);

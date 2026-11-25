@@ -253,7 +253,10 @@ class RestoOrder(Document):
 			if not item or item.disabled or not item.is_sales_item or item.has_variants:
 				frappe.throw(_("Row {0}: item {1} cannot be sold").format(row.idx, frappe.bold(row.item_code)))
 			row.item_name = item.item_name
-			if not old or old.item_code != row.item_code:
+			if not old and row.flags.resto_rate is not None:
+				# The rest of a line split by Resto's own server code keeps the line's price (D-219).
+				row.rate = row.flags.resto_rate
+			elif not old or old.item_code != row.item_code:
 				# Prices always come from the price list, never from the screen.
 				row.rate = get_item_rate(row.item_code, self.price_list)
 			else:

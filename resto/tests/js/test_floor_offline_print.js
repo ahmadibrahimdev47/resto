@@ -233,7 +233,7 @@ test("taps wait while the kitchen ticket prints here", async () => {
 	await sending;
 	t.done();
 	assert.equal(t.floor.order.items[0].qty, 2, "the tap during printing was not taken");
-	assert.ok(t.seen.alerts.some((a) => String(a).startsWith("The kitchen ticket is printing")));
+	assert.ok(t.seen.alerts.some((a) => String(a).startsWith("Sending to the kitchen")));
 });
 
 test("offline bill: what is not sent to the kitchen is sent or taken off first, as on the server", async () => {
@@ -259,4 +259,35 @@ test("offline bill: rules the device does not work out make it an estimate", () 
 	const b = t.floor.bill_on_device(t.floor.order);
 	t.done();
 	assert.equal(b.estimate, true);
+});
+
+test("sent through the server: shown as sent at once, so a press while the connection is down prints nothing again", async () => {
+	const t = floor_with((m) => (m === "send_to_kitchen" ? { message: ["KOT-1"] } : 0), order(), rules());
+	await t.floor.send_or_bill("send");
+	t.floor.offline = true;
+	await t.floor.send_or_bill("send");
+	t.done();
+	assert.equal(t.floor.order.items[0].kitchen_status, "Sent");
+	assert.equal(t.seen.printed.length, 0);
+	assert.ok(t.seen.alerts.includes("Nothing new to send"));
+});
+
+test("taps wait during a send through the server too", async () => {
+	const t = floor_with((m) => (m === "send_to_kitchen" ? "silent" : 0), order(), rules());
+	t.floor.floor.can_order = 1;
+	const sending = t.floor.send_or_bill("send");
+	await new Promise((r) => setTimeout(r, 5));
+	t.floor.tap_item({ item_code: "SOUP", item_name: "Soup", rate: 30 });
+	assert.equal(t.floor.order.items[0].qty, 2);
+	t.done();
+	await sending; // the time limit, then printed here
+});
+
+test("the paper printed after a send without an answer says to check it is not there twice, and sends the line names", async () => {
+	const t = floor_with(() => 0, order({ send_rounds: 1 }), rules());
+	await t.floor.send_or_bill("send");
+	t.done();
+	assert.match(t.seen.printed[0], /not there twice/);
+	assert.match(t.seen.printed[0], /Addition 2/);
+	assert.deepEqual(Array.from(t.outbox().at(-1).args.lines), ["L1"]);
 });
