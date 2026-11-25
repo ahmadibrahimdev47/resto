@@ -15,14 +15,15 @@ from resto.resto.report_utils import (
 	prepare_filters,
 	service_account,
 )
-from resto.resto.utils import CASHIER, require_role
+from resto.resto.utils import require_role
 
 WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 
 @frappe.whitelist()
 def get_dashboard(from_date=None, to_date=None, company=None):
-	require_role(CASHIER)
+	# Sales figures are for the management (D-223): the cashier's own numbers are in the shift.
+	require_role("Accounts Manager")
 	f = prepare_filters({"from_date": from_date, "to_date": to_date, "company": company})
 	f.service_account = service_account()
 

@@ -18,7 +18,8 @@ STANDARD_PERMISSIONS = {
 	"Customer": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"]},
 	"Employee": {CASHIER: ["select"], MANAGER: ["select"]},
 	"Sales Invoice": {CASHIER: ["read", "print"], MANAGER: ["read", "print", "report"]},
-	"Bin": {MANAGER: ["read", "report"]},
+	# The kitchen runs Negative Prepared Stock (its prepared items' stock).
+	"Bin": {MANAGER: ["read", "report"], KITCHEN: ["read", "report"]},
 	# ERPNext checks the customer's receivable account (select) while it builds any bill.
 	"Account": {WAITER: ["select"], CASHIER: ["select"], MANAGER: ["select"]},
 	# ... and reads the POS Profile (item details) while it builds the bill and its preview.

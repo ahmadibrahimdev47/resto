@@ -145,8 +145,11 @@ class RestoAnalytics {
 			"Resto Purchase Price Changes",
 			"Resto Negative Prepared Stock",
 		];
+		// Only the reports this user may open (the report's roles).
+		const allowed = (frappe.boot.user && frappe.boot.user.all_reports) || null;
 		$el.html(
 			`<h5>${__("Detailed Reports")}</h5><div class="ra-links">${reports
+				.filter((r) => !allowed || allowed[r])
 				.map((r) => `<a class="btn btn-default btn-sm" href="/app/query-report/${encodeURIComponent(r)}">${__(r)}</a>`)
 				.join("")}</div>`
 		);

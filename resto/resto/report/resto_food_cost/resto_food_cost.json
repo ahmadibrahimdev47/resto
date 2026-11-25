@@ -9,7 +9,7 @@
  "idx": 0,
  "is_standard": "Yes",
  "letterhead": null,
- "modified": "2026-11-21 13:00:00.000000",
+ "modified": "2026-11-26 03:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Food Cost",
@@ -27,9 +27,6 @@
   },
   {
    "role": "Accounts Manager"
-  },
-  {
-   "role": "Stock Manager"
   }
  ]
 }
