@@ -91,3 +91,40 @@ class TestRoleLinks(IntegrationTestCase):
 		for item in links():
 			if item.get("link_type") == "DocType":
 				self.assertTrue(frappe.db.exists("DocType", item["link_to"]), item["link_to"])
+
+
+class TestShiftVisibility(IntegrationTestCase):
+	"""A cashier reads only their own shifts (the shift's owner is its cashier: it is opened by them);
+	the manager reads every cashier's shift (D-223)."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		cls.a = user_with_email("cashier-a@resto.test", "Resto Cashier")
+		cls.b = user_with_email("cashier-b@resto.test", "Resto Cashier")
+		cls.manager = user_with("Resto Manager")
+
+	def shift_of(self, user):
+		doc = frappe.new_doc("Resto Shift")
+		doc.update({"user": user, "status": "Open"})
+		doc.owner = user
+		return doc
+
+	def test_a_cashier_reads_only_their_own_shift(self):
+		mine, theirs = self.shift_of(self.a), self.shift_of(self.b)
+		self.assertTrue(frappe.has_permission("Resto Shift", "read", doc=mine, user=self.a))
+		self.assertFalse(frappe.has_permission("Resto Shift", "read", doc=theirs, user=self.a))
+		for doc in (mine, theirs):
+			self.assertTrue(frappe.has_permission("Resto Shift", "read", doc=doc, user=self.manager))
+
+	def test_a_cashier_cannot_change_a_shift_by_hand(self):
+		self.assertFalse(frappe.has_permission("Resto Shift", "write", doc=self.shift_of(self.a), user=self.a))
+
+
+def user_with_email(email, role):
+	if not frappe.db.exists("User", email):
+		u = frappe.get_doc({"doctype": "User", "email": email, "first_name": role, "send_welcome_email": 0})
+		u.insert(ignore_permissions=True)
+		u.add_roles(role)
+	return email
