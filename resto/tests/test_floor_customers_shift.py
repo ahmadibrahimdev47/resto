@@ -10,7 +10,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import flt
 
-from resto.resto import billing, floor, shift
+from resto.resto import approval, billing, floor, shift
 from resto.tests import fixtures as fx
 
 CASHIER = "cashier@resto.test"
@@ -293,3 +293,223 @@ class TestPOSNextFixturePermissions(IntegrationTestCase):
 			custom = set(frappe.get_all("Custom DocPerm", filters={"parent": doctype}, pluck="role"))
 			if standard - set(FIXTURE_ROLES):
 				self.assertTrue(custom & standard, doctype)
+
+
+MANAGER_USER = "manager@resto.test"
+WAITER_USER = "waiter@resto.test"
+
+
+def _manager():
+	if not frappe.db.exists("User", MANAGER_USER):
+		u = frappe.get_doc({"doctype": "User", "email": MANAGER_USER, "first_name": "Resto Manager", "send_welcome_email": 0})
+		u.insert(ignore_permissions=True)
+		u.add_roles("Resto Manager")
+
+
+class TestManagerApproval(IntegrationTestCase):
+	"""A manager's PIN on a waiter's or cashier's screen (D-204): for that action and amount, logged."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		_manager()
+
+	def setUp(self):
+		frappe.flags.pop("resto_approvals", None)
+		frappe.set_user(MANAGER_USER)
+		approval.set_my_pin("4321")
+		frappe.set_user("Administrator")
+		frappe.db.set_single_value("Resto Settings", "require_pos_shift", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.pop("resto_approvals", None)
+
+	def sent_order(self, qty=1):
+		order = floor.create_order(order_type="Takeaway", customer_name="PIN Guest")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": qty}]))
+		floor.send_to_kitchen(order)
+		return order, frappe.get_doc("Resto Order", order).items[0].name
+
+	def tries(self):
+		return int(frappe.cache.get(approval._tries_key(MANAGER_USER)) or 0)
+
+	def logs(self, **filters):
+		return frappe.get_all("Resto Approval Log", filters=filters, fields=["approver", "requested_by", "result", "amount"], order_by="creation")
+
+	def test_a_void_after_sending_needs_a_managers_pin(self):
+		order, line = self.sent_order()
+		frappe.set_user(WAITER_USER)
+		self.assertRaises(approval.ApprovalRequired, floor.void_line, order, line, "Wrong dish")
+		self.assertRaises(approval.ApprovalRequired, floor.void_line, order, line, "Wrong dish", 0, MANAGER_USER, "1111")
+		self.assertEqual(self.tries(), 1)
+		# Only a manager approves, never the one asking.
+		self.assertRaises(approval.ApprovalRequired, floor.void_line, order, line, "Wrong dish", 0, "cashier@resto.test", "4321")
+		floor.void_line(order, line, "Wrong dish", 0, MANAGER_USER, "٤٣٢١")  # typed on an Arabic keypad
+		self.assertEqual(frappe.db.get_value("Resto Order Item", line, "kitchen_status"), "Void")
+		self.assertEqual(self.tries(), 0)
+		frappe.set_user("Administrator")
+		logs = self.logs(reference=("like", f"{order}%"))
+		self.assertEqual([lg.result for lg in logs], ["Refused", "Approved"])  # the cashier was never a try
+		self.assertEqual((logs[-1].approver, logs[-1].requested_by), (MANAGER_USER, WAITER_USER))
+		self.assertAlmostEqual(flt(logs[-1].amount), 40, 2)
+
+	def test_five_wrong_pins_lock_it(self):
+		order, line = self.sent_order()
+		frappe.set_user(WAITER_USER)
+		for _i in range(approval.MAX_TRIES):
+			self.assertRaises(approval.ApprovalRequired, floor.cancel_order, order, "Guest left", None, MANAGER_USER, "0000")
+		self.assertTrue(approval.locked_until(MANAGER_USER))
+		# Locked: even the right PIN waits.
+		self.assertRaises(approval.ApprovalRequired, floor.cancel_order, order, "Guest left", None, MANAGER_USER, "4321")
+		self.assertEqual(frappe.db.get_value("Resto Order", order, "status"), "Open")
+		# A new PIN set by the manager unlocks it.
+		frappe.set_user(MANAGER_USER)
+		approval.set_my_pin("5678")
+		frappe.set_user(WAITER_USER)
+		floor.cancel_order(order, "Guest left", None, MANAGER_USER, "5678")
+		self.assertEqual(frappe.db.get_value("Resto Order", order, "status"), "Cancelled")
+
+	def test_a_discount_above_the_cashiers_limit(self):
+		order = floor.create_order(order_type="Takeaway", customer_name="PIN Discount")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 10}]))  # 400
+		frappe.set_user("cashier@resto.test")
+		self.assertEqual(floor.get_floor()["discount_limit"], 10)
+		self.assertRaises(frappe.PermissionError, floor.apply_discount, order, 15, 0, "regular")
+		self.assertRaises(approval.ApprovalRequired, floor.apply_discount, order, 15, 0, "regular", MANAGER_USER, "9999")
+		floor.apply_discount(order, 15, 0, "regular", MANAGER_USER, "4321")
+		# Approved as 60, not as 15%: more items later do not grow it without a new approval.
+		self.assertEqual(
+			[flt(v) for v in frappe.db.get_value("Resto Order", order, ["discount_amount", "discount_percentage"])], [60, 0]
+		)
+		frappe.set_user("Administrator")
+		self.assertAlmostEqual(flt(self.logs(reference=("like", f"{order}%"), result="Approved")[-1].amount), 60, 2)
+
+	def test_a_bill_on_account_without_a_credit_limit(self):
+		frappe.db.set_value("POS Profile", fx.PROFILE, "allow_partial_payment", 1)
+		frappe.clear_document_cache("POS Profile", fx.PROFILE)
+		try:
+			order = floor.create_order(
+				order_type="Takeaway", customer_name="PIN Debtor", phone=f"0106{random.randint(1000000, 9999999)}", new_customer=1
+			)
+			floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 2}]))
+			frappe.set_user("cashier@resto.test")
+			bill = floor.get_bill(order)
+			self.assertTrue(bill["on_account_needs_approval"])
+			pay = json.dumps([{"mode_of_payment": "Cash", "amount": 10}])
+			self.assertRaises(approval.ApprovalRequired, floor.settle, order, pay, None, bill["payable"], None, 1)
+			r = floor.settle(order, pay, None, bill["payable"], "req-pin", 1, MANAGER_USER, "4321")
+		finally:
+			frappe.set_user("Administrator")
+			frappe.db.set_value("POS Profile", fx.PROFILE, "allow_partial_payment", 0)
+			frappe.clear_document_cache("POS Profile", fx.PROFILE)
+		owed = flt(bill["payable"]) - 10
+		self.assertAlmostEqual(flt(r["outstanding_amount"]), owed, 2)
+		logs = self.logs(reference=("like", f"{order}%"), result="Approved")
+		self.assertEqual(len(logs), 1)  # checked twice in the call, approved and logged once
+		self.assertAlmostEqual(flt(logs[0].amount), owed, 2)
+
+	def test_a_long_reference_is_still_logged(self):
+		frappe.set_user(WAITER_USER)
+		self.assertRaises(approval.ApprovalRequired, approval.approve, "void", "X" * 300, 1, MANAGER_USER, "0000")
+		self.assertEqual(self.tries(), 1)
+		frappe.set_user("Administrator")
+		self.assertTrue(self.logs(reference="X" * 140, result="Refused"))
+
+	def test_the_log_cannot_be_changed(self):
+		order, line = self.sent_order()
+		floor.void_line(order, line, "Manager voids")
+		log = frappe.get_doc("Resto Approval Log", {"reference": ("like", f"{order}%")})
+		self.assertEqual(log.approver, "Administrator")
+		log.result = "Refused"
+		self.assertRaises(frappe.ValidationError, log.save)
+		self.assertRaises(frappe.ValidationError, log.delete)
+
+
+class TestDrawerControls(IntegrationTestCase):
+	"""Drawer expenses: allowed accounts, a cap per shift, a receipt (D-205); cash over/short (D-206)."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		group = frappe.db.get_value("Account", {"company": fx.COMPANY, "account_name": "Indirect Expenses", "is_group": 1})
+		cls.ice = fx.account("Drawer Ice", group, account_type="Expense Account")
+		cls.other = fx.account("Drawer Other", group, account_type="Expense Account")
+		cls.over_short = fx.account("Cash Over Short", group, account_type="Expense Account")
+
+	def setUp(self):
+		frappe.set_user("Administrator")
+		frappe.db.sql("update `tabResto Shift` set status = 'Closed' where status = 'Open'")
+		for field, value in (("require_pos_shift", 0), ("blind_shift_count", 0)):
+			frappe.db.set_single_value("Resto Settings", field, value)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		if frappe.db.exists("POS Profile User", {"parent": fx.PROFILE, "parenttype": "POS Profile"}) and not frappe.db.exists(
+			"POS Profile User", {"parent": fx.PROFILE, "parenttype": "POS Profile", "user": CASHIER}
+		):
+			frappe.get_doc(
+				{"doctype": "POS Profile User", "parent": fx.PROFILE, "parenttype": "POS Profile", "parentfield": "applicable_for_users", "user": CASHIER}
+			).db_insert()
+		frappe.set_user(CASHIER)
+		self.shift = shift.open_shift(json.dumps({"Cash": 500}))
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		for field, value in (("drawer_expense_cap", 0), ("drawer_expense_receipt", 0), ("cash_over_short_account", None)):
+			frappe.db.set_single_value("Resto Settings", field, value)
+		frappe.db.delete("Resto Expense Account", {"parent": "Resto Settings"})
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+
+	def settings(self, **values):
+		frappe.set_user("Administrator")
+		s = frappe.get_single("Resto Settings")
+		for k, v in values.items():
+			s.set(k, v)
+		s.save(ignore_permissions=True)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.set_user(CASHIER)
+
+	def test_only_the_allowed_accounts_up_to_the_cap(self):
+		self.settings(drawer_expense_accounts=[{"account": self.ice}], drawer_expense_cap=30)
+		data = shift.expense_accounts()
+		self.assertEqual([a.name for a in data["accounts"]], [self.ice])
+		self.assertAlmostEqual(data["cap_left"], 30, 2)
+		self.assertRaises(frappe.ValidationError, shift.add_expense, "Cash", self.other, 5, "Not allowed")
+		shift.add_expense("Cash", self.ice, 20, "Ice")
+		self.assertRaises(frappe.ValidationError, shift.add_expense, "Cash", self.ice, 15, "Over the cap")
+		shift.add_expense("Cash", self.ice, 10, "Ice again")
+		self.assertAlmostEqual(shift.expense_accounts()["cap_left"], 0, 2)
+
+	def test_the_receipt_goes_on_the_entry(self):
+		self.settings(drawer_expense_receipt=1)
+		self.assertRaises(frappe.ValidationError, shift.add_expense, "Cash", self.ice, 5, "No receipt")
+		f = frappe.get_doc({"doctype": "File", "file_name": f"receipt-{random.randint(1000, 9999)}.txt", "content": "receipt", "is_private": 1})
+		f.flags.ignore_permissions = True
+		f.insert()
+		je = shift.add_expense("Cash", self.ice, 5, "Ice", None, f.file_url)
+		self.assertEqual(frappe.db.get_value("File", f.name, ["attached_to_doctype", "attached_to_name"]), ("Journal Entry", je))
+		# Used once: the same file is not a second receipt.
+		self.assertRaises(frappe.ValidationError, shift.add_expense, "Cash", self.ice, 5, "Ice", None, f.file_url)
+
+	def test_a_short_drawer_is_booked_and_printed(self):
+		self.settings(cash_over_short_account=self.over_short)
+		data = shift.closing_data()
+		counted = {r["mode_of_payment"]: r["expected_amount"] for r in data["rows"]}
+		counted["Cash"] -= 10
+		result = shift.close_shift(json.dumps(counted))
+		doc = frappe.get_doc("Resto Shift", result["closing"])
+		self.assertTrue(doc.over_short_entry)
+		rows = frappe.get_all(
+			"Journal Entry Account", filters={"parent": doc.over_short_entry}, fields=["account", "debit_in_account_currency", "credit_in_account_currency"]
+		)
+		cash = frappe.db.get_value("Mode of Payment Account", {"parent": "Cash", "company": fx.COMPANY}, "default_account")
+		by = {r.account: r for r in rows}
+		self.assertAlmostEqual(flt(by[self.over_short].debit_in_account_currency), 10, 2)
+		self.assertAlmostEqual(flt(by[cash].credit_in_account_currency), 10, 2)
+		self.assertEqual(len(rows), 2)  # the card counted right: no line for it
+		frappe.set_user("Administrator")
+		self.assertRaises(frappe.ValidationError, frappe.get_doc("Journal Entry", doc.over_short_entry).cancel)
+		html = frappe.get_print("Resto Shift", doc.name, "Resto Shift Close")
+		self.assertIn(doc.name, html)

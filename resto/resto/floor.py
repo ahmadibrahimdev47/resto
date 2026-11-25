@@ -6,9 +6,9 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, getdate, now_datetime, nowdate
 
-from resto.resto import billing, kitchen, printing, shift, sides
+from resto.resto import approval, billing, kitchen, printing, shift, sides
 from resto.resto.doctype.resto_modifier_group.resto_modifier_group import groups_for_item
-from resto.resto.doctype.resto_order.resto_order import ACTIVE, default_service_percent
+from resto.resto.doctype.resto_order.resto_order import ACTIVE, default_service_percent, discount_limit
 from resto.resto.utils import (
 	CASHIER,
 	HOST,
@@ -162,6 +162,8 @@ def get_floor():
 		},
 		"delivery_fee": flt(settings.delivery_fee),
 		"shift": shift.status() if has_role(CASHIER) else None,
+		# Above this discount a waiter or cashier needs a manager's PIN (D-204).
+		"discount_limit": discount_limit(),
 	}
 
 
@@ -616,15 +618,20 @@ def fire_course(order, course):
 
 
 @frappe.whitelist(methods=["POST"])
-def void_line(order, line, reason, cooked=0):
-	"""Void a line (manager). cooked: the dish was already made, so its ingredients are booked as
-	waste; otherwise they would stay in book stock and show up later as a count loss."""
-	require_role(MANAGER)
+def void_line(order, line, reason, cooked=0, approver=None, pin=None):
+	"""Void a line. After it was sent to the kitchen: a manager, or a manager's PIN (D-204).
+	cooked: the dish was already made, so its ingredients are booked as waste; otherwise they would
+	stay in book stock and show up later as a count loss."""
+	require_role(WAITER, CASHIER)
 	if not (reason or "").strip():
 		frappe.throw(_("Enter a reason for the void"))
 	doc = _get_order(order)
 	row = _line(doc, line)
 	was_sent = row.kitchen_status not in ("Not Sent", "Void")
+	if was_sent:
+		approval.approve(
+			"void", f"{doc.name}: {row.qty:g} × {row.item_name}", flt(row.amount), approver, pin, reason.strip()
+		)
 	if cint(cooked) and was_sent:
 		# Its share of a shared side is booked as waste with it: the other dishes keep theirs.
 		doc.flags.resto_keep_sets = {e["set"] for e in json.loads(row.sides or "{}").values() if e.get("set")}
@@ -902,9 +909,12 @@ def merge_orders(target, source):
 
 
 @frappe.whitelist(methods=["POST"])
-def apply_discount(order, percentage=0, amount=0, reason=None):
+def apply_discount(order, percentage=0, amount=0, reason=None, approver=None, pin=None):
 	require_role(WAITER, CASHIER)
 	doc = _get_order(order)
+	# Above the waiter's or cashier's limit (Resto Settings) a manager's PIN approves it (D-204),
+	# checked where the limit is (Resto Order.validate_discount).
+	doc.flags.resto_approval = {"approver": approver, "pin": pin} if approver else None
 	doc.discount_percentage = flt(percentage)
 	doc.discount_amount = 0 if flt(percentage) else flt(amount)
 	doc.discount_reason = reason
@@ -945,8 +955,9 @@ COOKED_WASTE_HOURS = 12
 
 
 @frappe.whitelist(methods=["POST"])
-def cancel_order(order, reason, cooked=None):
-	"""Cancel an order. With sent items this needs a manager and the kitchen gets void tickets.
+def cancel_order(order, reason, cooked=None, approver=None, pin=None):
+	"""Cancel an order. With sent items this needs a manager (or a manager's PIN, D-204) and the
+	kitchen gets void tickets.
 
 	cooked: the sent lines the kitchen already made (JSON list of line names, or {line: dishes}): their
 	ingredients are posted as waste, as for a void after cooking; the others stay in stock."""
@@ -959,7 +970,7 @@ def cancel_order(order, reason, cooked=None):
 		frappe.throw(_("Part of this order is paid; it cannot be cancelled"))
 	sent = [d for d in doc.items if d.kitchen_status not in ("Not Sent", "Void")]
 	if sent:
-		require_role(MANAGER)
+		approval.approve("cancel", doc.name, sum(flt(d.amount) for d in sent), approver, pin, reason)
 	cooked = _cooked_qty(cooked, sent)
 	# The lines whose shared sides the kitchen plated together (a held line's share went on the ticket).
 	together = [d for d in doc.items if d.kitchen_status != "Void" and sides.shared_slots(d)]
@@ -1073,14 +1084,16 @@ def request_bill(order):
 
 
 @frappe.whitelist(methods=["POST"])
-def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0):
+def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0, approver=None, pin=None):
 	require_role(CASHIER)
 	# A retried click after the last payment closed the order gets the same invoice back.
 	doc = _get_order(order, statuses=None if request_id else ACTIVE)
 	if doc.status not in ACTIVE:
 		return _settle_result(doc, billing.settle(doc, _loads(payments, []), request_id=request_id))
-	if cint(on_account):
-		billing.check_on_account(doc)  # refused before anything goes to the kitchen
+	if cint(on_account) and expected not in (None, ""):
+		# Refused before anything goes to the kitchen; the amount left owed is the one approved.
+		owed = max(flt(expected) - billing._sent_total(_loads(payments, [])), 0)
+		billing.check_on_account(doc, approver, pin, owed)
 	if doc.order_type != "Dine In" and any(d.kitchen_status == "Not Sent" for d in doc.active_lines()):
 		# Takeaway and delivery can be paid first; the kitchen still gets the order.
 		kitchen.send_lines(doc, course=None)
@@ -1097,6 +1110,8 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 		expected=None if expected in (None, "") else flt(expected),
 		request_id=request_id,
 		on_account=on_account,
+		approver=approver,
+		pin=pin,
 	)
 	return _settle_result(doc, si)
 

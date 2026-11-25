@@ -286,10 +286,18 @@ class RestoOrder(Document):
 		# Compared in money, to the piaster: 10% of 33.25 is 3.33, not "10.02%".
 		allowed = flt(base * limit / 100, self.precision("discount_amount"))
 		if discount > allowed + 0.005:
+			percent = flt(discount / base * 100 if base else 100, 2)
+			ask = self.flags.resto_approval
+			if ask:
+				# A manager approved it with their PIN on this screen (D-204), for this discount.
+				from resto.resto import approval
+
+				approval.approve("discount", f"{self.name}: {percent}%", discount, ask.get("approver"), ask.get("pin"), self.discount_reason)
+				# Approved as this amount: a percentage would grow with every item added after.
+				self.discount_percentage = 0
+				return
 			frappe.throw(
-				_("A discount of {0}% needs the Resto Manager role (your limit is {1}%)").format(
-					flt(discount / base * 100 if base else 100, 2), flt(limit, 2)
-				),
+				_("A discount of {0}% needs a manager's approval (your limit is {1}%)").format(percent, flt(limit, 2)),
 				frappe.PermissionError,
 			)
 

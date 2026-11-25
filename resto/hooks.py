@@ -66,3 +66,6 @@ doc_events = {
 
 # Recipe costs follow purchase prices: refresh them every night.
 scheduler_events = {"daily": ["resto.api.refresh_recipe_costs"]}
+
+# The shift print format reads the items sold and the debts collected (D-206).
+jinja = {"methods": ["resto.resto.shift.shift_print_data"]}

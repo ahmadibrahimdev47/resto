@@ -26,6 +26,10 @@
   "pos_profile",
   "require_pos_shift",
   "blind_shift_count",
+  "cash_over_short_account",
+  "drawer_expense_cap",
+  "drawer_expense_receipt",
+  "drawer_expense_accounts",
   "allow_side_changes",
   "charge_extra_sides",
   "column_break_pos",
@@ -189,6 +193,32 @@
    "fieldtype": "Check",
    "label": "Blind Shift Count",
    "description": "When closing a shift the cashier counts the drawer without seeing the expected amounts; they are shown after the shift is closed."
+  },
+  {
+   "fieldname": "cash_over_short_account",
+   "fieldtype": "Link",
+   "options": "Account",
+   "label": "Cash Over/Short Account",
+   "description": "When a shift closes with a cash difference, a Journal Entry moves it between the cash account and this account, so the cash account holds what was counted (a card or wallet difference stays on the shift only). Empty: no entry."
+  },
+  {
+   "fieldname": "drawer_expense_cap",
+   "fieldtype": "Currency",
+   "label": "Drawer Expenses Cap per Shift",
+   "description": "The most a cashier may pay out of the drawer in one shift. 0: no cap."
+  },
+  {
+   "fieldname": "drawer_expense_receipt",
+   "fieldtype": "Check",
+   "label": "Drawer Expense Needs a Receipt",
+   "description": "The cashier attaches a photo of the receipt to every drawer expense."
+  },
+  {
+   "fieldname": "drawer_expense_accounts",
+   "fieldtype": "Table MultiSelect",
+   "options": "Resto Expense Account",
+   "label": "Drawer Expense Accounts",
+   "description": "The expense accounts a cashier may pay from the drawer. Empty: any ordinary expense account."
   },
   {
    "default": "0",
@@ -389,7 +419,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-25 14:00:00.000000",
+ "modified": "2026-11-25 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

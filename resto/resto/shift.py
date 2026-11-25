@@ -13,7 +13,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
-from resto.resto.utils import CASHIER, get_settings, require_role
+from resto.resto.utils import CASHIER, get_settings, has_role, require_role
 
 ACCOUNTS_PRECISION = 2
 
@@ -423,11 +423,76 @@ def close_shift(amounts):
 			"total_difference": flt(sum(r["difference"] for r in figures["rows"]), ACCOUNTS_PRECISION),
 		}
 	)
+	shift.over_short_entry = _over_short_entry(shift, figures["rows"])
 	shift.flags.resto_shift = True
 	shift.save(ignore_permissions=True)
 	report = _report(shift, figures)
 	report["closing"] = shift.name
 	return report
+
+
+def _cost_center(shift):
+	return frappe.db.get_value("POS Profile", shift.pos_profile, "cost_center") or frappe.get_cached_value(
+		"Company", shift.company, "cost_center"
+	)
+
+
+def _over_short_entry(shift, rows):
+	"""What the cash counted differs from what was expected: with a Cash Over/Short Account (Resto
+	Settings) a Journal Entry moves the difference, so the cash account holds what is in the drawer
+	(D-206). Cash methods only: a card or wallet difference is a booking mistake to find, not money
+	gone, and its account must keep matching the bank."""
+	account = get_settings().cash_over_short_account
+	if not account:
+		return None
+	if frappe.db.get_value("Account", account, "company") != shift.company:
+		frappe.throw(_("Cash Over/Short Account {0} is not of company {1} (Resto Settings)").format(account, shift.company))
+	cost_center = _cost_center(shift)
+	je = frappe.new_doc("Journal Entry")
+	je.update(
+		{
+			"voucher_type": "Cash Entry",
+			"company": shift.company,
+			"posting_date": frappe.utils.nowdate(),
+			"user_remark": _("Cash over/short, shift {0}").format(shift.name),
+		}
+	)
+	for r in rows:
+		diff = flt(r.get("difference"), ACCOUNTS_PRECISION)
+		if abs(diff) < 0.005 or frappe.get_cached_value("Mode of Payment", r["mode_of_payment"], "type") != "Cash":
+			continue
+		cash = _mode_account(r["mode_of_payment"], shift.company)
+		# Short (diff < 0): the loss is debited, the cash account credited; over: the other way.
+		loss, gain = (account, cash) if diff < 0 else (cash, account)
+		je.append("accounts", {"account": loss, "debit_in_account_currency": abs(diff), "cost_center": cost_center})
+		je.append("accounts", {"account": gain, "credit_in_account_currency": abs(diff), "cost_center": cost_center})
+	if not je.accounts:
+		return None
+	je.flags.ignore_permissions = True
+	je.insert()
+	je.submit()
+	return je.name
+
+
+def shift_print_data(name):
+	"""For the shift print format (a Jinja method): the items sold and the debts collected."""
+	if not frappe.has_permission("Resto Shift", "read", name):
+		return {"items": [], "debts": []}
+	items = frappe.db.sql(
+		"""select sii.item_code, sii.item_name, sum(sii.stock_qty) as qty, sum(sii.base_net_amount) as amount
+		from `tabSales Invoice Item` sii join `tabSales Invoice` si on si.name = sii.parent
+		where si.resto_shift = %s and si.docstatus = 1
+		group by sii.item_code, sii.item_name order by amount desc""",
+		(name,),
+		as_dict=True,
+	)
+	debts = frappe.get_all(
+		"Payment Entry",
+		filters={"resto_shift": name, "docstatus": 1, "payment_type": "Receive"},
+		fields=["name", "party_name", "party", "mode_of_payment", "received_amount"],
+		order_by="creation",
+	)
+	return {"items": items, "debts": debts}
 
 
 # --------------------------------------------------------------------------- drawer expenses
@@ -438,17 +503,59 @@ def expense_accounts():
 	"""The expense accounts a drawer expense can go to, and the shift's payment methods."""
 	require_role(CASHIER)
 	shift = _own_shift()
+	settings = get_settings()
+	spent = _spent(shift)
+	cap = flt(settings.drawer_expense_cap)
+	return {
+		"accounts": _expense_accounts(shift.company),
+		"modes": _cash_modes(shift),
+		"receipt_required": cint(settings.drawer_expense_receipt),
+		# What is left of the cap this shift (None: no cap; a manager has none).
+		"cap_left": None if not cap or has_role() else max(flt(cap - spent, ACCOUNTS_PRECISION), 0),
+	}
+
+
+def _expense_accounts(company):
+	"""The accounts a cashier may pay from the drawer: the list in Resto Settings, or else any
+	ordinary expense account (D-205)."""
 	accounts = [
 		a
 		for a in frappe.get_all(
 			"Account",
-			filters={"company": shift.company, "root_type": "Expense", "is_group": 0, "disabled": 0},
+			filters={"company": company, "root_type": "Expense", "is_group": 0, "disabled": 0},
 			fields=["name", "account_name", "account_type"],
 			order_by="lft",
 		)
 		if (a.account_type or "") in EXPENSE_TYPES
 	]
-	return {"accounts": accounts, "modes": _cash_modes(shift)}
+	allowed = {r.account for r in get_settings().get("drawer_expense_accounts") or []}
+	return [a for a in accounts if a.name in allowed] if allowed else accounts
+
+
+def _spent(shift):
+	"""Paid out of the drawer so far in this shift (entries still in force)."""
+	names = [e.journal_entry for e in shift.expenses if e.journal_entry]
+	if not names:
+		return 0
+	live = set(frappe.get_all("Journal Entry", filters={"name": ("in", names), "docstatus": 1}, pluck="name"))
+	return flt(sum(flt(e.amount) for e in shift.expenses if e.journal_entry in live), ACCOUNTS_PRECISION)
+
+
+def _receipt_file(file_url):
+	"""The receipt the cashier just uploaded (theirs, not yet attached to anything)."""
+	name = frappe.db.get_value(
+		"File",
+		{"file_url": file_url, "owner": frappe.session.user, "attached_to_name": ("is", "not set"), "is_folder": 0},
+		"name",
+	)
+	if not name:
+		frappe.throw(_("The receipt was not found: attach it again"))
+	content_hash = frappe.db.get_value("File", name, "content_hash")
+	if content_hash and frappe.db.exists(
+		"File", {"content_hash": content_hash, "attached_to_doctype": "Journal Entry", "name": ("!=", name)}
+	):
+		frappe.throw(_("This receipt is already attached to another expense"))
+	return name
 
 
 # Ordinary expenses only: not cost of goods sold, stock adjustment, depreciation and the like, which
@@ -466,9 +573,10 @@ def _cash_modes(shift):
 
 
 @frappe.whitelist(methods=["POST"])
-def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_id=None):
+def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_id=None, receipt=None):
 	"""Money paid out of the drawer: a Journal Entry from the payment method's account to the
-	expense account, counted by the shift (its expected amount goes down)."""
+	expense account, counted by the shift (its expected amount goes down). Only the accounts allowed
+	in Resto Settings, up to the cap per shift, with the receipt attached when required (D-205)."""
 	require_role(CASHIER)
 	shift = _own_shift(lock=True)
 	if request_id:
@@ -493,8 +601,23 @@ def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_
 		or (acc.account_type or "") not in EXPENSE_TYPES
 	):
 		frappe.throw(_("{0} is not an expense account of {1}").format(expense_account, shift.company))
+	if expense_account not in {a.name for a in _expense_accounts(shift.company)}:
+		frappe.throw(_("{0} is not one of the drawer expense accounts (Resto Settings)").format(expense_account))
 	if not (remarks or "").strip():
 		frappe.throw(_("Write what the expense was for"))
+	settings = get_settings()
+	if cint(settings.drawer_expense_receipt) and not receipt:
+		frappe.throw(_("Attach the receipt of this expense"))
+	receipt_file = _receipt_file(receipt) if receipt else None
+	cap = flt(settings.drawer_expense_cap)
+	if cap and not has_role():
+		left = flt(cap - _spent(shift), ACCOUNTS_PRECISION)
+		if amount > left + 0.005:
+			frappe.throw(
+				_("Drawer expenses are capped at {0} per shift; {1} is left: a manager pays the rest").format(
+					frappe.format(cap, "Currency"), frappe.format(max(left, 0), "Currency")
+				)
+			)
 	row = next(r for r in compute(shift)["rows"] if r["mode_of_payment"] == mode_of_payment)
 	if amount > row["expected_amount"] + 0.005:
 		if _blind():
@@ -503,9 +626,7 @@ def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_
 		frappe.throw(
 			_("Only {0} should be in the drawer for {1}").format(frappe.format(row["expected_amount"], "Currency"), mode_of_payment)
 		)
-	cost_center = frappe.db.get_value("POS Profile", shift.pos_profile, "cost_center") or frappe.get_cached_value(
-		"Company", shift.company, "cost_center"
-	)
+	cost_center = _cost_center(shift)
 	je = frappe.new_doc("Journal Entry")
 	je.update(
 		{
@@ -523,6 +644,9 @@ def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_
 	je.flags.ignore_permissions = True
 	je.insert()
 	je.submit()
+	if receipt_file:
+		# On the entry itself, where the accountant looks for it.
+		frappe.db.set_value("File", receipt_file, {"attached_to_doctype": "Journal Entry", "attached_to_name": je.name})
 	shift.append(
 		"expenses",
 		{
@@ -531,6 +655,7 @@ def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_
 			"amount": amount,
 			"remarks": remarks.strip(),
 			"journal_entry": je.name,
+			"receipt": receipt or None,
 			"currency": shift.currency,
 			"request_id": request_id,
 		},
@@ -558,7 +683,9 @@ def check_cancel(doc, method=None):
 	entry corrects it instead."""
 	name = doc.get("resto_shift")
 	if not name and doc.doctype == "Journal Entry":
-		name = frappe.db.get_value("Resto Shift Expense", {"journal_entry": doc.name}, "parent")
+		name = frappe.db.get_value("Resto Shift Expense", {"journal_entry": doc.name}, "parent") or frappe.db.get_value(
+			"Resto Shift", {"over_short_entry": doc.name}, "name"
+		)
 	if name and shift_status(name, lock=True) == "Closed":
 		frappe.throw(
 			_("{0} is in closed shift {1} and cannot be cancelled; make a return (credit note) or a new entry instead").format(

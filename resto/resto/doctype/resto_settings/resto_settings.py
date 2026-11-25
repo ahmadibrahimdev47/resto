@@ -28,6 +28,27 @@ class RestoSettings(Document):
 			if is_group:
 				frappe.throw(_("Account {0} is a group account").format(frappe.bold(self.waste_account)))
 
+		for field in ("cash_over_short_account",):
+			account = self.get(field)
+			if not account:
+				continue
+			company, is_group, root_type = frappe.db.get_value("Account", account, ["company", "is_group", "root_type"]) or (
+				None,
+				None,
+				None,
+			)
+			if root_type not in ("Expense", "Income"):
+				frappe.throw(_("Account {0} must be an expense or income account").format(frappe.bold(account)))
+			if company != self.company:
+				frappe.throw(
+					_("Account {0} does not belong to company {1}").format(frappe.bold(account), frappe.bold(self.company))
+				)
+			if is_group:
+				frappe.throw(_("Account {0} is a group account").format(frappe.bold(account)))
+		for row in self.get("drawer_expense_accounts") or []:
+			if frappe.db.get_value("Account", row.account, "root_type") != "Expense":
+				frappe.throw(_("{0} is not an expense account").format(frappe.bold(row.account)))
+
 		self.validate_food_cost_levels()
 		if not self.cashier_print_method:
 			self.cashier_print_method = "Server Printer" if self.cashier_printer else "Browser Button"

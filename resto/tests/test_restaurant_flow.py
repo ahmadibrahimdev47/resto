@@ -10,7 +10,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import flt
 
-from resto.resto import billing, floor
+from resto.resto import approval, billing, floor
 from resto.tests import fixtures as fx
 
 
@@ -278,7 +278,8 @@ class TestRestaurantFlow(IntegrationTestCase):
 		self.assertRaises(frappe.ValidationError, floor.update_line, order, line.name, 1)
 
 		frappe.set_user("waiter@resto.test")
-		self.assertRaises(frappe.PermissionError, floor.void_line, order, line.name, "Guest changed mind")
+		# After sending: a manager, or a manager's PIN (D-204).
+		self.assertRaises(approval.ApprovalRequired, floor.void_line, order, line.name, "Guest changed mind")
 		frappe.set_user("Administrator")
 		floor.void_line(order, line.name, "Guest changed mind")
 		doc = frappe.get_doc("Resto Order", order)

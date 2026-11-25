@@ -251,6 +251,27 @@ def grant_standard_permissions():
 			for right in rights:
 				if not row.get(right):
 					update_permission_property(doctype, role, 0, right, 1, validate=False)
+			if "read" not in rights:
+				_select_only(doctype, role, rights)
+
+
+# Rights a Custom DocPerm row can carry besides read and select.
+OTHER_RIGHTS = ("write", "create", "delete", "submit", "cancel", "amend", "report", "export", "import", "print", "email", "share")
+
+
+def _select_only(doctype, role, rights):
+	"""A new Custom DocPerm row gets read by default; where only select was meant (Account: the
+	floor's bills check it, staff need not browse the chart of accounts) it is taken off. Only a row
+	that holds nothing else, so a right the site gave on purpose stays."""
+	row = frappe.db.get_value(
+		"Custom DocPerm",
+		{"parent": doctype, "role": role, "permlevel": 0, "if_owner": 0},
+		["name", "read", *OTHER_RIGHTS],
+		as_dict=True,
+	)
+	if row and row.read and not any(row.get(r) for r in OTHER_RIGHTS if r not in rights):
+		frappe.db.set_value("Custom DocPerm", row.name, "read", 0)
+		frappe.clear_cache(doctype=doctype)
 
 
 def set_new_setting_defaults():

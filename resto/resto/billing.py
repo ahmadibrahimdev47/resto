@@ -334,24 +334,36 @@ def on_account_customer(order):
 	return order.customer
 
 
-def check_on_account(order):
+def on_account_needs_approval(order):
+	"""A cashier leaves a bill on the account of a customer the manager gave no credit limit only with
+	a manager's PIN (D-204): otherwise cash taken could be booked as owed and the drawer still balance."""
+	if has_role():
+		return False
+	from erpnext.selling.doctype.customer.customer import get_credit_limit
+
+	customer = on_account_customer(order)
+	return bool(customer) and flt(get_credit_limit(customer, order.company)) <= 0
+
+
+def check_on_account(order, approver=None, pin=None, owed=None):
 	profile = frappe.get_cached_doc("POS Profile", order.pos_profile)
 	if not cint(profile.get("allow_partial_payment")):
 		frappe.throw(_("POS Profile {0} does not allow partial payment").format(frappe.bold(order.pos_profile)))
 	customer = on_account_customer(order)
 	if not customer:
 		frappe.throw(_("Choose the customer who owes the rest first (Guests and Customer): not the walk-in customer"))
-	# A cashier gives credit only to a customer the manager gave a credit limit (ERPNext checks the
-	# limit itself on submit); otherwise cash taken could be booked as owed and the drawer still balance.
-	if not has_role():
-		from erpnext.selling.doctype.customer.customer import get_credit_limit
+	# A customer with a credit limit: ERPNext checks the limit itself on submit. Without one: a
+	# manager's PIN, for this customer and this amount.
+	if on_account_needs_approval(order):
+		from resto.resto import approval
 
-		if flt(get_credit_limit(customer, order.company)) <= 0:
-			frappe.throw(
-				_("Customer {0} has no credit limit: only a Resto Manager can leave a bill on their account, or the manager sets the customer's credit limit").format(
-					frappe.bold(order.customer_name or customer)
-				)
-			)
+		approval.approve(
+			"on_account",
+			f"{order.name}: {frappe.db.get_value('Customer', customer, 'customer_name') or customer}",
+			flt(owed),
+			approver,
+			pin,
+		)
 
 
 def bill_preview(order, lines=None):
@@ -392,6 +404,7 @@ def bill_preview(order, lines=None):
 		"currency": si.currency,
 		"allow_partial_payment": cint(frappe.get_cached_value("POS Profile", order.pos_profile, "allow_partial_payment")),
 		"on_account_customer": on_account_customer(order),
+		"on_account_needs_approval": on_account_needs_approval(order) if on_account_customer(order) else False,
 		# The debtor's own name, as the receipt prints it (the order's typed name may differ).
 		"on_account_customer_name": frappe.db.get_value("Customer", on_account_customer(order), "customer_name")
 		if on_account_customer(order)
@@ -419,7 +432,7 @@ def _sent_total(payments):
 	return sum(flt(p.get("amount")) for p in payments or [])
 
 
-def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0):
+def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0, approver=None, pin=None):
 	"""Create and submit the POS Sales Invoice, then mark the billed lines.
 
 	expected: the amount the cashier saw; if the bill changed meanwhile (another device voided an
@@ -453,8 +466,6 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 			)
 		)
 
-	if cint(on_account):
-		check_on_account(order)
 	si = build_invoice(order, lines)
 	unsent = [d.item_name for d in order.items if d.name in si.flags.resto_lines and d.kitchen_status == "Not Sent"]
 	if unsent:
@@ -469,6 +480,9 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 				frappe.format(payable, "Currency")
 			)
 		)
+	if cint(on_account):
+		# After the bill is known to be the one shown: the amount left owed is the one approved.
+		check_on_account(order, approver, pin, max(payable - _sent_total(payments), 0))
 	_set_payments(si, payments, on_account)
 	si.resto_shift = shift
 	si.flags.resto_shift_set = True

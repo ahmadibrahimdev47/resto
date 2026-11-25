@@ -31,6 +31,46 @@ const hhmm = (t) => {
 	return m === undefined ? "" : `${h.padStart(2, "0")}:${m}`;
 };
 const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
+
+// A manager's approval for what a waiter or cashier cannot do alone (D-204): a manager on this
+// screen needs none ({}); otherwise the manager chooses their name and types their PIN here. The
+// server checks it inside the action itself, for that action and amount only. null: not given.
+function ask_approval(floor, what) {
+	if (floor.roles.manager) return Promise.resolve({});
+	return new Promise(async (resolve) => {
+		const list = await frappe.xcall("resto.resto.approval.approvers");
+		if (!list.length) {
+			frappe.msgprint(__("No manager has an approval PIN yet: a manager sets it from My Approval PIN on this screen"));
+			return resolve(null);
+		}
+		let done = false;
+		const d = new frappe.ui.Dialog({
+			title: __("Manager Approval"),
+			fields: [
+				{ fieldname: "what", fieldtype: "HTML", options: `<p><b>${esc(what)}</b></p>` },
+				{
+					fieldname: "approver",
+					fieldtype: "Select",
+					label: __("Manager"),
+					reqd: 1,
+					options: list.map((m) => ({ value: m.user, label: m.full_name })),
+					default: list[0].user,
+				},
+				{ fieldname: "pin", fieldtype: "Password", label: __("PIN"), reqd: 1 },
+			],
+			primary_action_label: __("Approve"),
+			primary_action: (v) => {
+				done = true;
+				d.hide();
+				resolve({ approver: v.approver, pin: v.pin });
+			},
+			on_hide: () => !done && resolve(null),
+		});
+		d.show();
+		// A PIN, not a saved password: the browser must not offer to remember it.
+		d.$wrapper.find("input[data-fieldname=pin]").attr({ autocomplete: "off", inputmode: "numeric" });
+	});
+}
 const money = (v) => format_currency(v || 0);
 
 class RestoFloor {
@@ -77,6 +117,9 @@ class RestoFloor {
 		} catch (e) {
 			return;
 		}
+		if (!this._pin_btn && this.floor.roles.manager) {
+			this._pin_btn = this.page.add_inner_button(__("My Approval PIN"), () => this.set_my_pin());
+		}
 		if (!this._receipts_btn && this.floor.roles.cashier) {
 			this._receipts_btn = this.page.add_inner_button(__("Receipts"), () => this.receipts());
 		}
@@ -107,6 +150,29 @@ class RestoFloor {
 			v = null;
 		}
 		return v === null ? !!(this.floor && this.floor.roles.cashier) : v === "1";
+	}
+
+	// A manager's PIN for approvals on a waiter's or cashier's screen (D-204).
+	set_my_pin() {
+		const d = new frappe.ui.Dialog({
+			title: __("My Approval PIN"),
+			fields: [
+				{ fieldname: "help", fieldtype: "HTML", options: `<p class="text-muted">${__("Typed on a waiter's or cashier's screen to approve a void after sending, a cancel, a discount above the limit, or a bill on account. 4 to 8 digits; keep it to yourself.")}</p>` },
+				{ fieldname: "pin", fieldtype: "Password", label: __("New PIN"), reqd: 1 },
+				{ fieldname: "again", fieldtype: "Password", label: __("New PIN Again"), reqd: 1 },
+				{ fieldname: "password", fieldtype: "Password", label: __("Your Login Password"), reqd: 1 },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				if (v.pin !== v.again) return frappe.msgprint(__("The two PINs are not the same"));
+				await frappe.xcall("resto.resto.approval.set_my_pin", { pin: v.pin, password: v.password });
+				d.hide();
+				frappe.show_alert({ message: __("Your PIN is saved"), indicator: "green" });
+			},
+		});
+		d.show();
+		d.$wrapper.find("input[data-fieldname=pin], input[data-fieldname=again]").attr({ autocomplete: "new-password", inputmode: "numeric" });
+		d.$wrapper.find("input[data-fieldname=password]").attr({ autocomplete: "current-password" });
 	}
 
 	async receipts() {
@@ -587,8 +653,15 @@ class RestoFloor {
 					options: [{ value: "", label: "" }, ...data.accounts.map((a) => ({ value: a.name, label: a.account_name }))],
 					reqd: 1,
 				},
-				{ fieldname: "amount", fieldtype: "Currency", label: __("Amount"), reqd: 1 },
+				{
+					fieldname: "amount",
+					fieldtype: "Currency",
+					label: __("Amount"),
+					reqd: 1,
+					description: data.cap_left == null ? "" : __("Left of this shift's cap: {0}", [money(data.cap_left)]),
+				},
 				{ fieldname: "remarks", fieldtype: "Data", label: __("For What"), reqd: 1 },
+				{ fieldname: "receipt", fieldtype: "Attach", label: __("Receipt"), reqd: data.receipt_required ? 1 : 0 },
 			],
 			primary_action_label: __("Save"),
 			primary_action: (v) =>
@@ -683,6 +756,12 @@ class RestoFloor {
 					d.hide();
 					const done = new frappe.ui.Dialog({ title: __("Shift closed: {0}", [res.closing]), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
 					done.fields_dict.html.$wrapper.html(this.shift_report(res, false));
+					// The closing report on paper, for the manager to sign (Resto Shift Close).
+					done.set_primary_action(__("Print"), () =>
+						window.open(
+							`/printview?doctype=${encodeURIComponent("Resto Shift")}&name=${encodeURIComponent(res.closing)}&format=${encodeURIComponent("Resto Shift Close")}&trigger_print=1`
+						)
+					);
 					done.show();
 					this.refresh();
 				})
@@ -910,10 +989,6 @@ class RestoFloor {
 	line_menu(line) {
 		const sent = line.kitchen_status !== "Not Sent";
 		if (line.kitchen_status === "Void") return;
-		if (sent && !this.floor.roles.manager) {
-			frappe.msgprint(__("Only a manager can void an item sent to the kitchen"));
-			return;
-		}
 		const fields = [];
 		if (!sent) {
 			fields.push(
@@ -939,7 +1014,10 @@ class RestoFloor {
 			primary_action_label: sent ? __("Void Item") : __("Save"),
 			primary_action: async (v) => {
 				d.hide();
-				if (sent) await this.line_call("void_line", { line: line.name, reason: v.reason, cooked: v.cooked ? 1 : 0 });
+				if (sent) {
+					const ok = await ask_approval(this.floor, `${__("Void an item sent to the kitchen")}: ${line.qty} × ${line.item_name}`);
+					if (ok) await this.line_call("void_line", { line: line.name, reason: v.reason, cooked: v.cooked ? 1 : 0, ...ok });
+				}
 				else await this.line_call("update_line", { line: line.name, notes: v.notes || "", course: v.course || "", hold: v.hold ? 1 : 0 });
 			},
 		});
@@ -1156,7 +1234,19 @@ class RestoFloor {
 				{ fieldname: "amount", fieldtype: "Currency", label: __("Or Discount Amount"), default: o.discount_percentage ? 0 : o.discount_amount },
 				{ fieldname: "reason", fieldtype: "Data", label: __("Discount Reason"), default: o.discount_reason },
 			],
-			async (v) => { await call("apply_discount", { order: o.name, ...v }, true); this.load_order(o.name); },
+			async (v) => {
+				const total = flt(o.net_total);
+				const percent = flt(v.percentage) || (total ? (flt(v.amount) / total) * 100 : 0);
+				// Above the waiter's or cashier's limit: a manager approves it here (D-204).
+				const limit = flt(this.floor.discount_limit);
+				let ok = {};
+				if (percent > limit + 1e-6) {
+					ok = await ask_approval(this.floor, __("Discount of {0}% (above {1}%)", [percent.toFixed(2), limit]));
+					if (!ok) return;
+				}
+				await call("apply_discount", { order: o.name, ...v, ...ok }, true);
+				this.load_order(o.name);
+			},
 			__("Discount")
 		);
 	}
@@ -1231,10 +1321,6 @@ class RestoFloor {
 	cancel() {
 		const o = this.order;
 		const sent = (o.items || []).filter((d) => !["Not Sent", "Void"].includes(d.kitchen_status));
-		if (sent.length && !this.floor.roles.manager) {
-			frappe.msgprint(__("Only a manager can cancel an order sent to the kitchen"));
-			return;
-		}
 		const fields = [{ fieldname: "reason", fieldtype: "Small Text", label: __("Cancel Reason"), reqd: 1 }];
 		if (sent.length) {
 			// What the kitchen already made is posted as waste; what it did not make stays in stock.
@@ -1255,7 +1341,9 @@ class RestoFloor {
 			fields,
 			async (v) => {
 				const cooked = resto.cooked_values(sent, v, (d) => d.name);
-				await call("cancel_order", { order: o.name, reason: v.reason, cooked: JSON.stringify(cooked) }, true);
+				const ok = sent.length ? await ask_approval(this.floor, __("Cancel order {0} with items sent to the kitchen", [o.name])) : {};
+				if (!ok) return;
+				await call("cancel_order", { order: o.name, reason: v.reason, cooked: JSON.stringify(cooked), ...ok }, true);
 				this.close_order();
 			},
 			__("Cancel Order"),
@@ -1293,6 +1381,16 @@ class RestoFloor {
 			primary_action_label: __("Settle"),
 			primary_action: async (v) => {
 				const payments = modes.map((m, i) => ({ mode_of_payment: m.mode_of_payment, amount: v[`p_${i}`] || 0 }));
+				const owed = remaining() > 0.005 && v.on_account ? remaining() : 0;
+				let ok = {};
+				if (owed && bill.on_account_needs_approval) {
+					// The customer has no credit limit: a manager approves this amount on account.
+					ok = await ask_approval(
+						this.floor,
+						__("{0} on the account of {1} (no credit limit)", [money(owed), bill.on_account_customer_name || bill.on_account_customer])
+					);
+					if (!ok) return;
+				}
 				d.get_primary_btn().prop("disabled", true);
 				try {
 					const r = await call(
@@ -1303,7 +1401,8 @@ class RestoFloor {
 							lines: lines ? JSON.stringify(lines) : null,
 							expected: bill.payable,
 							request_id,
-							on_account: remaining() > 0.005 && v.on_account ? 1 : 0,
+							on_account: owed ? 1 : 0,
+							...ok,
 						},
 						true
 					);
