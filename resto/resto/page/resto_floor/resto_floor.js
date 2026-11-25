@@ -385,18 +385,20 @@ class RestoFloor {
 	}
 
 	// A manager's PIN for approvals on a waiter's or cashier's screen (D-204).
-	set_my_pin(then_lock) {
+	// kind "approve": a manager's approval PIN. kind "lock": the PIN that opens this screen once
+	// locked; a manager's is a different one (the approval PIN is typed on other people's screens).
+	set_my_pin(kind, then_lock) {
 		const manager = this.floor && this.floor.roles.manager;
-		const help = [
-			manager
+		const help =
+			kind === "approve"
 				? __("Typed on a waiter's or cashier's screen to approve a void after sending, a cancel, a discount above the limit, or a bill on account. 4 to 8 digits; keep it to yourself.")
-				: __("4 to 8 digits; keep it to yourself."),
-			__("It also opens this screen after it is locked."),
-		];
+				: manager
+				? __("Opens this screen after it is locked. 4 to 8 digits, different from your approval PIN; keep it to yourself.")
+				: __("Opens this screen after it is locked. 4 to 8 digits; keep it to yourself.");
 		const d = new frappe.ui.Dialog({
-			title: then_lock ? __("Set Your PIN to Lock the Screen") : manager ? __("My Approval PIN") : __("My PIN"),
+			title: then_lock ? __("Set Your PIN to Lock the Screen") : kind === "approve" ? __("My Approval PIN") : manager ? __("My Lock PIN") : __("My PIN"),
 			fields: [
-				{ fieldname: "help", fieldtype: "HTML", options: `<p class="text-muted">${help.join(" ")}</p>` },
+				{ fieldname: "help", fieldtype: "HTML", options: `<p class="text-muted">${help}</p>` },
 				{ fieldname: "pin", fieldtype: "Password", label: __("New PIN"), reqd: 1 },
 				{ fieldname: "again", fieldtype: "Password", label: __("New PIN Again"), reqd: 1 },
 				{ fieldname: "password", fieldtype: "Password", label: __("Your Login Password"), reqd: 1 },
@@ -404,10 +406,10 @@ class RestoFloor {
 			primary_action_label: __("Save"),
 			primary_action: async (v) => {
 				if (v.pin !== v.again) return frappe.msgprint(__("The two PINs are not the same"));
-				await frappe.xcall("resto.resto.approval.set_my_pin", { pin: v.pin, password: v.password });
+				await frappe.xcall("resto.resto.approval.set_my_pin", { pin: v.pin, password: v.password, kind });
 				d.hide();
 				frappe.show_alert({ message: __("Your PIN is saved"), indicator: "green" });
-				if (this.floor) this.floor.has_pin = 1;
+				if (this.floor && kind === "lock") this.floor.has_pin = 1;
 				if (then_lock) this.lock();
 			},
 		});
@@ -436,7 +438,7 @@ class RestoFloor {
 
 	async lock() {
 		if (this._locked || !this.floor || !this.floor.screen_lock) return;
-		if (!this.floor.has_pin) return this.set_my_pin(true);
+		if (!this.floor.has_pin) return this.set_my_pin("lock", true);
 		if (this.offline || navigator.onLine === false) {
 			return frappe.msgprint(__("Not connected: the screen locks when the connection is back (its PIN is checked on the server)."));
 		}
@@ -1263,8 +1265,8 @@ class RestoFloor {
 		}
 		// The lock screen only when Resto Settings turns it on (D-216); a manager's approval PIN always.
 		if (f.screen_lock) acts.push([`${ICON.lock}<span>${__("Lock Screen")}</span>`, () => this.lock()]);
-		if (r.manager) acts.push([__("My Approval PIN"), () => this.set_my_pin()]);
-		else if (f.screen_lock) acts.push([__("My PIN"), () => this.set_my_pin()]);
+		if (r.manager) acts.push([__("My Approval PIN"), () => this.set_my_pin("approve")]);
+		if (f.screen_lock) acts.push([r.manager ? __("My Lock PIN") : __("My PIN"), () => this.set_my_pin("lock")]);
 		acts.push([__("Kitchen Display"), () => frappe.set_route("resto-kitchen")]);
 		if (r.cashier || r.manager) {
 			acts.push(s.shift ? [__("Close Shift"), () => this.close_shift()] : [__("Open Shift"), () => this.open_shift()]);

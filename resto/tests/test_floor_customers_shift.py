@@ -473,6 +473,17 @@ class TestManagerApproval(IntegrationTestCase):
 		reset()
 		self.addCleanup(reset)
 		frappe.db.delete("Resto Manager PIN", {"user": WAITER_USER})
+		frappe.db.set_value("Resto Manager PIN", {"user": MANAGER_USER}, "lock_pin_hash", None)
+		# A waiter's lock PIN kept in pin_hash by the older version moves out of it (the patch).
+		from resto.patches.v0_1 import separate_lock_pin
+
+		old = frappe.get_doc({"doctype": "Resto Manager PIN", "user": WAITER_USER, "pin_hash": approval._hash("1357")})
+		old.flags.resto_pin = True
+		old.insert(ignore_permissions=True)
+		separate_lock_pin.execute()
+		self.assertFalse(frappe.db.get_value("Resto Manager PIN", {"user": WAITER_USER}, "pin_hash"))
+		self.assertTrue(frappe.db.get_value("Resto Manager PIN", {"user": WAITER_USER}, "lock_pin_hash"))
+		frappe.db.delete("Resto Manager PIN", {"user": WAITER_USER})
 		order, line = self.sent_order()
 		# Off (the default): no lock, and only a manager sets a PIN.
 		screen_lock(0)
@@ -496,6 +507,22 @@ class TestManagerApproval(IntegrationTestCase):
 		self.assertTrue(approval.unlock("٢٤٦٨")["ok"])  # typed on an Arabic keypad; the tries start again
 		frappe.set_user("cashier@resto.test")
 		self.assertRaises(approval.ApprovalRequired, floor.void_line, order, line, "Wrong dish", 0, WAITER_USER, "2468")
+		# A manager's lock PIN is apart from the approval PIN (seen on other screens): it must differ,
+		# the approval PIN never opens the lock, and the lock PIN never approves.
+		self.addCleanup(approval._clear_tries, MANAGER_USER)
+		frappe.set_user(WAITER_USER)
+		self.assertRaises(frappe.PermissionError, approval.set_my_pin, "8642", None, "approve")
+		frappe.set_user(MANAGER_USER)
+		self.assertFalse(floor.get_floor()["has_pin"])  # the approval PIN is not a lock PIN
+		self.assertRaises(frappe.ValidationError, approval.set_my_pin, "4321", None, "lock")
+		approval.set_my_pin("9753", None, "lock")
+		self.assertTrue(floor.get_floor()["has_pin"])
+		self.assertRaises(frappe.ValidationError, approval.set_my_pin, "9753", None, "approve")
+		self.assertFalse(approval.unlock("4321")["ok"])
+		self.assertTrue(approval.unlock("9753")["ok"])
+		frappe.set_user("cashier@resto.test")
+		self.assertRaises(approval.ApprovalRequired, floor.void_line, order, line, "Wrong dish", 0, MANAGER_USER, "9753")
+		floor.void_line(order, line, "Wrong dish", 0, MANAGER_USER, "4321")  # the approval PIN still approves
 		frappe.set_user(WAITER_USER)
 		for _i in range(approval.MAX_TRIES - 1):
 			self.assertFalse(approval.unlock("0000").get("logout"))

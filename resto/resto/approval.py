@@ -7,8 +7,10 @@ checked inside the action's own call, so the approval is for that action and tha
 spent with it. Every approval and every wrong PIN is logged (Resto Approval Log). Five tries without
 the right PIN lock the manager's PIN for 15 minutes.
 
-Every floor user (waiter, cashier, host, manager) may set their own PIN the same way, to unlock the
-floor screen they locked (unlock). A manager's one PIN does both; only a manager's PIN approves.
+Every floor user (waiter, cashier, host, manager) may set their own lock PIN the same way, to unlock
+the floor screen they locked (unlock). The two are kept apart: a manager's approval PIN is typed on
+other people's screens, so it never opens the manager's own locked screen, and a manager's lock PIN
+never approves. A manager's two PINs must differ.
 
 The tries are counted in Redis, before the PIN is checked: the count never depends on the failed
 request's database work (which is rolled back), and requests sent at the same moment all count.
@@ -199,7 +201,7 @@ def approve(action, reference, amount=0, approver=None, pin=None, details=None):
 def approvers():
 	"""The managers who can approve on the floor (they have a PIN)."""
 	require_role(WAITER, CASHIER)
-	users = frappe.get_all("Resto Manager PIN", pluck="user")
+	users = frappe.get_all("Resto Manager PIN", filters={"pin_hash": ["is", "set"]}, pluck="user")
 	return [
 		{"user": u, "full_name": frappe.db.get_value("User", u, "full_name") or u}
 		for u in users
@@ -208,13 +210,18 @@ def approvers():
 
 
 @frappe.whitelist(methods=["POST"])
-def set_my_pin(pin, password=None):
+def set_my_pin(pin, password=None, kind=None):
 	"""A floor user sets (or changes) their own PIN, 4 to 8 digits, after typing their login password:
-	someone at an open screen cannot plant a PIN they know. A manager's PIN also approves (D-204);
-	everyone's unlocks their floor screen (D-216). With the screen lock off (Resto Settings), only a
-	manager has one."""
+	someone at an open screen cannot plant a PIN they know. kind "approve": a manager's approval PIN
+	(D-204). kind "lock": the PIN that opens their locked floor screen (D-216), only while Resto
+	Settings has the screen lock on. None: a manager's approval PIN, everyone else's lock PIN."""
 	require_role(WAITER, CASHIER, HOST)
-	if not has_role() and not _screen_lock():
+	kind = kind or ("approve" if has_role() else "lock")
+	if kind not in ("approve", "lock"):
+		frappe.throw(_("Unknown PIN"))
+	if kind == "approve" and not has_role():
+		frappe.throw(_("Only a manager has an approval PIN"), frappe.PermissionError)
+	if kind == "lock" and not _screen_lock():
 		frappe.throw(_("The screen lock is off in Resto Settings"))
 	user = frappe.session.user
 	if not frappe.flags.in_test or password:
@@ -236,12 +243,22 @@ def set_my_pin(pin, password=None):
 		frappe.throw(_("The PIN is 4 to 8 digits"))
 	name = frappe.db.get_value("Resto Manager PIN", {"user": user}, "name", for_update=True)
 	doc = frappe.get_doc("Resto Manager PIN", name) if name else frappe.new_doc("Resto Manager PIN")
+	field, other = ("pin_hash", "lock_pin_hash") if kind == "approve" else ("lock_pin_hash", "pin_hash")
+	if kind == "lock" and not is_approver(user):
+		doc.pin_hash = None  # a lock PIN kept there by an older version: never an approval PIN later
+	# The approval PIN is seen on other people's screens: as the lock PIN it would open this one.
+	if doc.get(other) and _matches(pin, doc.get(other)):
+		frappe.throw(
+			_("Choose a PIN different from your approval PIN")
+			if kind == "lock"
+			else _("Choose a PIN different from your lock PIN")
+		)
 	doc.user = user
-	doc.pin_hash = _hash(pin)
+	doc.set(field, _hash(pin))
 	doc.flags.resto_pin = True
 	doc.flags.ignore_permissions = True
 	doc.save()
-	_clear_tries(user)  # a new PIN unlocks it
+	_clear_tries(user, kind if kind == "approve" else "unlock")  # a new PIN unlocks it
 	return True
 
 
@@ -252,7 +269,8 @@ def _screen_lock():
 
 
 def has_pin(user=None):
-	return bool(frappe.db.exists("Resto Manager PIN", {"user": user or frappe.session.user}))
+	"""A lock PIN: the floor screen can be locked."""
+	return bool(frappe.db.get_value("Resto Manager PIN", {"user": user or frappe.session.user}, "lock_pin_hash"))
 
 
 def _lock_pin(user, kind="approve"):
@@ -283,7 +301,7 @@ def unlock(pin):
 	person signs in with their password). Answers, never throws: nothing to roll back."""
 	require_role(WAITER, CASHIER, HOST)
 	user = frappe.session.user
-	stored = frappe.db.get_value("Resto Manager PIN", {"user": user}, "pin_hash")
+	stored = frappe.db.get_value("Resto Manager PIN", {"user": user}, "lock_pin_hash")
 	if not stored:
 		_sign_out()  # the PIN was removed while the screen was locked: the password again
 		return {"ok": 0, "logout": 1, "message": _("You have no PIN: sign in again with your password")}

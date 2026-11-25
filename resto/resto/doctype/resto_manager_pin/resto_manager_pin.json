@@ -8,7 +8,8 @@
  "engine": "InnoDB",
  "field_order": [
   "user",
-  "pin_hash"
+  "pin_hash",
+  "lock_pin_hash"
  ],
  "fields": [
   {
@@ -30,13 +31,23 @@
    "print_hide": 1,
    "report_hide": 1,
    "permlevel": 1
+  },
+  {
+   "fieldname": "lock_pin_hash",
+   "fieldtype": "Data",
+   "label": "Lock PIN Hash",
+   "hidden": 1,
+   "read_only": 1,
+   "print_hide": 1,
+   "report_hide": 1,
+   "permlevel": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-25 20:00:00.000000",
+ "modified": "2026-11-25 22:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Manager PIN",

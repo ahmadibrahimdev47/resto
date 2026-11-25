@@ -14,3 +14,4 @@ resto.patches.v0_1.receipt_print_format
 resto.patches.v0_1.customer_delivery_address
 resto.patches.v0_1.remove_posnext_leftovers
 resto.patches.v0_1.remove_posnext_customer_fields
+resto.patches.v0_1.separate_lock_pin
