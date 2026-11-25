@@ -948,9 +948,9 @@ class RestoFloor {
 				${line(__("Total", null, "Resto"), money(v.grand_total), "rf-tbig")}
 			</div>
 			<div class="rf-tots">
-				${v.payments.map((p) => line(esc(__(p.mode_of_payment)), money(p.amount))).join("")}
+				${v.payments.map((p) => line(cint(v.is_return) ? esc(__(p.mode_of_payment)) : __("Paid ({0})", [esc(__(p.mode_of_payment))], "Resto"), money(p.amount))).join("")}
 				${flt(v.change_amount) ? line(__("Change", null, "Resto"), money(v.change_amount)) : ""}
-				${flt(v.outstanding_amount) > 0 ? line(__("Still Owed"), money(v.outstanding_amount), "rf-warn") : ""}
+				${flt(v.outstanding_amount) > 0 ? line(__("Still Owed"), money(v.outstanding_amount), "rf-warn") : cint(v.is_return) ? "" : `<div class="rf-paidfull">${__("Paid in Full")} ✓</div>`}
 			</div>
 			<p class="rf-muted">${cint(v.printed) ? __("The receipt was printed") : __("The receipt was not printed yet")}</p>`);
 		$d.find("[data-ia=print]").on("click", async (e) => {
@@ -3286,7 +3286,7 @@ class RestoFloor {
 			indicator: "green",
 			message: `<div class="rf-paidmsg">${__("Invoice")} <a href="/app/sales-invoice/${esc(r.sales_invoice)}"><b>${esc(r.sales_invoice)}</b></a>
 				${r.change_amount ? `<div class="rf-paidchg">${__("Change", null, "Resto")}: <b>${money(r.change_amount)}</b></div>` : ""}
-				${r.outstanding_amount > 0.005 ? `<div class="text-warning"><b>${__("On account of {0}: {1}", [esc(bill.on_account_customer_name || bill.on_account_customer), money(r.outstanding_amount)])}</b></div>` : ""}</div>`,
+				${r.outstanding_amount > 0.005 ? `<div class="text-warning"><b>${__("On account of {0}: {1}", [esc(bill.on_account_customer_name || bill.on_account_customer), money(r.outstanding_amount)])}</b></div>` : `<div class="rf-paidfull">${__("Paid in Full")} ✓</div>`}</div>`,
 			primary_action: {
 				// The receipt printed by itself (cashier printer, or this browser): this prints it again.
 				label: r.receipt_mode === "server" || auto || r.receipt_printed ? __("Print Again") : __("Print Receipt"),
@@ -3447,7 +3447,7 @@ class RestoFloor {
 		.rf-legend i { width:12px; height:12px; border-radius:4px; display:inline-block; }
 		.rf-legend i.free { background:var(--rf-green-soft); border:2px solid var(--rf-green); } .rf-legend i.occupied { background:var(--rf-blue); }
 		.rf-tbl.paid { background:var(--rf-card); border:2px dashed var(--rf-green); } .rf-tbl.paid .rf-st { background:var(--rf-green); color:#fff; }
-		.rf-ono { color:var(--rf-acc); } .rf-legend i.paid { border:2px dashed var(--rf-green); } .rf-pwarn { padding:6px 0; font-weight:700; }
+		.rf-ono { color:var(--rf-acc); } .rf-paidfull { color:var(--rf-green); font-weight:700; margin-top:6px; } .rf-legend i.paid { border:2px dashed var(--rf-green); } .rf-pwarn { padding:6px 0; font-weight:700; }
 		.rf-legend i.bill { background:var(--rf-amber); } .rf-legend i.reserved { background:var(--rf-purple); }
 		.rf-orow { all:unset; box-sizing:border-box; cursor:pointer; display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-bottom:1px solid var(--rf-line2); }
 		.rf-orow1, .rf-orow2 { display:flex; align-items:center; gap:8px; }
