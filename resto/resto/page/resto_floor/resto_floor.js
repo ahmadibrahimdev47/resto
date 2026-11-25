@@ -2226,7 +2226,15 @@ class RestoFloor {
 		const unsent = o.items.filter((d) => d.kitchen_status === "Not Sent" && !d.hold).length;
 		const held = o.items.filter((d) => d.kitchen_status === "Not Sent" && d.hold).length;
 		// The buttons stay; only their text changes (a tap on them is never lost to a redraw).
-		this.$order.find(".rf-send-t").text(`${__("Send to Kitchen")}${unsent ? ` (${unsent})` : ""}`);
+		// Nothing new for the kitchen: the button says it is done and rests until a line is added
+		// or changed (a dish tapped shows at once as not sent, so it is ready again at once).
+		const sent = o.items.some((d) => !["Not Sent", "Void"].includes(d.kitchen_status));
+		this.$order
+			.find("[data-act=send]")
+			.prop("disabled", !unsent)
+			.toggleClass("rf-btn-d", !!unsent)
+			.toggleClass("rf-done", !unsent && sent);
+		this.$order.find(".rf-send-t").text(unsent ? `${__("Send to Kitchen")} (${unsent})` : sent ? `${__("Sent to Kitchen")} ✓` : __("Send to Kitchen"));
 		this.$order.find(".rf-fire").toggle(!!held).text(__("Fire Held Dishes ({0})", [held]));
 		this.$order.find(".rf-pay-b").text(`${__("Pay", null, "Resto")}${added || flt(o.invoiced_total) ? "" : ` · ${money(total)}`}`);
 		this.$order.find(".rf-onote").remove();
@@ -3025,6 +3033,7 @@ class RestoFloor {
 		.rf-btn { min-height:44px; padding:0 16px; border-radius:10px; border:1px solid var(--rf-line); background:var(--rf-card); color:var(--rf-ink);
 			font-weight:700; font-size:15px; display:inline-flex; align-items:center; justify-content:center; gap:8px; cursor:pointer; white-space:nowrap; }
 		.rf-btn:disabled { opacity:.5; cursor:not-allowed; }
+		.rf-btn.rf-done:disabled { opacity:1; cursor:default; background:var(--rf-green-soft); border-color:var(--rf-green-soft); color:var(--rf-green-ink); }
 		.rf-btn-p { background:var(--rf-acc); border-color:var(--rf-acc); color:#fff; }
 		.rf-btn-d { background:var(--rf-ink); border-color:var(--rf-ink); color:var(--rf-card); }
 		.rf-btn.rf-sm, .rf-ib.rf-sm { min-height:44px; height:44px; font-size:13px; padding:0 12px; }
