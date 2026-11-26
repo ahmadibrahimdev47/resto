@@ -67,9 +67,10 @@ class TestOpeningCheck(IntegrationTestCase):
 
 	def close(self):
 		frappe.set_user(CASHIER)
-		row = next(r for r in shift.closing_data()["rows"] if r["mode_of_payment"] == "Cash")
-		shift.close_shift(json.dumps({"Cash": row["expected_amount"]}))
-		return row
+		rows = shift.closing_data()["rows"]
+		# Every method of the profile is counted (the test profile has a card method too).
+		shift.close_shift(json.dumps({r["mode_of_payment"]: r["expected_amount"] for r in rows}))
+		return next(r for r in rows if r["mode_of_payment"] == "Cash")
 
 	def cash(self, doc):
 		return next(p for p in doc.payments if p.mode_of_payment == "Cash")
