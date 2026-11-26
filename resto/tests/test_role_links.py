@@ -437,3 +437,51 @@ class TestKitchenSeesNoMoney(IntegrationTestCase):
 		self.assertFalse([r for r in burger.resto_recipe_items if r.get("rate") is not None])
 		self.assertIsNone(burger.get("resto_recipe_total_cost"))
 		self.assertIsNotNone(self.opened(self.manager, "Item", "DISH-BURGER").get("resto_recipe_total_cost"))
+
+
+class TestManagerCountsStock(IntegrationTestCase):
+	"""The manager posts the weekly stock count without Stock Manager (D-244); the kitchen cannot."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		cls.manager = user_with("Resto Manager")
+		cls.kitchen = user_with("Resto Kitchen")
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def test_the_rights(self):
+		for right in ("read", "write", "create", "submit", "cancel", "amend", "print"):
+			with self.subTest(right=right):
+				self.assertTrue(frappe.has_permission("Stock Reconciliation", right, user=self.manager))
+				self.assertFalse(frappe.has_permission("Stock Reconciliation", right, user=self.kitchen))
+		self.assertNotIn("Stock Manager", frappe.get_roles(self.manager))
+
+	def test_the_manager_posts_a_count_to_the_stock_adjustment_account(self):
+		before = fx.bin_qty("RAW-BUN", fx.MAIN)
+		frappe.set_user(self.manager)
+		doc = frappe.get_doc(
+			{
+				"doctype": "Stock Reconciliation",
+				"company": fx.COMPANY,
+				"purpose": "Stock Reconciliation",
+				"items": [{"item_code": "RAW-BUN", "warehouse": fx.MAIN, "qty": before + 1, "valuation_rate": 5}],
+			}
+		).insert()
+		doc.submit()
+		frappe.set_user("Administrator")
+		self.assertAlmostEqual(fx.bin_qty("RAW-BUN", fx.MAIN) - before, 1, 6)
+		adjustment = frappe.get_cached_value("Company", fx.COMPANY, "stock_adjustment_account")
+		self.assertEqual(doc.expense_account, adjustment)
+		credit = frappe.db.get_value(
+			"GL Entry",
+			{"voucher_type": "Stock Reconciliation", "voucher_no": doc.name, "account": adjustment, "is_cancelled": 0},
+			"sum(credit) - sum(debit)",
+		)
+		self.assertAlmostEqual(frappe.utils.flt(credit), 5, 2)
+		frappe.set_user(self.manager)
+		frappe.get_doc("Stock Reconciliation", doc.name).cancel()
+		frappe.set_user("Administrator")
+		self.assertAlmostEqual(fx.bin_qty("RAW-BUN", fx.MAIN), before, 6)
