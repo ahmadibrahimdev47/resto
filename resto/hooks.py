@@ -59,19 +59,25 @@ doc_events = {
 		"on_cancel": "resto.resto.billing.on_sales_invoice_cancel",
 	},
 	# A customer's debt paid to a cashier with an open shift goes into that shift's drawer.
+	# A cash account taken below zero is warned about or refused (D-257).
 	"Payment Entry": {
 		"before_submit": "resto.resto.shift.link_payment_entry",
+		"on_submit": "resto.resto.cash_guard.check_posting",
 		"before_cancel": "resto.resto.shift.check_cancel",
 	},
 	# A salary entry's Journal Entry is cancelled with the salary entry (D-249).
 	"Journal Entry": {
+		"on_submit": "resto.resto.cash_guard.check_posting",
 		"before_cancel": [
 			"resto.resto.shift.check_cancel",
 			"resto.resto.doctype.resto_salary_entry.resto_salary_entry.check_journal_cancel",
 		]
 	},
 	# A cash purchase from a closed shift's drawer stays as the shift counted it (D-225).
-	"Purchase Invoice": {"before_cancel": "resto.resto.shift.check_cancel"},
+	"Purchase Invoice": {
+		"on_submit": "resto.resto.cash_guard.check_posting",
+		"before_cancel": "resto.resto.shift.check_cancel",
+	},
 	"Stock Entry": {"before_cancel": "resto.resto.staff_meal.check_cancel"},
 }
 

@@ -338,3 +338,28 @@ resto.watch_backups = function () {
 };
 $(document).on("app_ready", resto.watch_backups);
 $(() => setTimeout(resto.watch_backups, 2000));
+
+// Before Submit of a posting that takes money from a cash account (D-257): when it would leave
+// the account below zero, ask first (Warn Only) or stop (Block the Posting). The server checks
+// again once the posting is booked.
+resto.cash_guard = async function (frm) {
+	let r = null;
+	try {
+		r = await frappe.xcall("resto.resto.cash_guard.preview", { doctype: frm.doctype, name: frm.doc.name });
+	} catch (e) {
+		return;
+	}
+	if (!r) return;
+	if (r.mode === "Block the Posting") {
+		frappe.validated = false;
+		frappe.msgprint({ title: __("Cash Below Zero"), message: r.message, indicator: "red" });
+		return;
+	}
+	const ok = await new Promise((resolve) =>
+		frappe.confirm(`${r.message}<br><br>${__("Submit anyway?")}`, () => resolve(true), () => resolve(false))
+	);
+	if (!ok) frappe.validated = false;
+};
+for (const doctype of ["Journal Entry", "Payment Entry", "Purchase Invoice", "Resto Salary Entry"]) {
+	frappe.ui.form.on(doctype, { before_submit: (frm) => resto.cash_guard(frm) });
+}

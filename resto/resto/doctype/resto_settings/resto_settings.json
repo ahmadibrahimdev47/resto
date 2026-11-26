@@ -37,6 +37,7 @@
   "staff_advance_cap",
   "self_advance_needs_manager",
   "main_safe_account",
+  "negative_cash",
   "drawer_cash_in_accounts",
   "salary_account",
   "allow_side_changes",
@@ -286,6 +287,14 @@
    "label": "Main Safe Account",
    "options": "Account",
    "description": "The cash account of the main safe (type Cash, not the drawer's own): a cash drop from the drawer goes into it, and change for the drawer comes out of it. Both need a manager's PIN."
+  },
+  {
+   "fieldname": "negative_cash",
+   "fieldtype": "Select",
+   "label": "When a Cash Account Would Go Below Zero",
+   "options": "Warn Only\nBlock the Posting",
+   "default": "Warn Only",
+   "description": "A cash box holds no less than nothing: below zero means cash that came in was not recorded, or an expense was posted twice. Warn Only asks before submitting; Block the Posting refuses it."
   },
   {
    "fieldname": "drawer_cash_in_accounts",
@@ -571,7 +580,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-26 14:00:00.000000",
+ "modified": "2026-11-26 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",
