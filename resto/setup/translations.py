@@ -25,6 +25,8 @@ WRITTEN = "resto_translation_overrides"
 OVERRIDE = (
 	"Submit", "Submitted", "Remark", "Custom Remark", "Frequency", "End Date", "Submit on Creation", "Add Child", "Is Group",
 	"Employment", "Reports to", "Emergency Contact Name", "Personal Email",
+	# Users and roles (D-243): a user is «المستخدم», a role «الدور», a User Permission a «قيد».
+	"User", "Add User", "Role", "Roles", "Role Profile", "Role Permissions Manager", "User Permission", "User Permissions",
 )
 
 
