@@ -1585,17 +1585,17 @@ class RestoFloor {
 		}
 		if (r.summary) {
 			parts.push(`<div class="rf-metrics">
-				${metric(__("Gross Sales"), money(s.gross_sales), __("{0} invoices", [s.sales_count || (r.invoices || []).filter((i) => !i.is_return).length]))}
+				${metric(__("Gross Sales"), money(s.gross_sales), __("{0} invoices · before returns", [s.sales_count || (r.invoices || []).filter((i) => !i.is_return).length]))}
 				${s.returns_count ? metric(__("Returns"), "-" + money(s.returns_total), __("{0} returns", [s.returns_count])) : ""}
-				${s.expenses_count ? metric(__("POS Expenses"), "-" + money(s.expenses_total), __("{0} expenses", [s.expenses_count])) : ""}
-				${s.purchases_count ? metric(__("Cash Purchases"), "-" + money(s.purchases_total), __("{0} purchases", [s.purchases_count])) : ""}
-				${metric(__("Net Sales"), money(s.net_sales), __("After returns"))}
-				${metric(__("Collected"), money(s.collected), __("Money taken"))}
+				${metric(__("Net Sales"), money(s.net_sales), __("After returns are taken off"))}
+				${metric(__("Tax Collected"), money(s.tax_total), __("VAT on the shift's invoices"))}
+				${metric(__("Collected"), money(s.collected), s.debts_count ? __("Received by every payment method, {0} of it debts collected", [money(s.debts_total)]) : __("Received by every payment method"))}
 				${s.outstanding > 0.005 ? metric(__("On Account"), money(s.outstanding), __("Not collected")) : ""}
 				${s.debts_count ? metric(__("Debts Collected"), money(s.debts_total), __("{0} payments", [s.debts_count])) : ""}
-				${s.expenses_count || s.purchases_count ? metric(__("Net Cash Impact"), money(s.net_cash), s.purchases_count ? __("Collected - Expenses - Purchases") : __("Collected - Expenses")) : ""}
-				${metric(__("Tax Collected"), money(s.tax_total))}
-				${s.staff_meals_count ? metric(__("Staff Meals"), money(s.staff_meals_cost), __("{0} meals, at cost from stock: not cash", [s.staff_meals_count])) : ""}
+				${s.expenses_count ? metric(__("Drawer Running Expenses"), "-" + money(s.expenses_total), __("{0} expenses · transport, cleaning and the like, not into stock", [s.expenses_count])) : ""}
+				${s.purchases_count ? metric(__("Drawer Stock Purchases"), "-" + money(s.purchases_total), __("{0} purchase invoices · into the kitchen's stock", [s.purchases_count])) : ""}
+				${s.expenses_count || s.purchases_count ? metric(__("Net In for the Shift"), money(s.net_cash), s.purchases_count ? __("Collected − Expenses − Purchases") : __("Collected − Expenses")) : ""}
+				${s.staff_meals_count ? metric(__("Staff Meals"), money(s.staff_meals_cost), __("{0} meals · at stock cost, not cash", [s.staff_meals_count])) : ""}
 			</div>`);
 			const inv = (r.invoices || [])
 				.map(
@@ -1611,11 +1611,11 @@ class RestoFloor {
 					: `<p class="text-muted">${__("No Sales During This Shift")}</p>`
 			);
 			if ((r.expenses || []).length) {
-				parts.push(`<details><summary><b>${__("POS Expenses")}</b></summary><table class="table table-condensed">
+				parts.push(`<details><summary><b>${__("Drawer Running Expenses")}</b></summary><table class="table table-condensed">
 					${r.expenses.map((e) => `<tr><td>${esc(e.expense_account)}</td><td>${esc(e.remarks || "")}</td><td class="rf-amt">${money(e.amount)}</td></tr>`).join("")}</table></details>`);
 			}
 			if ((r.purchases || []).length) {
-				parts.push(`<details><summary><b>${__("Cash Purchases")}</b></summary><table class="table table-condensed">
+				parts.push(`<details><summary><b>${__("Drawer Stock Purchases")}</b></summary><table class="table table-condensed">
 					${r.purchases
 						.map((e) => `<tr><td>${esc(e.supplier_name || e.supplier || "")}</td><td>${esc(e.items_text || "")}</td><td class="rf-amt">${money(e.amount)}</td></tr>`)
 						.join("")}</table></details>`);

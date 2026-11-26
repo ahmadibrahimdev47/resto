@@ -52,14 +52,14 @@
   {
    "fieldname": "expenses_amount",
    "fieldtype": "Currency",
-   "label": "Expenses",
+   "label": "Drawer Running Expenses",
    "options": "currency",
    "read_only": 1
   },
   {
    "fieldname": "purchases_amount",
    "fieldtype": "Currency",
-   "label": "Cash Purchases",
+   "label": "Drawer Stock Purchases",
    "options": "currency",
    "read_only": 1
   },
@@ -100,7 +100,7 @@
  "is_submittable": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-26 11:00:00.000000",
+ "modified": "2026-11-26 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Shift Payment",
