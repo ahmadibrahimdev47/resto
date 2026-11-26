@@ -1,8 +1,8 @@
 """Every link of the restaurant sidebar a Resto role sees opens for it (D-223).
 
 A report shows in the sidebar for the roles on the report; it opens only with read and report on its
-doctype. A page shows for the roles on the page. A doctype shows when it can be read. The Items link
-is a URL (always shown): every Resto role reads Item.
+doctype. A page shows for the roles on the page. A doctype shows when it can be read. Every link opens
+in the same tab and keeps the restaurant sidebar (D-232).
 
 bench --site test.resto run-tests --module resto.tests.test_role_links
 """
@@ -82,7 +82,8 @@ class TestRoleLinks(IntegrationTestCase):
 		self.assertFalse(pages & {"Resto Cashier", "Resto Waiter", "Resto Host", "Resto Kitchen"})
 
 	def test_the_items_link_opens_for_every_role(self):
-		self.assertTrue(any(i.get("url") == "/app/item" for i in links()))
+		item = next(i for i in links() if i.get("label") == "Items")
+		self.assertEqual((item["link_type"], item["link_to"]), ("DocType", "Item"))
 		for role, user in self.users.items():
 			with self.subTest(role=role):
 				self.assertTrue(frappe.has_permission("Item", "read", user=user))
@@ -91,7 +92,6 @@ class TestRoleLinks(IntegrationTestCase):
 		# A DocType link is shown only to a user who can read the doctype, so shown means it opens.
 		item = next(i for i in links() if i.get("link_to") == "Purchase Invoice")
 		self.assertEqual(item["link_type"], "DocType")
-		self.assertTrue(item.get("open_in_new_tab"))
 		for role in ("Resto Cashier", "Resto Waiter", "Resto Host", "Resto Kitchen"):
 			with self.subTest(role=role):
 				self.assertFalse(frappe.has_permission("Purchase Invoice", "read", user=self.users[role]))
@@ -104,7 +104,6 @@ class TestRoleLinks(IntegrationTestCase):
 		self.assertEqual(names[names.index("Purchase Invoice") + 1], "Accounts Payable Summary")
 		item = next(i for i in links() if i.get("link_to") == "Accounts Payable Summary")
 		self.assertEqual(item["link_type"], "Report")
-		self.assertTrue(item.get("open_in_new_tab"))
 		report = frappe.get_doc("Report", "Accounts Payable Summary")
 		shown = {r.role for r in report.roles}
 		self.assertFalse(shown & {"Resto Cashier", "Resto Waiter", "Resto Host", "Resto Kitchen"})
@@ -112,6 +111,15 @@ class TestRoleLinks(IntegrationTestCase):
 		accountant = user_with("Accounts User")
 		self.assertTrue(frappe.has_permission(report.ref_doctype, "read", user=accountant))
 		self.assertTrue(frappe.has_permission(report.ref_doctype, "report", user=accountant))
+
+	def test_every_link_stays_in_the_restaurant_sidebar(self):
+		# v16 opens only a URL link in a new tab, and a URL carries no sidebar, so the desk would put
+		# the item's own module around it. A DocType, Report or Page link is routed inside the
+		# sidebar showing it: same tab, the restaurant sidebar kept.
+		for item in links():
+			with self.subTest(link=item.get("label")):
+				self.assertNotEqual(item.get("link_type"), "URL")
+				self.assertFalse(item.get("open_in_new_tab"))
 
 	def test_each_doctype_link_is_a_doctype(self):
 		for item in links():

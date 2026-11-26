@@ -156,13 +156,13 @@
    "indent": 0,
    "is_default_module": 0,
    "keep_closed": 0,
-   "open_in_new_tab": 1,
+   "open_in_new_tab": 0,
    "show_arrow": 0,
    "type": "Link",
    "label": "Items",
-   "link_type": "URL",
+   "link_type": "DocType",
    "icon": "",
-   "url": "/app/item"
+   "link_to": "Item"
   },
   {
    "added": 0,
@@ -172,7 +172,7 @@
    "indent": 0,
    "is_default_module": 0,
    "keep_closed": 0,
-   "open_in_new_tab": 1,
+   "open_in_new_tab": 0,
    "show_arrow": 0,
    "type": "Link",
    "label": "Purchase Invoices",
@@ -188,7 +188,7 @@
    "indent": 0,
    "is_default_module": 0,
    "keep_closed": 0,
-   "open_in_new_tab": 1,
+   "open_in_new_tab": 0,
    "show_arrow": 0,
    "type": "Link",
    "label": "Supplier Dues",
@@ -579,7 +579,7 @@
    "icon": ""
   }
  ],
- "modified": "2026-11-26 18:00:00.000000",
+ "modified": "2026-11-26 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto",
