@@ -7,6 +7,12 @@ frappe.ui.form.on("Resto Settings", {
 			filters: { company: frm.doc.company, is_group: 0, root_type: "Expense" },
 		}));
 		frm.set_query("selling_price_list", () => ({ filters: { selling: 1, enabled: 1 } }));
+		// The main safe: a cash account (D-245); money into the drawer for another reason: the
+		// company's non-group accounts (Resto Settings checks the rest on save).
+		frm.set_query("main_safe_account", () => ({
+			filters: { company: frm.doc.company, is_group: 0, root_type: "Asset", account_type: "Cash" },
+		}));
+		frm.set_query("drawer_cash_in_accounts", by_company);
 	},
 
 	refresh(frm) {

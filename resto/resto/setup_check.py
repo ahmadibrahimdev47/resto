@@ -50,6 +50,7 @@ class SetupCheck:
 			self.check_cash_purchase,
 			self.check_staff_meal,
 			self.check_staff_advance,
+			self.check_main_safe,
 			self.check_recipe_precision,
 			self.check_modifiers,
 			self.check_sides,
@@ -581,6 +582,31 @@ class SetupCheck:
 			self.error(area, problem)
 		else:
 			self.ok(area, _("Staff advances are owed on {0}, by worker, until taken off their salary").format(name))
+
+	def check_main_safe(self):
+		"""Cash drops and change for the drawer (D-245) go through the Main Safe Account."""
+		from resto.resto.drawer_cash import main_safe_problem
+
+		area = _("Main Safe")
+		name = self.s.get("main_safe_account")
+		if not name:
+			self.warn(area, _("Set the Main Safe Account in Resto Settings: cash drops to the safe and change from it need it"))
+			return
+		problem = main_safe_problem(name, self.s.company)
+		if problem:
+			self.error(area, problem)
+			return
+		profile = self.s.get("pos_profile")
+		modes = frappe.get_all("POS Payment Method", filters={"parent": profile, "parenttype": "POS Profile"}, pluck="mode_of_payment") if profile else []
+		same = [
+			m
+			for m in modes
+			if frappe.db.get_value("Mode of Payment Account", {"parent": m, "company": self.s.company}, "default_account") == name
+		]
+		if same:
+			self.error(area, _("The Main Safe Account {0} is also the account of the drawer's {1}: the safe needs its own cash account").format(name, ", ".join(same)))
+		else:
+			self.ok(area, _("Cash drops go into {0}, and change for the drawer comes out of it").format(name))
 
 
 def short(names, limit=15):

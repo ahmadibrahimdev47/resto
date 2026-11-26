@@ -144,6 +144,17 @@ function ask_approval(floor, what) {
 }
 const money = (v) => format_currency(v || 0);
 
+// What Net In for the Shift is made of (D-235, D-245): only the parts the shift has.
+function net_caption(s) {
+	let text = __("Collected");
+	if (s.expenses_count) text += " − " + __("Expenses");
+	if (s.purchases_count) text += " − " + __("Purchases");
+	if (s.advances_count) text += " − " + __("Advances", null, "Resto");
+	if (s.cash_in_count) text += " + " + __("Cash In", null, "Resto");
+	if (s.drops_count) text += " − " + __("Drops", null, "Resto");
+	return text;
+}
+
 // How a payment method's expected amount is made (D-236), from the parts the server worked out:
 // opening and sales always, the others when there are any, then the expected amount.
 function expected_parts(p) {
@@ -154,6 +165,8 @@ function expected_parts(p) {
 		[__("Drawer Running Expenses"), flt(p.expenses_amount), -1],
 		[__("Drawer Stock Purchases"), flt(p.purchases_amount), -1],
 		[__("Staff Advances"), flt(p.advances_amount), -1],
+		[__("Cash In to the Drawer"), flt(p.cash_in_amount), 1],
+		[__("Cash Drops to the Main Safe"), flt(p.drops_amount), -1],
 		[__("Paid back to customers"), flt(p.refunds_amount), -1],
 	].filter(([, v], i) => i < 2 || Math.abs(v) >= 0.005);
 	const line = (label, value, cls = "") =>
@@ -1472,6 +1485,8 @@ class RestoFloor {
 			[__("Drawer Expense"), () => this.drawer_expense()],
 			[__("Cash Purchase"), () => this.cash_purchase()],
 			[__("Staff Advance from the Drawer"), () => this.staff_advance()],
+			[__("Cash In to the Drawer"), () => this.cash_in()],
+			[__("Cash Drop to the Main Safe"), () => this.cash_drop()],
 			[__("Close Shift"), () => this.close_shift()],
 		]);
 	}
@@ -1490,9 +1505,12 @@ class RestoFloor {
 					[__("Collect Debt"), () => this.collect_debt()],
 					[__("Drawer Expense"), () => this.drawer_expense()],
 					[__("Cash Purchase"), () => this.cash_purchase()],
-					[__("Staff Advance from the Drawer"), () => this.staff_advance()]
+					[__("Staff Advance from the Drawer"), () => this.staff_advance()],
+					[__("Cash In to the Drawer"), () => this.cash_in()]
 				);
 			}
+			// Also right after the close: the counted cash taken to the safe (D-245).
+			acts.push([__("Cash Drop to the Main Safe"), () => this.cash_drop()]);
 		}
 		// The lock screen only when Resto Settings turns it on (D-216); a manager's approval PIN always.
 		if (f.screen_lock) acts.push([`${ICON.lock}<span>${__("Lock Screen")}</span>`, () => this.lock()]);
@@ -1617,7 +1635,9 @@ class RestoFloor {
 				${s.expenses_count ? metric(__("Drawer Running Expenses"), "-" + money(s.expenses_total), __("{0} expenses · transport, cleaning and the like, not into stock", [s.expenses_count])) : ""}
 				${s.purchases_count ? metric(__("Drawer Stock Purchases"), "-" + money(s.purchases_total), __("{0} purchase invoices · into the kitchen's stock", [s.purchases_count])) : ""}
 				${s.advances_count ? metric(__("Staff Advances"), "-" + money(s.advances_total), __("{0} advances · taken off salaries, not an expense", [s.advances_count])) : ""}
-				${s.expenses_count || s.purchases_count || s.advances_count ? metric(__("Net In for the Shift"), money(s.net_cash), s.advances_count ? __("Collected − Expenses − Purchases − Advances") : s.purchases_count ? __("Collected − Expenses − Purchases") : __("Collected − Expenses")) : ""}
+				${s.cash_in_count ? metric(__("Cash In to the Drawer"), "+" + money(s.cash_in_total), __("{0} times · advances paid back, change and the like, not sales", [s.cash_in_count])) : ""}
+				${s.drops_count ? metric(__("Cash Drops to the Main Safe"), "-" + money(s.drops_total), __("{0} drops · moved to the safe, not spent", [s.drops_count])) : ""}
+				${s.expenses_count || s.purchases_count || s.advances_count || s.cash_in_count || s.drops_count ? metric(__("Net In for the Shift"), money(s.net_cash), net_caption(s)) : ""}
 				${s.staff_meals_count ? metric(__("Staff Meals"), money(s.staff_meals_cost), __("{0} meals · at stock cost, not cash", [s.staff_meals_count])) : ""}
 			</div>`);
 			const inv = (r.invoices || [])
@@ -1647,6 +1667,15 @@ class RestoFloor {
 				parts.push(`<details><summary><b>${__("Staff Advances")}</b></summary><table class="table table-condensed">
 					${r.advances
 						.map((a) => `<tr><td>${esc(a.employee_name || a.employee)}</td><td>${esc(a.remarks || "")}</td><td class="rf-amt">${money(a.amount)}</td></tr>`)
+						.join("")}</table></details>`);
+			}
+			if ((r.cash_moves || []).length) {
+				parts.push(`<details><summary><b>${__("Cash In and Drops")}</b></summary><table class="table table-condensed">
+					${r.cash_moves
+						.map(
+							(m) => `<tr><td>${esc(__(m.reason, null, m.reason === "Other" ? "Resto" : undefined))}${m.employee_name ? `: ${esc(m.employee_name)}` : ""}</td><td>${esc(m.remarks || "")}</td>
+								<td class="rf-amt">${m.move === "Cash In" ? "+" : "−"}${money(m.amount)}</td></tr>`
+						)
 						.join("")}</table></details>`);
 			}
 			if ((r.taxes || []).length) {
@@ -1905,6 +1934,137 @@ class RestoFloor {
 		d.show();
 	}
 
+	// Money put into the drawer (D-245): a staff advance paid back, change from the main safe, or
+	// another reason from the accounts Resto Settings allows; never an account the cashier picks.
+	async cash_in() {
+		const data = await frappe.xcall("resto.resto.drawer_cash.cash_in_data");
+		if (!data.modes.length) return frappe.msgprint(__("This shift has no cash payment method"));
+		const reasons = [];
+		if (data.workers.length) reasons.push({ value: "Staff Advance Repaid", label: __("Staff Advance Repaid") });
+		if (data.safe) reasons.push({ value: "Change from the Main Safe", label: __("Change from the Main Safe") });
+		if (data.accounts.length) reasons.push({ value: "Other", label: __("Other", null, "Resto") });
+		if (!reasons.length) {
+			return frappe.msgprint(__("Nothing can be put into the drawer yet: no worker owes an advance, and Resto Settings has no Main Safe Account or Drawer Cash In Accounts"));
+		}
+		// One id per dialog: a retried click after a lost answer gives the same entry.
+		const request_id = frappe.utils.get_random(20);
+		const worker = (e) => data.workers.find((w) => w.employee === e) || {};
+		const d = new frappe.ui.Dialog({
+			title: __("Cash In to the Drawer"),
+			fields: [
+				{ fieldname: "reason", fieldtype: "Select", label: __("Reason"), reqd: 1, options: [{ value: "", label: "" }, ...reasons] },
+				{
+					fieldname: "employee",
+					fieldtype: "Select",
+					label: __("Worker"),
+					depends_on: "eval:doc.reason=='Staff Advance Repaid'",
+					mandatory_depends_on: "eval:doc.reason=='Staff Advance Repaid'",
+					options: [{ value: "", label: "" }, ...data.workers.map((w) => ({ value: w.employee, label: `${w.employee_name} · ${__("owes {0}", [money(w.owed)])}` }))],
+				},
+				{
+					fieldname: "account",
+					fieldtype: "Select",
+					label: __("From"),
+					depends_on: "eval:doc.reason=='Other'",
+					mandatory_depends_on: "eval:doc.reason=='Other'",
+					options: [{ value: "", label: "" }, ...data.accounts.map((a) => ({ value: a.name, label: a.account_name }))],
+				},
+				{ fieldname: "mode_of_payment", fieldtype: "Select", label: __("Into the Drawer"), options: data.modes.join("\n"), default: data.modes[0], reqd: 1 },
+				{ fieldname: "amount", fieldtype: "Currency", label: __("Amount"), reqd: 1 },
+				{ fieldname: "remarks", fieldtype: "Data", label: __("Note"), mandatory_depends_on: "eval:doc.reason=='Other'" },
+			],
+			primary_action_label: __("Save and Post"),
+			primary_action: async (v) => {
+				const w = worker(v.employee);
+				if (v.reason === "Staff Advance Repaid" && flt(v.amount) > flt(w.owed) + 0.005) {
+					return frappe.msgprint(__("{0} owes {1} only", [esc(w.employee_name), money(w.owed)]));
+				}
+				const from =
+					v.reason === "Staff Advance Repaid"
+						? __("paid back by {0} from their advance", [`<b>${esc(w.employee_name)}</b>`])
+						: v.reason === "Change from the Main Safe"
+						? __("from the main safe")
+						: __("from {0}", [`<b>${esc((data.accounts.find((a) => a.name === v.account) || {}).account_name || v.account)}</b>`]);
+				const sure = await confirm_post([
+					`<p>${__("{0} will be put into the drawer «{1}», {2}.", [`<b>${money(v.amount)}</b>`, esc(v.mode_of_payment), from])}</p>`,
+					v.remarks ? `<p>${esc(v.remarks)}</p>` : "",
+				]);
+				if (!sure) return;
+				// Change and other reasons: the manager's PIN, asked before the screen waits.
+				let ok = {};
+				if (v.reason !== "Staff Advance Repaid" && data.needs_pin) {
+					ok = await ask_approval(this.floor, __("Cash into the drawer: {0}", [money(v.amount)]));
+					if (!ok) return;
+				}
+				return this.shift_busy(d, async () => {
+					const je = await frappe.xcall("resto.resto.drawer_cash.add_cash_in", { ...v, request_id, ...ok });
+					d.hide();
+					frappe.show_alert({ message: __("Recorded: {0}", [je]), indicator: "green" });
+				});
+			},
+		});
+		d.show();
+	}
+
+	// Cash taken out of the drawer to the main safe (D-245), always with the manager's PIN: during the
+	// shift (what should be in the drawer goes down) or right after the close (from what was counted).
+	async cash_drop() {
+		const data = await frappe.xcall("resto.resto.drawer_cash.drop_data");
+		if (!data.modes.length) return frappe.msgprint(__("This shift has no cash payment method"));
+		if (!data.safe) return frappe.msgprint(__("Set the Main Safe Account in Resto Settings first"));
+		const request_id = frappe.utils.get_random(20);
+		const left = (m) => (data.left || {})[m];
+		const left_text = (m) => (data.after_close ? __("Left of the count: {0}", [money(left(m))]) : "");
+		const d = new frappe.ui.Dialog({
+			title: __("Cash Drop to the Main Safe"),
+			fields: [
+				{
+					fieldname: "note_html",
+					fieldtype: "HTML",
+					options: data.after_close
+						? `<p class="text-muted">${__("Shift {0} is closed: the drop is taken from what was counted, leaving the change for the next shift.", [esc(data.shift)])}</p>`
+						: "",
+				},
+				{
+					fieldname: "mode_of_payment",
+					fieldtype: "Select",
+					label: __("From the Drawer"),
+					options: data.modes.join("\n"),
+					default: data.modes[0],
+					reqd: 1,
+					description: left_text(data.modes[0]),
+					onchange() {
+						if (data.after_close) d.set_df_property("mode_of_payment", "description", left_text(d.get_value("mode_of_payment")));
+					},
+				},
+				{ fieldname: "amount", fieldtype: "Currency", label: __("Amount"), reqd: 1 },
+				{ fieldname: "remarks", fieldtype: "Data", label: __("Note") },
+			],
+			primary_action_label: __("Save and Post"),
+			primary_action: async (v) => {
+				if (data.after_close && flt(v.amount) > flt(left(v.mode_of_payment)) + 0.005) {
+					return frappe.msgprint(__("Only {0} is left of what was counted for {1}", [money(left(v.mode_of_payment)), esc(v.mode_of_payment)]));
+				}
+				const sure = await confirm_post([
+					`<p>${__("{0} will be taken from the drawer «{1}» to the main safe.", [`<b>${money(v.amount)}</b>`, esc(v.mode_of_payment)])}</p>`,
+					v.remarks ? `<p>${esc(v.remarks)}</p>` : "",
+				]);
+				if (!sure) return;
+				let ok = {};
+				if (data.needs_pin) {
+					ok = await ask_approval(this.floor, __("Cash drop of {0} to the main safe", [money(v.amount)]));
+					if (!ok) return;
+				}
+				return this.shift_busy(d, async () => {
+					const je = await frappe.xcall("resto.resto.drawer_cash.cash_drop", { ...v, request_id, ...ok });
+					d.hide();
+					frappe.show_alert({ message: __("Recorded: {0}", [je]), indicator: "green" });
+				});
+			},
+		});
+		d.show();
+	}
+
 	// A customer pays what they owe (a bill left on account): a Payment Entry against their unpaid
 	// bills, oldest first, counted in this shift's drawer.
 	collect_debt() {
@@ -1993,6 +2153,9 @@ class RestoFloor {
 					d.hide();
 					const done = new frappe.ui.Dialog({ title: __("Shift closed: {0}", [res.closing]), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
 					done.fields_dict.html.$wrapper.html(this.shift_report(res, false));
+					// The cash counted taken to the safe now, leaving the change for tomorrow (D-245).
+					done.set_secondary_action_label(__("Cash Drop to the Main Safe"));
+					done.set_secondary_action(() => this.cash_drop());
 					// The closing report on paper, for the manager to sign (Resto Shift Close).
 					done.set_primary_action(__("Print"), () =>
 						window.open(

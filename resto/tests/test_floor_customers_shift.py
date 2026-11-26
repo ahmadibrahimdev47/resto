@@ -22,6 +22,7 @@ def assert_parts_make_expected(case, rows):
 		made = (
 			r["opening_amount"] + r["sales_amount"] + r["debts_amount"]
 			- r["expenses_amount"] - r["purchases_amount"] - r.get("advances_amount", 0) - r["refunds_amount"]
+			+ r.get("cash_in_amount", 0) - r.get("drops_amount", 0)
 		)
 		case.assertAlmostEqual(made, r["expected_amount"], 2, r["mode_of_payment"])
 

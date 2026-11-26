@@ -71,7 +71,35 @@ test("staff advances: a line of their own in the breakdown and a box of their ow
 	);
 	assert.deepEqual(lines(html, "Cash")[4], ["Staff Advances", "−100"]);
 	assert.ok(html.includes("2 advances · taken off salaries, not an expense"));
-	assert.ok(html.includes("Collected − Expenses − Purchases − Advances"));
+	assert.ok(html.includes("Collected − Advances"));
 	assert.ok(html.includes("Ali"));
+	t.done();
+});
+
+test("cash into the drawer and drops to the main safe: their own lines, boxes and net (D-245)", () => {
+	const t = load(() => "ok");
+	const row = { ...CASH, cash_in_amount: 80, drops_amount: 300, expected_amount: 605 };
+	const html = t.floor.shift_report(
+		{
+			summary: { cash_in_count: 2, cash_in_total: 80, drops_count: 1, drops_total: 300, expenses_count: 1, collected: 405, net_cash: 165 },
+			rows: [row],
+			cash_moves: [
+				{ move: "Cash In", reason: "Staff Advance Repaid", employee_name: "Ali", amount: 50 },
+				{ move: "Cash In", reason: "Change from the Main Safe", amount: 30 },
+				{ move: "Cash Drop", reason: "To the Main Safe", remarks: "noon", amount: 300 },
+			],
+		},
+		true
+	);
+	const got = lines(html, "Cash");
+	assert.deepEqual(got[4], ["Cash In to the Drawer", "+80"]);
+	assert.deepEqual(got[5], ["Cash Drops to the Main Safe", "−300"]);
+	assert.deepEqual(got[6], ["= Expected", "605"]);
+	assert.ok(html.includes("2 times · advances paid back, change and the like, not sales"));
+	assert.ok(html.includes("1 drops · moved to the safe, not spent"));
+	assert.ok(html.includes("Collected − Expenses + Cash In − Drops"));
+	assert.ok(html.includes("Cash In and Drops"));
+	assert.ok(html.includes("Staff Advance Repaid: Ali"));
+	assert.ok(html.includes("noon"));
 	t.done();
 });

@@ -14,6 +14,8 @@
   "expenses_amount",
   "purchases_amount",
   "advances_amount",
+  "cash_in_amount",
+  "drops_amount",
   "expected_amount",
   "closing_amount",
   "difference",
@@ -72,6 +74,20 @@
    "read_only": 1
   },
   {
+   "fieldname": "cash_in_amount",
+   "fieldtype": "Currency",
+   "label": "Cash In to the Drawer",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "drops_amount",
+   "fieldtype": "Currency",
+   "label": "Cash Drops to the Main Safe",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
    "fieldname": "expected_amount",
    "fieldtype": "Currency",
    "label": "Expected Amount",
@@ -108,7 +124,7 @@
  "is_submittable": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-26 22:00:00.000000",
+ "modified": "2026-11-27 03:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Shift Payment",

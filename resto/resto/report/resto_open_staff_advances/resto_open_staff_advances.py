@@ -31,6 +31,6 @@ def columns():
 		{"fieldname": "advances", "label": _("Number of Advances"), "fieldtype": "Int", "width": 90},
 		{"fieldname": "last_advance", "label": _("Last Advance"), "fieldtype": "Date", "width": 110},
 		{"fieldname": "advanced", "label": _("Paid as Advances"), "fieldtype": "Currency", "width": 120},
-		{"fieldname": "deducted", "label": _("Taken Off Salaries"), "fieldtype": "Currency", "width": 140},
+		{"fieldname": "deducted", "label": _("Paid Back or Taken Off Salaries"), "fieldtype": "Currency", "width": 160},
 		{"fieldname": "owed", "label": _("Still Owed"), "fieldtype": "Currency", "width": 120},
 	]

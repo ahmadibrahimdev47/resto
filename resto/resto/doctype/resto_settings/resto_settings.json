@@ -35,6 +35,8 @@
   "cash_supplier",
   "staff_advance_account",
   "staff_advance_cap",
+  "main_safe_account",
+  "drawer_cash_in_accounts",
   "allow_side_changes",
   "charge_extra_sides",
   "column_break_pos",
@@ -263,6 +265,20 @@
    "description": "A staff advance from the drawer above this amount needs a manager's PIN. 0: never."
   },
   {
+   "fieldname": "main_safe_account",
+   "fieldtype": "Link",
+   "label": "Main Safe Account",
+   "options": "Account",
+   "description": "The cash account of the main safe (type Cash, not the drawer's own): a cash drop from the drawer goes into it, and change for the drawer comes out of it. Both need a manager's PIN."
+  },
+  {
+   "fieldname": "drawer_cash_in_accounts",
+   "fieldtype": "Table MultiSelect",
+   "label": "Drawer Cash In Accounts",
+   "options": "Resto Expense Account",
+   "description": "The accounts money put into the drawer for another reason may come from (a manager's PIN and a note each time). Empty: no other reason is offered."
+  },
+  {
    "default": "0",
    "fieldname": "allow_side_changes",
    "fieldtype": "Check",
@@ -488,7 +504,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-26 22:00:00.000000",
+ "modified": "2026-11-27 03:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

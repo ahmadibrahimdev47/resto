@@ -48,6 +48,23 @@ class RestoSettings(Document):
 		if flt(self.get("staff_advance_cap")) < 0:
 			frappe.throw(_("Staff Advance Needs a Manager Above cannot be negative"))
 
+		from resto.resto.drawer_cash import main_safe_problem, other_problem
+
+		if self.get("main_safe_account"):
+			problem = main_safe_problem(self.main_safe_account, self.company)
+			if problem:
+				frappe.throw(problem)
+		for row in self.get("drawer_cash_in_accounts") or []:
+			problem = other_problem(row.account, self.company)
+			if problem:
+				frappe.throw(problem)
+			if row.account in (self.get("main_safe_account"), self.get("staff_advance_account")):
+				frappe.throw(
+					_("{0} has its own way into the drawer (change from the main safe, or a staff advance paid back)").format(
+						frappe.bold(row.account)
+					)
+				)
+
 		for field in ("cash_over_short_account",):
 			account = self.get(field)
 			if not account:

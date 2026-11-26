@@ -1,0 +1,135 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-11-27 03:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "move",
+  "reason",
+  "after_close",
+  "mode_of_payment",
+  "account",
+  "employee",
+  "employee_name",
+  "amount",
+  "remarks",
+  "journal_entry",
+  "approved_by",
+  "currency",
+  "request_id"
+ ],
+ "fields": [
+  {
+   "read_only": 1,
+   "fieldname": "move",
+   "fieldtype": "Select",
+   "label": "In or Out",
+   "options": "Cash In\nCash Drop",
+   "in_list_view": 1
+  },
+  {
+   "read_only": 1,
+   "fieldname": "reason",
+   "fieldtype": "Select",
+   "label": "Reason",
+   "options": "Staff Advance Repaid\nChange from the Main Safe\nOther\nTo the Main Safe",
+   "in_list_view": 1
+  },
+  {
+   "read_only": 1,
+   "fieldname": "after_close",
+   "fieldtype": "Check",
+   "label": "After the Close"
+  },
+  {
+   "read_only": 1,
+   "fieldname": "mode_of_payment",
+   "fieldtype": "Link",
+   "label": "Drawer",
+   "options": "Mode of Payment",
+   "in_list_view": 1
+  },
+  {
+   "read_only": 1,
+   "fieldname": "account",
+   "fieldtype": "Link",
+   "label": "Other Account",
+   "options": "Account"
+  },
+  {
+   "read_only": 1,
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "Employee",
+   "options": "Employee"
+  },
+  {
+   "read_only": 1,
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "label": "Employee Name"
+  },
+  {
+   "read_only": 1,
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "label": "Amount",
+   "options": "currency",
+   "in_list_view": 1
+  },
+  {
+   "read_only": 1,
+   "fieldname": "remarks",
+   "fieldtype": "Data",
+   "label": "Remarks"
+  },
+  {
+   "read_only": 1,
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "label": "Journal Entry",
+   "options": "Journal Entry"
+  },
+  {
+   "read_only": 1,
+   "fieldname": "approved_by",
+   "fieldtype": "Link",
+   "label": "Approved By",
+   "options": "User"
+  },
+  {
+   "read_only": 1,
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "hidden": 1
+  },
+  {
+   "read_only": 1,
+   "fieldname": "request_id",
+   "fieldtype": "Data",
+   "label": "Request ID",
+   "hidden": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-27 03:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Shift Cash Move",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 0,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

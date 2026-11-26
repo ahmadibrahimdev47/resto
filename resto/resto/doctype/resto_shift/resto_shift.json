@@ -31,6 +31,8 @@
   "expenses_total",
   "purchases_total",
   "advances_total",
+  "cash_in_total",
+  "cash_drops_total",
   "net_cash",
   "total_difference",
   "over_short_entry",
@@ -40,7 +42,8 @@
   "taxes",
   "expenses",
   "purchases",
-  "advances"
+  "advances",
+  "cash_moves"
  ],
  "fields": [
   {
@@ -216,6 +219,20 @@
    "read_only": 1
   },
   {
+   "fieldname": "cash_in_total",
+   "fieldtype": "Currency",
+   "label": "Cash In to the Drawer",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cash_drops_total",
+   "fieldtype": "Currency",
+   "label": "Cash Drops to the Main Safe",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
    "fieldname": "net_cash",
    "fieldtype": "Currency",
    "label": "Net In for the Shift",
@@ -282,13 +299,20 @@
    "label": "Staff Advances",
    "options": "Resto Shift Advance",
    "read_only": 1
+  },
+  {
+   "fieldname": "cash_moves",
+   "fieldtype": "Table",
+   "label": "Cash In and Drops",
+   "options": "Resto Shift Cash Move",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-26 22:00:00.000000",
+ "modified": "2026-11-27 03:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Shift",
