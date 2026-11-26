@@ -330,8 +330,7 @@ class RestoOrder(Document):
 		if not flt(self.discount_amount) or self.flags.resto_billing:
 			# Settling or cancelling an invoice does not change the discount.
 			return
-		if not self.discount_reason:
-			frappe.throw(_("Enter a reason for the discount"))
+		# The reason is optional (D-274): kept when given, blank in the control report when not.
 		base, discount = discount_base(self)
 		if self.before_doc and not self.is_new():
 			old_base, old_discount = discount_base(self.before_doc)

@@ -1287,9 +1287,7 @@ def set_line_discount(order, line, percentage=0, amount=0, reason=None, approver
 	percent = min(flt(percent, 6), 100)
 	reason = (reason or "").strip()
 	by = None
-	if percent:
-		if not reason:
-			frappe.throw(_("Enter a reason for the discount"))
+	if percent:  # with or without a reason (D-274)
 		value = flt(full * percent / 100, 2)
 		allowed = flt(full * discount_limit() / 100, 2)
 		if percent > flt(row.get("line_discount_percentage")) + 1e-9 and value > allowed + 0.005:
@@ -1303,10 +1301,13 @@ def set_line_discount(order, line, percentage=0, amount=0, reason=None, approver
 	row.line_discount_by = by
 	_reopen_if_billed(doc)
 	_save(doc)
-	doc.add_comment(
-		"Info",
-		(_("Item discount on {0}: {1}% ({2})").format(row.item_name, flt(percent, 2), reason) if percent else _("Item discount on {0} taken off").format(row.item_name)),
-	)
+	if not percent:
+		note = _("Item discount on {0} taken off").format(row.item_name)
+	elif reason:
+		note = _("Item discount on {0}: {1}% ({2})").format(row.item_name, flt(percent, 2), reason)
+	else:
+		note = _("Item discount on {0}: {1}%").format(row.item_name, flt(percent, 2))
+	doc.add_comment("Info", note)
 	return _order_view(doc)
 
 

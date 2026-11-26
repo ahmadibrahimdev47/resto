@@ -3166,7 +3166,6 @@ class RestoFloor {
 		if (!v) return;
 		// An amount typed wins over the % already shown (the line's current discount).
 		const percent = full && flt(v.amount) ? (flt(v.amount) / full) * 100 : flt(v.percentage);
-		if (percent && !(v.reason || "").trim()) return frappe.msgprint(__("Enter a reason for the discount"));
 		let ok = {};
 		if (percent > flt(line.line_discount_percentage) + 1e-6 && percent > flt(this.floor.discount_limit) + 1e-6) {
 			ok = await ask_approval(this.floor, __("Item discount of {0}% on {1}", [flt(percent, 2), line.item_name]));

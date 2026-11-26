@@ -3186,3 +3186,4 @@
 "Delivery","توصيل","Resto Kitchen Ticket"
 "Staff Meal","وجبة العاملين","Resto Kitchen Ticket"
 "From the order when it was sent; a staff meal is its own type.","من الطلب عند إرساله؛ ووجبة العاملين نوع مستقل.",""
+"Item discount on {0}: {1}%","خصم على {0}: {1}%",""

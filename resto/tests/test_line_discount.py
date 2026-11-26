@@ -55,10 +55,10 @@ class TestLineDiscount(IntegrationTestCase):
 		order = self.order(("DISH-FRIES", 10))  # 400
 		line = self.line(order, "DISH-FRIES").name
 		frappe.set_user(CASHIER)
-		self.assertRaises(frappe.ValidationError, floor.set_line_discount, order, line, 10)  # no reason
-		floor.set_line_discount(order, line, 10, 0, "regular")
+		floor.set_line_discount(order, line, 10)  # the reason is optional (D-274)
 		row = self.line(order, "DISH-FRIES")
 		self.assertEqual((flt(row.amount), flt(row.line_discount_amount), row.line_discount_by), (360, 40, CASHIER))
+		self.assertFalse(row.line_discount_reason)
 		self.assertEqual(flt(frappe.db.get_value("Resto Order", order, "net_total")), 360)
 		# Above the cashier's 10%: a manager's PIN, for the value of the discount.
 		self.assertRaises(approval.ApprovalRequired, floor.set_line_discount, order, line, 15, 0, "regular")
@@ -112,8 +112,9 @@ class TestLineDiscount(IntegrationTestCase):
 	def test_the_order_discount_comes_on_top(self):
 		order = self.order(("DISH-FRIES", 10))  # 400
 		floor.set_line_discount(order, self.line(order, "DISH-FRIES").name, 10, 0, "regular")  # 360
-		floor.apply_discount(order, 10, 0, "family")  # 36 off the 360
+		floor.apply_discount(order, 10)  # 36 off the 360; no reason needed (D-274)
 		self.assertEqual(flt(frappe.db.get_value("Resto Order", order, "discount_amount")), 36)
+		self.assertFalse(frappe.db.get_value("Resto Order", order, "discount_reason"))
 		floor.send_to_kitchen(order)
 		si = self.pay(order)
 		fries = next(d for d in si.items if d.item_code == "DISH-FRIES")
