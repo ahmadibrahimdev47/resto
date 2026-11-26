@@ -217,7 +217,20 @@ class RestoSalaryEntry(Document):
 
 		text = _("Salaries of {0}, {1} workers ({2})").format(self.month_label(), len(self.workers), self.name)
 		shifts._set_remark(je, text + (f": {self.remarks}" if self.remarks else ""))
-		je.append("accounts", {"account": self.salary_account, "debit_in_account_currency": self.total_salaries, "cost_center": cost_center})
+		# One row per worker on each side (D-260): what each was paid shows on the entry itself. The
+		# salary and the cash rows carry the worker in their remark (Employee is a party only on the
+		# advances account, a receivable).
+		for row in self.workers:
+			if flt(row.salary):
+				je.append(
+					"accounts",
+					{
+						"account": self.salary_account,
+						"debit_in_account_currency": row.salary,
+						"cost_center": cost_center,
+						"user_remark": _("Salary of {0} {1}").format(row.employee_name or row.employee, self.month_label()),
+					},
+				)
 		for row in self.workers:
 			if row.deduct_amount:
 				je.append(
@@ -230,8 +243,17 @@ class RestoSalaryEntry(Document):
 						"user_remark": _("Advance taken off the salary of {0}").format(self.month_label()),
 					},
 				)
-		if self.total_net:
-			je.append("accounts", {"account": self.pay_from_account, "credit_in_account_currency": self.total_net, "cost_center": cost_center})
+		for row in self.workers:
+			if flt(row.net):
+				je.append(
+					"accounts",
+					{
+						"account": self.pay_from_account,
+						"credit_in_account_currency": row.net,
+						"cost_center": cost_center,
+						"user_remark": _("Net salary of {0} {1}").format(row.employee_name or row.employee, self.month_label()),
+					},
+				)
 		je.flags.ignore_permissions = True
 		je.insert()
 		je.submit()

@@ -118,9 +118,23 @@ class TestSalaryEntry(IntegrationTestCase):
 		self.assertEqual((flt(doc.total_salaries), flt(doc.total_deducted), flt(doc.total_net)), (5000, 500, 4500))
 		self.assertEqual(flt(doc.workers[1].deduct_amount), 0)
 		doc.submit()
-		rows = gl(doc.journal_entry)
-		self.assertEqual(len(rows), 3)
-		by = {(g.account, g.party or ""): g for g in rows}
+		# One row per worker on each side (D-260), with the worker in its remark.
+		je = frappe.get_doc("Journal Entry", doc.journal_entry)
+		salary_rows = [a for a in je.accounts if a.account == self.expense]
+		cash_rows = [a for a in je.accounts if a.account == self.safe]
+		self.assertEqual(sorted(flt(a.debit_in_account_currency) for a in salary_rows), [2000, 3000])
+		self.assertEqual(sorted(flt(a.credit_in_account_currency) for a in cash_rows), [2000, 2500])
+		names = {self.amr: frappe.db.get_value("Employee", self.amr, "employee_name")}
+		self.assertTrue(any(names[self.amr] in (a.user_remark or "") and "01-2031" in a.user_remark for a in salary_rows))
+		self.assertEqual(len(je.accounts), 5)
+		by = {}
+		for g in gl(doc.journal_entry):
+			key = (g.account, g.party or "")
+			if key in by:
+				by[key].debit += flt(g.debit)
+				by[key].credit += flt(g.credit)
+			else:
+				by[key] = g
 		self.assertAlmostEqual(flt(by[(self.expense, "")].debit), 5000, 2)
 		self.assertAlmostEqual(flt(by[(self.advances, self.amr)].credit), 500, 2)
 		self.assertEqual(by[(self.advances, self.amr)].party_type, "Employee")
