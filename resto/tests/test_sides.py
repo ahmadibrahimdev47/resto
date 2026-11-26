@@ -235,7 +235,7 @@ class TestSides(IntegrationTestCase):
 	def test_the_without_part_stands_out_in_the_kitchen(self):
 		# D-251: on the kitchen screen and paper the «without» part is red, bold and larger.
 		from resto.resto import kitchen
-		from resto.resto.sides import sides_html
+		from resto.resto.sides import _t, sides_html
 
 		order, _line = self.swapped_plate(1)
 		text = lines(order)[0].sides_text
@@ -243,6 +243,12 @@ class TestSides(IntegrationTestCase):
 		start = html.index('<span class="resto-without">')
 		self.assertIn("Side Rice", html[start:])
 		self.assertNotIn("Sauce Tahini", html[start:])  # the dish's sides served stay as they were
+		# On a line of its own under the rest, with no «|» before it (D-263).
+		self.assertIn('<br><span class="resto-without">', html)
+		self.assertNotIn("| <span", html)
+		head, without = _t("Sides: {0}", ""), _t("without: {0}", "Side Rice")
+		self.assertEqual(sides_html(f"{head}Sauce Tahini | {without}"), f'{head}Sauce Tahini<br><span class="resto-without">{without}</span>')
+		self.assertEqual(sides_html(f"{head}{without}"), f'<span class="resto-without">{without}</span>')
 		self.assertEqual(sides_html(None), "")
 		self.assertEqual(sides_html("<b>x</b>"), "&lt;b&gt;x&lt;/b&gt;")
 		tickets = floor.send_to_kitchen(order)

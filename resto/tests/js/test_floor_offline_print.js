@@ -291,3 +291,16 @@ test("the paper printed after a send without an answer says to check it is not t
 	assert.match(t.seen.printed[0], /Addition 2/);
 	assert.deepEqual(Array.from(t.outbox().at(-1).args.lines), ["L1"]);
 });
+
+test("the ticket printed here: «without» on a line of its own under the sides, no «|» (D-263)", () => {
+	const t = load(() => "ok");
+	const o = { name: "RO-1", order_type: "Take Away", items: [] };
+	const html = t.floor.ticket_html(o, [
+		{ qty: 1, item_name: "Plate", sides_text: "Sides: Sauce Tahini | without: Side Rice" },
+		{ qty: 1, item_name: "Soup", sides_text: "Sides: without: Bread" },
+	]);
+	assert.ok(html.includes('Sides: Sauce Tahini<br><span class="w">without: Side Rice</span>'));
+	assert.ok(html.includes('<div class="n"><span class="w">without: Bread</span></div>'));
+	assert.ok(!html.includes("| <span"));
+	t.done();
+});

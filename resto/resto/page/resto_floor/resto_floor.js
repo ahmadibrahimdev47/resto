@@ -144,20 +144,19 @@ function ask_approval(floor, what) {
 }
 const money = (v) => format_currency(v || 0);
 
-// A line's sides text with its «without» part red, bold and larger (D-251), escaped. The text was
-// written in the site's language; the cashier's screen is in it too.
+// A line's sides text with its «without» part red, bold and larger (D-251), on a line of its own
+// under the rest (D-263), escaped. The text was written in the site's language; the cashier's
+// screen is in it too.
 function sides_paper(text) {
 	const head = __("Sides: {0}", [""], "Resto");
 	const without = __("without: {0}", [""], "Resto").trim();
 	const start = head && text.startsWith(head) ? head : "";
-	return (
-		esc(start) +
-		text
-			.slice(start.length)
-			.split(" | ")
-			.map((p) => (without && p.startsWith(without) ? `<span class="w">${esc(p)}</span>` : esc(p)))
-			.join(" | ")
-	);
+	const parts = text.slice(start.length).split(" | ");
+	const left_out = parts.filter((p) => without && p.startsWith(without));
+	const rest = parts.filter((p) => !left_out.includes(p));
+	const lines = rest.length ? [esc(start) + rest.map(esc).join(" | ")] : [];
+	// Only what is left out: its own line, without an empty «with» before it.
+	return lines.concat(left_out.map((p) => `<span class="w">${esc(p)}</span>`)).join("<br>");
 }
 
 // What Net In for the Shift is made of (D-235, D-245): only the parts the shift has.

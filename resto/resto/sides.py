@@ -93,7 +93,8 @@ def _sep():
 
 def sides_html(text):
 	"""A line's sides text for the kitchen screen and paper (D-251), escaped: its «without» part red,
-	bold and larger, so a cook never misses what is left out. The text is in the site's language."""
+	bold and larger, so a cook never misses what is left out, on a line of its own under the rest
+	(D-263). The text is in the site's language."""
 	from frappe.utils import escape_html
 
 	if not text:
@@ -102,10 +103,12 @@ def sides_html(text):
 	without = _t("without: {0}", "").strip()
 	start = head if head and text.startswith(head) else ""
 	parts = text[len(start) :].split(" | ")
-	out = [
-		f'<span class="resto-without">{escape_html(p)}</span>' if without and p.startswith(without) else escape_html(p) for p in parts
-	]
-	return escape_html(start) + " | ".join(out)
+	left_out = [p for p in parts if without and p.startswith(without)]
+	rest = [p for p in parts if p not in left_out]
+	lines = [escape_html(start) + " | ".join(escape_html(p) for p in rest)] if rest else []
+	lines += [f'<span class="resto-without">{escape_html(p)}</span>' for p in left_out]
+	# Only what is left out: its own line, without an empty «with» before it.
+	return "<br>".join(lines)
 
 
 # --------------------------------------------------------------------------- slots
