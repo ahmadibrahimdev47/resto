@@ -17,6 +17,7 @@ class RestoSideGroup(Document):
 			if row.item in seen:
 				frappe.throw(_("Row {0}: {1} is listed twice").format(row.idx, frappe.bold(row.item)))
 			seen.add(row.item)
+			self.set_portion_qty(row)
 			if flt(row.portion_qty) <= 0:
 				frappe.throw(_("Row {0}: the quantity of one portion must be more than zero").format(row.idx))
 			item = frappe.get_cached_value("Item", row.item, ["disabled", "has_variants", "has_serial_no", "has_batch_no"], as_dict=True)
@@ -36,6 +37,20 @@ class RestoSideGroup(Document):
 						row.idx, frappe.bold(row.item)
 					)
 				)
+
+	def set_portion_qty(self, row):
+		"""One portion is typed in a recipe unit (D-264): grams for an item stocked by the kilo,
+		millilitres by the litre, or a unit the item converts to; what is deducted is kept in the
+		stock unit. A row with only the stock quantity (older ones) is read as typed in the stock unit."""
+		from resto.resto.units import factor
+
+		stock_uom = frappe.get_cached_value("Item", row.item, "stock_uom")
+		if flt(row.entered_qty) > 0:
+			row.entered_uom = row.entered_uom or stock_uom
+			row.portion_qty = flt(flt(row.entered_qty) * factor(row.item, row.entered_uom), 6)
+		elif flt(row.portion_qty) > 0:
+			row.entered_qty, row.entered_uom = row.portion_qty, stock_uom
+		row.uom = stock_uom
 
 	def validate_billing_item(self, row):
 		"""The extra portions' invoice line deducts its item: it must deduct exactly one portion of

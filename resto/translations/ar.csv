@@ -3153,3 +3153,5 @@
 "Interim summary: the shift is not closed","ملخص مؤقت — الوردية لم تُغلق",""
 "Allow pop-ups for this site to print","اسمح بالنوافذ المنبثقة لهذا الموقع للطباعة",""
 "{0} orders are still open: not in these figures until they are paid.","{0} طلبات ما زالت مفتوحة: لا تدخل في هذه الأرقام حتى تُدفع.",""
+"Worked out from the quantity and its unit: what is deducted for one portion.","محسوبة من الكمية ووحدتها: ما يُخصم للحصة الواحدة.",""
+"Empty: the item's stock unit.","فارغة: وحدة مخزون الصنف.",""

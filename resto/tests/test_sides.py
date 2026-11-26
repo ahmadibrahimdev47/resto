@@ -657,10 +657,38 @@ class TestSides(IntegrationTestCase):
 		self.assertAlmostEqual(flt(si.net_total), 120 + 160 + 5, 2)
 		self.assert_accounts_match_stock(si)
 
+	def test_a_portion_is_typed_in_grams(self):
+		# D-264: typed in a recipe unit, kept in the stock unit; a unit the item has not is refused.
+		from resto.tests.test_staff_meal import small_unit
+
+		sauce = small_unit(self, "SAUCE-DIP-KG", "Kg", "Gram")
+		name = "Test Dip Units"
+		if frappe.db.exists("Resto Side Group", name):
+			frappe.delete_doc("Resto Side Group", name, force=True)
+		group = frappe.get_doc(
+			{
+				"doctype": "Resto Side Group",
+				"group_name": name,
+				"max_portions": 2,
+				"options": [
+					{"item": sauce, "entered_qty": 30, "entered_uom": "Gram"},
+					{"item": "SAUCE-GARLIC", "portion_qty": 2},  # a row from before: in the stock unit
+				],
+			}
+		).insert(ignore_permissions=True)
+		self.addCleanup(frappe.delete_doc, "Resto Side Group", group.name, force=True)
+		dip, garlic = group.options
+		self.assertEqual((flt(dip.portion_qty, 6), dip.uom), (0.03, "Kg"))
+		self.assertEqual((flt(garlic.entered_qty), garlic.entered_uom, flt(garlic.portion_qty)), (2, "Nos", 2))
+		self.assertEqual(flt(frappe.db.get_value("Resto Side Option", dip.name, "portion_qty"), 6), 0.03)  # what is deducted
+		# Grams of an item counted in pieces: no conversion, refused.
+		garlic.entered_uom = "Gram"
+		self.assertRaises(frappe.ValidationError, group.save)
+
 	def test_extra_price_needs_an_item_that_deducts_one_portion(self):
 		group = frappe.get_doc("Resto Side Group", GROUP)
 		row = next(o for o in group.options if o.item == "SAUCE-TAHINI")
-		row.portion_qty = 2  # one portion is two stock units: the stock item would deduct one
+		row.entered_qty = 2  # one portion is two stock units: the stock item would deduct one
 		self.assertRaises(frappe.ValidationError, group.save)
 		group.reload()
 		row = next(o for o in group.options if o.item == "SAUCE-TAHINI")
