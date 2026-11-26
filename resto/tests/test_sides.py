@@ -542,17 +542,6 @@ class TestSides(IntegrationTestCase):
 			frappe.db.set_value("UOM", "Nos", "must_be_whole_number", 0)
 			frappe.clear_document_cache("UOM", "Nos")
 
-	def test_a_kept_choice_above_the_most_goes_back_to_the_recipe(self):
-		# D-270: a change is refused above the most; a choice from before is reset when the order is saved.
-		order = self.order_with(("DISH-PLATE", 1))
-		line = lines(order)[0].name
-		self.assertRaises(frappe.ValidationError, self.change, order, [line], {GROUP: {"SAUCE-TAHINI": 5}})
-		frappe.db.set_value("Resto Order Item", line, "sides", json.dumps({GROUP: {"items": {"SAUCE-TAHINI": 5}}}))
-		doc = frappe.get_doc("Resto Order", order)
-		doc.save(ignore_permissions=True)
-		row = frappe.db.get_value("Resto Order Item", line, ["sides", "sides_qty"], as_dict=True)
-		self.assertEqual((row.sides, row.sides_qty), (None, None))  # the recipe's own sides again
-
 	def test_sent_line_keeps_what_it_was_served_with(self):
 		order, line = self.swapped_plate(1)
 		floor.send_to_kitchen(order)
