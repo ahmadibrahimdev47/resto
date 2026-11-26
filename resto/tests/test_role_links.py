@@ -300,3 +300,59 @@ class TestAccountingSummaryLinks(IntegrationTestCase):
 					rows = frappe.get_all(child, filters={"parent": anchor.parent, "parenttype": doctype, "link_to": report}, fields=["idx"])
 					self.assertEqual([r.idx for r in rows], [anchor.idx + 1])
 
+
+
+class TestAppIconLanding(IntegrationTestCase):
+	"""The app icon opens /restaurant, which sends each user to a restaurant page they may open
+	(D-240): the kitchen to its screen, every other Resto role to the floor."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		cls.users = {role: user_with(role) for role in (*FLOOR_ROLES, "Resto Manager")}
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def landing(self, user):
+		from resto.www.restaurant import landing_route
+
+		frappe.set_user(user)
+		try:
+			return landing_route()
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_the_icon_opens_the_landing_route(self):
+		from resto import hooks
+
+		self.assertEqual(hooks.add_to_apps_screen[0]["route"], "/restaurant")
+
+	def test_each_role_lands_on_a_page_it_may_open(self):
+		expected = {
+			"Resto Kitchen": "/desk/resto-kitchen",
+			"Resto Cashier": "/desk/resto-floor",
+			"Resto Waiter": "/desk/resto-floor",
+			"Resto Host": "/desk/resto-floor",
+			"Resto Manager": "/desk/resto-floor",
+		}
+		for role, route in expected.items():
+			with self.subTest(role=role):
+				self.assertEqual(self.landing(self.users[role]), route)
+				page = route.rsplit("/", 1)[1]
+				frappe.set_user(self.users[role])
+				self.assertTrue(frappe.get_doc("Page", page).is_permitted())
+				frappe.set_user("Administrator")
+
+	def test_a_guest_is_sent_to_log_in_first(self):
+		from resto.www import restaurant
+
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.Redirect):
+			restaurant.get_context(frappe._dict())
+		self.assertTrue(frappe.local.flags.redirect_location.startswith("/login?redirect-to="))
+		frappe.set_user(self.users["Resto Kitchen"])
+		with self.assertRaises(frappe.Redirect):
+			restaurant.get_context(frappe._dict())
+		self.assertEqual(frappe.local.flags.redirect_location, "/desk/resto-kitchen")

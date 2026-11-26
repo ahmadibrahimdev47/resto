@@ -27,7 +27,7 @@ add_to_apps_screen = [
 		"name": app_name,
 		"logo": "/assets/resto/images/resto-logo.svg",
 		"title": app_title,
-		"route": "/desk/resto-floor",
+		"route": "/restaurant",
 		"has_permission": "resto.check_app_permission",
 	}
 ]
