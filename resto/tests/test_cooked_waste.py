@@ -155,3 +155,32 @@ class TestCookedWaste(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as cm:
 			amended.insert()
 		self.assertIn("instead of amending", str(cm.exception))
+
+
+class TestNewWasteForm(IntegrationTestCase):
+	"""A new waste form starts filled from Resto Settings (D-239), also for the kitchen, which
+	cannot read the settings; a role that cannot post waste gets nothing."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def test_the_kitchen_gets_the_warehouse_and_the_account(self):
+		from resto.resto.doctype.resto_waste.resto_waste import new_waste_defaults
+		from resto.resto.utils import get_settings
+
+		settings = get_settings()
+		frappe.set_user("kitchen@resto.test")
+		self.assertFalse(frappe.has_permission("Resto Settings", "read"))
+		d = new_waste_defaults()
+		self.assertEqual(
+			(d["company"], d["warehouse"], d["waste_account"]),
+			(settings.company, settings.kitchen_warehouse, settings.waste_account),
+		)
+		self.assertTrue(d["warehouse"] and d["waste_account"])
+		frappe.set_user("waiter@resto.test")
+		self.assertRaises(frappe.PermissionError, new_waste_defaults)

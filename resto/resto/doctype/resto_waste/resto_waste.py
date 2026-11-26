@@ -141,3 +141,12 @@ def _estimated_rate(item_code, warehouse):
 		)
 		total += rate * qty
 	return total
+
+
+@frappe.whitelist()
+def new_waste_defaults():
+	"""What a new waste form starts with, from Resto Settings: the form checks its required fields
+	before validate() could fill them, and the kitchen cannot read the settings itself (D-233)."""
+	frappe.has_permission("Resto Waste", "create", throw=True)
+	settings = get_settings()
+	return {"company": settings.company, "warehouse": settings.kitchen_warehouse, "waste_account": settings.waste_account}
