@@ -136,8 +136,16 @@ def compute(shift):
 			opening[p.mode_of_payment] = 0
 	received = {m: 0.0 for m in modes}
 	change = {m: 0.0 for m in modes}
+	# The parts of what was received, for the close dialog's breakdown: paid on bills, paid back on
+	# returns (their payment rows are negative), and debts collected below.
+	returned = {i.name for i in invoices if cint(i.is_return)}
+	sold, refunded, debts_in = {}, {}, {}
 	for p in pays:
 		received[p.mode_of_payment] += flt(p.amount)
+		if p.parent in returned:
+			refunded[p.mode_of_payment] = refunded.get(p.mode_of_payment, 0) - flt(p.amount)
+		else:
+			sold[p.mode_of_payment] = sold.get(p.mode_of_payment, 0) + flt(p.amount)
 	by_invoice = {}
 	for p in pays:
 		by_invoice.setdefault(p.parent, []).append(p)
@@ -165,6 +173,7 @@ def compute(shift):
 			modes.append(p.mode_of_payment)
 			opening[p.mode_of_payment] = received[p.mode_of_payment] = change[p.mode_of_payment] = 0
 		received[p.mode_of_payment] += flt(p.received_amount)
+		debts_in[p.mode_of_payment] = debts_in.get(p.mode_of_payment, 0) + flt(p.received_amount)
 
 	expenses = [
 		e
@@ -201,6 +210,11 @@ def compute(shift):
 				"expenses_amount": flt(spent.get(m, 0), ACCOUNTS_PRECISION),
 				"purchases_amount": flt(bought.get(m, 0), ACCOUNTS_PRECISION),
 				"expected_amount": expected,
+				# How the expected amount is made (D-236): opening + sales (net of the change given)
+				# + debts collected − expenses − purchases − refunds.
+				"sales_amount": flt(sold.get(m, 0) - change[m], ACCOUNTS_PRECISION),
+				"debts_amount": flt(debts_in.get(m, 0), ACCOUNTS_PRECISION),
+				"refunds_amount": flt(refunded.get(m, 0), ACCOUNTS_PRECISION),
 			}
 		)
 

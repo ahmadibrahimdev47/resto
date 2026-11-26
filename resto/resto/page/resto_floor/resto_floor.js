@@ -144,6 +144,25 @@ function ask_approval(floor, what) {
 }
 const money = (v) => format_currency(v || 0);
 
+// How a payment method's expected amount is made (D-236), from the parts the server worked out:
+// opening and sales always, the others when there are any, then the expected amount.
+function expected_parts(p) {
+	const parts = [
+		[__("Opening (starting change)"), flt(p.opening_amount), 1],
+		[__("Sales paid with this method"), flt(p.sales_amount), 1],
+		[__("Debts collected"), flt(p.debts_amount), 1],
+		[__("Drawer Running Expenses"), flt(p.expenses_amount), -1],
+		[__("Drawer Stock Purchases"), flt(p.purchases_amount), -1],
+		[__("Paid back to customers"), flt(p.refunds_amount), -1],
+	].filter(([, v], i) => i < 2 || Math.abs(v) >= 0.005);
+	const line = (label, value, cls = "") =>
+		`<div class="rf-xline ${cls}"><span>${label}</span><span class="rf-amt">${value}</span></div>`;
+	return (
+		parts.map(([label, v, sign]) => line(label, `${sign * v < 0 ? "−" : "+"}${money(Math.abs(v))}`)).join("") +
+		line(`= ${__("Expected")}`, money(p.expected_amount), "rf-xtotal")
+	);
+}
+
 // Before money is posted from a shift dialog (D-230): what will be posted is said back, line by line
 // (already escaped); No leaves the dialog as it was filled. true: go ahead.
 function confirm_post(lines) {
@@ -1632,7 +1651,11 @@ class RestoFloor {
 				const counted = entry
 					? `<input type="number" step="0.01" min="0" class="form-control input-sm rf-amt" data-m="${i}" value="">`
 					: money(p.closing_amount);
-				return `<tr><td>${esc(p.mode_of_payment)}</td>
+				// The breakdown of the expected amount, only where the expected amount is shown.
+				const name = blind
+					? esc(p.mode_of_payment)
+					: `<details class="rf-xparts"><summary>${esc(p.mode_of_payment)}</summary>${expected_parts(p)}</details>`;
+				return `<tr><td>${name}</td>
 					${blind ? "" : `<td class="rf-amt">${money(p.opening_amount)}</td><td class="rf-amt">${money(p.expected_amount)}</td>`}
 					<td class="rf-amt">${counted}</td>
 					${blind ? "" : `<td class="rf-amt" data-d="${i}">${entry ? "" : diff(p.difference)}</td>`}</tr>`;
@@ -3674,6 +3697,9 @@ class RestoFloor {
 		.rf-cust-picked { font-weight:600; color:var(--green-700, #2f855a); margin-bottom:6px; }
 		.rf-metrics { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:10px; }
 		.rf-metric { border:1px solid var(--border-color); border-radius:8px; padding:6px 10px; }
+		.rf-xparts summary { cursor:pointer; }
+		.rf-xline { display:flex; justify-content:space-between; gap:12px; font-size:12px; color:var(--text-muted); min-width:220px; }
+		.rf-xline.rf-xtotal { border-top:1px solid var(--border-color); color:var(--text-color); font-weight:600; margin-top:2px; }
 		.rf-print-alert { flex-basis:100%; border-radius:8px; padding:6px 10px; margin-bottom:6px; font-weight:600; background:var(--red-100, #fed7d7); color:var(--red-800, #9b2c2c); border:2px solid var(--red-500, #f56565); }
 		.rf-offline { position:sticky; top:var(--navbar-height, 48px); z-index:5; height:40px; line-height:40px; padding:0 12px; overflow:hidden;
 			white-space:nowrap; text-overflow:ellipsis; background:var(--rf-amber-soft, #FFF5E0); color:var(--rf-amber-ink, #78350F); font-weight:700; text-align:center; }

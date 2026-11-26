@@ -16,6 +16,16 @@ from resto.tests import fixtures as fx
 CASHIER = "cashier@resto.test"
 
 
+def assert_parts_make_expected(case, rows):
+	"""The close dialog's breakdown (D-236): the parts of each method add up to what is expected."""
+	for r in rows:
+		made = (
+			r["opening_amount"] + r["sales_amount"] + r["debts_amount"]
+			- r["expenses_amount"] - r["purchases_amount"] - r["refunds_amount"]
+		)
+		case.assertAlmostEqual(made, r["expected_amount"], 2, r["mode_of_payment"])
+
+
 class TestFloorCustomers(IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
@@ -175,6 +185,11 @@ class TestFloorShift(IntegrationTestCase):
 		data = shift.closing_data()
 		rows = {r["mode_of_payment"]: r for r in data["rows"]}
 		self.assertAlmostEqual(rows["Cash"]["expected_amount"], 150 + bill["payable"] - 20, 2)
+		# The breakdown: the cash sale net of its change, the expense out.
+		assert_parts_make_expected(self, data["rows"])
+		self.assertAlmostEqual(rows["Cash"]["sales_amount"], bill["payable"], 2)
+		self.assertAlmostEqual(rows["Cash"]["expenses_amount"], 20, 2)
+		self.assertAlmostEqual(rows["Card"]["sales_amount"], bill2["payable"], 2)
 		self.assertAlmostEqual(rows["Card"]["expected_amount"], bill2["payable"], 2)
 		self.assertEqual(data["summary"]["sales_count"], 2)
 		self.assertAlmostEqual(data["summary"]["gross_sales"], bill["payable"] + bill2["payable"], 2)
@@ -291,6 +306,8 @@ class TestFloorShift(IntegrationTestCase):
 		self.assertAlmostEqual(flt(frappe.db.get_value("Sales Invoice", paid["sales_invoice"], "outstanding_amount")), owed - 5, 2)
 		data = shift.closing_data()
 		self.assertAlmostEqual(next(r for r in data["rows"] if r["mode_of_payment"] == "Cash")["expected_amount"], 5, 2)
+		self.assertAlmostEqual(next(r for r in data["rows"] if r["mode_of_payment"] == "Cash")["debts_amount"], 5, 2)
+		assert_parts_make_expected(self, data["rows"])
 		self.assertAlmostEqual(data["summary"]["debts_total"], 5, 2)
 
 	def test_a_negative_opening_is_refused(self):
@@ -305,6 +322,7 @@ class TestFloorShift(IntegrationTestCase):
 		data = shift.closing_data()
 		self.assertTrue(data["blind"])
 		self.assertNotIn("expected_amount", data["rows"][0])
+		self.assertNotIn("sales_amount", data["rows"][0])  # nor its breakdown
 		result = shift.close_shift(json.dumps({r["mode_of_payment"]: 0 for r in data["rows"]}))
 		self.assertAlmostEqual(next(r for r in result["rows"] if r["mode_of_payment"] == "Cash")["difference"], -10, 2)
 
