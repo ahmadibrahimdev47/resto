@@ -2,6 +2,7 @@
 
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+from frappe.utils import cint
 
 from resto.resto.utils import ALL_ROLES, CASHIER, HOST, KITCHEN, MANAGER, WAITER
 
@@ -268,8 +269,57 @@ def setup():
 	set_new_setting_defaults()
 	grant_standard_permissions()
 	keep_money_from_the_kitchen()
+	show_stock_row_expense_account()
 	add_accounting_summary_links()
 	sync_translations()
+
+
+# A Stock Entry row's Difference Account («حساب الفرق») as a column of the items grid (D-254): on
+# a Material Issue of supplies it is the expense the issue is booked to, and inside the row's
+# panel it was left as the default. The grid keeps within Frappe's 10 columns: numbers are narrowed
+# first, then the least needed column leaves the grid (never the form).
+GRID_COLUMNS = 10
+STOCK_ROW = "Stock Entry Detail"
+STOCK_ROW_NARROW = ("qty", "transfer_qty", "basic_rate")
+STOCK_ROW_DROP = ("basic_amount", "amount", "valuation_rate", "basic_rate", "uom", "transfer_qty")
+
+
+def _grid_width(df):
+	"""Grid columns a field takes (Frappe's defaults when none is set)."""
+	if cint(df.columns):
+		return cint(df.columns)
+	if df.fieldtype == "Check":
+		return 1
+	if df.fieldtype in ("Text", "Small Text", "Text Editor", "Long Text"):
+		return 3
+	return 2
+
+
+def show_stock_row_expense_account():
+	from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+
+	def put(fieldname, prop, value, kind):
+		make_property_setter(STOCK_ROW, fieldname, prop, value, kind, for_doctype=False, validate_fields_for_doctype=False)
+
+	if not frappe.get_meta(STOCK_ROW).get_field("expense_account"):
+		return
+	put("expense_account", "in_list_view", 1, "Check")
+	put("expense_account", "columns", 2, "Int")
+	frappe.clear_cache(doctype=STOCK_ROW)
+	widths = {df.fieldname: _grid_width(df) for df in frappe.get_meta(STOCK_ROW).fields if df.in_list_view}
+	for fieldname in STOCK_ROW_NARROW:
+		if sum(widths.values()) <= GRID_COLUMNS:
+			break
+		if widths.get(fieldname, 0) > 1:
+			widths[fieldname] = 1
+			put(fieldname, "columns", 1, "Int")
+	for fieldname in STOCK_ROW_DROP:
+		if sum(widths.values()) <= GRID_COLUMNS:
+			break
+		if fieldname in widths:
+			widths.pop(fieldname)
+			put(fieldname, "in_list_view", 0, "Check")
+	frappe.clear_cache(doctype=STOCK_ROW)
 
 
 # The kitchen has nothing to do with bills or money (D-242). Rights Resto gave it before, taken
