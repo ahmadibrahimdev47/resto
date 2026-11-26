@@ -86,6 +86,16 @@ class TestDemo(IntegrationTestCase):
 		self.assertRaises(frappe.ValidationError, self.run_days)
 		self.assertRaises(frappe.ValidationError, demo.reset, confirm=frappe.local.site)
 
+	def test_prices_that_start_later_are_found_and_moved(self):
+		"""A site's prices are often valid from the day they were typed in: before it, no order has a price."""
+		price = frappe.db.get_value("Item Price", {"item_code": "DISH-FRIES", "price_list": fx.PRICE_LIST, "selling": 1}, "name")
+		frappe.db.set_value("Item Price", price, "valid_from", add_days(self.start, 5))
+		self.assertGreaterEqual(demo._late_prices(self.start)["selling"], 1)
+		self.assertRaises(frappe.ValidationError, self.run_days)
+		self.assertGreaterEqual(demo._move_prices(self.start), 1)
+		self.assertEqual(getdate(frappe.db.get_value("Item Price", price, "valid_from")), self.start)
+		self.assertEqual(demo._late_prices(self.start)["selling"], 0)
+
 	def test_the_same_seed_plans_the_same_days(self):
 		site = demo._Site(3)
 		one = demo._Planner(site, self.start, self.end, 5, 3).plan(self.start)

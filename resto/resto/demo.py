@@ -698,6 +698,9 @@ class _Run:
 			f"{day}: {s.get('paid', 0)}/{len(plan.orders)} orders paid, sales {flt(s.get('sales', 0), 2)}, "
 			f"{s.get('purchases', 0)} purchases, {s.get('top_ups', 0)} top-ups, {s.get('failed', 0)} failed steps"
 		)
+		if plan.orders and not s.get("paid"):
+			# Something every order trips on (no price that day, a missing account): fix it, not a week of failures.
+			frappe.throw(f"No order was paid on {day}: stopped, the day not kept (see the failed steps above)")
 
 	# ---- the shift
 
@@ -1247,6 +1250,43 @@ def _kept(openings, keep=None):
 	return out
 
 
+def _late_prices(day):
+	"""{"selling": n, "buying": n}: items whose price in a price list starts after day, with no price
+	of that list valid on day (an order that day has no price: a site's prices are often dated the
+	day they were typed in)."""
+	rows = frappe.db.sql(
+		"""select ip.selling, count(distinct ip.item_code, ip.price_list) from `tabItem Price` ip
+		where ip.valid_from > %(day)s and ifnull(ip.customer, '') = '' and ifnull(ip.supplier, '') = ''
+		and not exists (select 1 from `tabItem Price` o where o.item_code = ip.item_code and o.price_list = ip.price_list
+			and ifnull(o.customer, '') = '' and ifnull(o.supplier, '') = ''
+			and (o.valid_from is null or o.valid_from <= %(day)s) and (o.valid_upto is null or o.valid_upto >= %(day)s))
+		group by ip.selling""",
+		{"day": day},
+	)
+	out = {"selling": 0, "buying": 0}
+	for selling, n in rows:
+		out["selling" if cint(selling) else "buying"] += n
+	return out
+
+
+def _move_prices(day):
+	"""On the demo copy: each such item's first price starts on day instead (its later prices kept)."""
+	rows = frappe.db.sql(
+		"""select ip.name from `tabItem Price` ip
+		where ip.valid_from > %(day)s and ifnull(ip.customer, '') = '' and ifnull(ip.supplier, '') = ''
+		and ip.valid_from = (select min(f.valid_from) from `tabItem Price` f where f.item_code = ip.item_code
+			and f.price_list = ip.price_list and ifnull(f.customer, '') = '' and ifnull(f.supplier, '') = '')
+		and not exists (select 1 from `tabItem Price` o where o.item_code = ip.item_code and o.price_list = ip.price_list
+			and ifnull(o.customer, '') = '' and ifnull(o.supplier, '') = ''
+			and (o.valid_from is null or o.valid_from <= %(day)s) and (o.valid_upto is null or o.valid_upto >= %(day)s))""",
+		{"day": day},
+	)
+	names = [r[0] for r in rows]
+	for part in _chunks(names):
+		frappe.db.sql("update `tabItem Price` set valid_from = %s where name in %s", (day, tuple(part)))
+	return len(names)
+
+
 def _first_documents(limit=12):
 	"""The earliest documents on the ledgers, to tell the opening by: (date, type, name, remark)."""
 	rows = frappe.db.sql(
@@ -1325,8 +1365,9 @@ def _redate_opening(day_before, openings):
 
 
 @frappe.whitelist()
-def check(openings=None, keep=None):
-	"""What the site has for the demo, and what stops it. openings, keep: as for generate."""
+def check(openings=None, keep=None, start=None):
+	"""What the site has for the demo, and what stops it. openings, keep: as for generate; start: the
+	first day to be played (the prices must be valid on it)."""
 	_guard()
 	frappe.only_for("System Manager")
 	from frappe.utils.scheduler import is_scheduler_disabled
@@ -1376,6 +1417,18 @@ def check(openings=None, keep=None):
 	if extra:
 		notes.append(f"kept with the opening (assets, depreciation, named): {extra}")
 	other = _other_entries(kept)
+	if start:
+		late = _late_prices(getdate(start))
+		if late["selling"]:
+			problems.append(
+				f"selling prices of {late['selling']} items start after {start}: generate with move_prices=1 moves them to {start} (this copy only)"
+			)
+		if late["buying"]:
+			notes.append(f"buying prices of {late['buying']} items start after {start} (moved too with move_prices=1)")
+	else:
+		first = frappe.db.sql("select min(valid_from) from `tabItem Price` where selling = 1")[0][0]
+		if first:
+			notes.append(f"the earliest selling price is valid from {first}: pass start=... to check it")
 	done = frappe.db.get_global(MARK)
 	if other and not done:
 		problems.append(f"documents other than the opening are on the books (reset first): {other}")
@@ -1579,7 +1632,9 @@ def _forget():
 
 
 @frappe.whitelist()
-def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=None, force_scheduler=0, opening=1, openings=None, keep=None):
+def generate(
+	start, end, orders_per_day=30, seed=1, monthly=None, change_float=None, force_scheduler=0, opening=1, openings=None, keep=None, move_prices=0
+):
 	"""Play the restaurant's days from start to end (see the module's notes).
 
 	monthly: expenses paid from the main safe each month, e.g.
@@ -1588,7 +1643,8 @@ def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=N
 	opening: 1 (the copy of a site): only the opening on the books, moved to the day before start;
 	0: the books are kept, and nothing may be dated on or after start (the tests' site).
 	openings: the opening entries when they are not marked as such, ["Journal Entry:ACC-JV-...", ...].
-	keep: other documents left on the books, as for reset (the assets' are kept anyway)."""
+	keep: other documents left on the books, as for reset (the assets' are kept anyway).
+	move_prices: 1 moves prices that start after the first day back to it (this copy's Item Prices)."""
 	_guard()
 	frappe.only_for("System Manager")
 	from frappe.utils.scheduler import is_scheduler_disabled
@@ -1623,6 +1679,15 @@ def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=N
 	for day in (add_days(first, -1), end):
 		if not _fiscal_year(day, frappe.db.get_single_value("Resto Settings", "company")):
 			frappe.throw(f"No fiscal year holds {day}: add it first")
+	late = _late_prices(first)
+	if late["selling"] or late["buying"]:
+		if not cint(move_prices):
+			frappe.throw(
+				f"Prices start after {first} (selling: {late['selling']} items, buying: {late['buying']}): "
+				"run with move_prices=1 to move them to that day on this copy"
+			)
+		_log(f"{_move_prices(first)} prices moved to start on {first}")
+		_commit()
 
 	user = frappe.session.user
 	site = _Site(cint(seed))
