@@ -64,6 +64,7 @@
   "reservation",
   "merged_into",
   "rebill",
+  "paid_before_served",
   "table_freed",
   "send_rounds",
   "column_break_7",
@@ -396,12 +397,21 @@
    "description": "Its invoice was cancelled after the table was freed; bill it again from the floor list."
   },
   {
+   "fieldname": "paid_before_served",
+   "fieldtype": "Check",
+   "label": "Paid Before Served",
+   "read_only": 1,
+   "no_copy": 1,
+   "depends_on": "eval:doc.order_type=='Dine In'",
+   "description": "A dine-in order paid before every dish was served keeps its table, the guests still eating, until it is freed."
+  },
+  {
    "fieldname": "table_freed",
    "fieldtype": "Check",
    "label": "Table Freed",
    "read_only": 1,
    "no_copy": 1,
-   "description": "A dine-in order paid before its dishes came out keeps its table until they are ready or the cashier frees it."
+   "description": "Freed by the cashier, the host or the waiter (Free the Table): a dine-in order paid before its dishes were served keeps its table until then."
   },
   {
    "fieldname": "column_break_7",
@@ -519,7 +529,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-27 01:00:00.000000",
+ "modified": "2026-11-27 15:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",

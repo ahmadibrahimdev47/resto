@@ -208,11 +208,16 @@ class TestRestaurantFlow(IntegrationTestCase):
 		)
 		self.assertAlmostEqual(gl.get(stock_account, 0), sle_value("Sales Invoice", si.name), 2)
 
-		# Paid while the drinks are not out of the bar: the table waits for them (D-220), then is free.
+		# Paid while the drinks are not out of the bar: the table stays, the guests waiting and then
+		# eating (D-220, D-276), until it is freed.
 		table = lambda: next(t for h in floor.get_floor()["halls"] for t in h["tables"] if t["name"] == "T1")
 		self.assertEqual(table()["status"], "paid")
 		bar = next(t for t in tickets if t != grill)
 		frappe.get_attr("resto.resto.kitchen.set_ticket_status")(bar, "Ready")
+		self.assertEqual(table()["status"], "paid")
+		floor.mark_served(order)
+		self.assertEqual((table()["status"], table()["paid"]["eating"]), ("paid", 1))
+		floor.free_table(order)
 		self.assertEqual(table()["status"], "free")
 
 	def test_vat_on_service_from_template(self):

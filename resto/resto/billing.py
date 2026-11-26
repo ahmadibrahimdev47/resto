@@ -559,6 +559,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 		order.status = "Paid"
 		order.closed_at = now_datetime()
 		order.rebill = 0
+		order.mark_paid_before_served()
 	order.flags.ignore_permissions = True
 	order.flags.resto_api = True
 	order.flags.resto_billing = True

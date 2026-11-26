@@ -234,27 +234,32 @@ PAID_WAIT_HOURS = 12
 
 
 def _paid_waiting(now):
-	"""{table: order} of dine-in orders paid while a dish was still not out of the kitchen (D-220):
-	the table stays taken until every dish is ready or served, or the cashier frees it, so no one is
-	seated at a table still waiting for its food."""
+	"""{table: order} of dine-in orders paid before their dishes were served (D-220, D-276): the table
+	stays taken, the guests waiting for their food (a dish not served yet; a ready dish is still at
+	the pass) or eating it, until the cashier, the host or the waiter frees it, or after
+	PAID_WAIT_HOURS. Paid after every dish was served, the table frees at once."""
 	rows = frappe.db.sql(
 		"""select o.name, o.resto_table, o.guests, o.closed_at,
-			sum(case when i.kitchen_status in ('Ready', 'Served', 'Void') then 0 else 1 end) as waiting
+			sum(case when i.kitchen_status in ('Served', 'Void') then 0 else 1 end) as waiting
 		from `tabResto Order` o join `tabResto Order Item` i on i.parent = o.name and i.parenttype = 'Resto Order'
 		where o.status = 'Paid' and o.order_type = 'Dine In' and ifnull(o.resto_table, '') != ''
 			and ifnull(o.table_freed, 0) = 0 and o.opened_at >= %s
-		group by o.name having waiting > 0
+		group by o.name having waiting > 0 or max(ifnull(o.paid_before_served, 0)) = 1
 		order by o.opened_at asc""",
 		add_to_date(now, hours=-PAID_WAIT_HOURS),
 		as_dict=True,
 	)
-	return {r.resto_table: frappe._dict(name=r.name, guests=r.guests, waiting=cint(r.waiting)) for r in rows}
+	return {
+		r.resto_table: frappe._dict(name=r.name, guests=r.guests, waiting=cint(r.waiting), eating=int(not cint(r.waiting)))
+		for r in rows
+	}
 
 
 @frappe.whitelist(methods=["POST"])
 def free_table(order):
-	"""The cashier frees the table of a paid dine-in order still waiting for its dishes (D-220)."""
-	require_role(CASHIER, HOST)
+	"""The cashier, the host or the waiter frees the table of a paid dine-in order: the guests left
+	(D-220, D-276)."""
+	require_role(WAITER, CASHIER, HOST)
 	status, order_type = frappe.db.get_value("Resto Order", order, ["status", "order_type"]) or (None, None)
 	if status != "Paid" or order_type != "Dine In":
 		frappe.throw(_("Only the table of a paid dine-in order can be freed here"))

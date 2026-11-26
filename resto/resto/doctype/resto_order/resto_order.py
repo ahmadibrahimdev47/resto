@@ -35,6 +35,7 @@ SERVER_HEADER_FIELDS = (
 	"extra_packaging",
 	"send_rounds",
 	"table_freed",
+	"paid_before_served",
 	# A staff meal (D-231): made and posted only through resto.resto.staff_meal.
 	"staff_meal",
 	"staff_stock_entry",
@@ -133,11 +134,20 @@ class RestoOrder(Document):
 	def close_kitchen_tickets(self):
 		"""Paid: food waiting at the pass was served. Cancelled: nothing is left to cook."""
 		if self.status == "Paid":
+			ready = frappe.get_all("Resto Kitchen Ticket", filters={"resto_order": self.name, "status": "Ready"}, pluck="name")
 			frappe.db.sql(
 				"""update `tabResto Kitchen Ticket` set status = 'Served', served_at = %s
 				where resto_order = %s and status = 'Ready'""",
 				(now_datetime(), self.name),
 			)
+			if ready:
+				# Their dishes too (D-276): served, so the table shows the guests eating.
+				frappe.db.sql(
+					"""update `tabResto Order Item` i join `tabResto Kitchen Ticket Item` k on k.order_item = i.name
+					set i.kitchen_status = 'Served'
+					where k.parent in %s and i.kitchen_status = 'Ready'""",
+					(ready,),
+				)
 		elif self.status == "Cancelled":
 			frappe.db.sql(
 				"""update `tabResto Kitchen Ticket` set status = 'Cancelled'
@@ -145,12 +155,21 @@ class RestoOrder(Document):
 				self.name,
 			)
 
+	def mark_paid_before_served(self):
+		"""Paid now: a dine-in order with a dish not served yet keeps its table, the guests waiting for
+		their food or eating it, until it is freed (D-276). Paid after every dish was served: the guests
+		are leaving, so the table frees at once."""
+		self.paid_before_served = cint(
+			self.order_type == "Dine In" and any(d.kitchen_status not in ("Served", "Void") for d in self.items)
+		)
+
 	def close_when_all_billed(self):
 		"""Part of the order was paid and the rest was voided or removed: nothing is left to bill."""
 		if self.status in ACTIVE and any(not d.cancelled for d in self.invoices) and not self.unbilled_lines():
 			self.status = "Paid"
 			self.closed_at = self.closed_at or now_datetime()
 			self.rebill = 0
+			self.mark_paid_before_served()
 
 	# ------------------------------------------------------------------ checks
 

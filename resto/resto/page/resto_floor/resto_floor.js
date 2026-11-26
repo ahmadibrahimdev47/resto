@@ -1106,7 +1106,7 @@ class RestoFloor {
 				<span><i class="free"></i>${__("Free", null, "Resto")}</span>
 				<span><i class="occupied"></i>${__("Occupied")}</span>
 				<span><i class="bill"></i>${__("Bill Requested")}</span>
-				<span><i class="paid"></i>${__("Paid, Waiting for the Food")}</span>
+				<span><i class="paid"></i>${__("Paid, Guests Seated")}</span>
 				<span><i class="reserved"></i>${__("Reserved")}</span>
 			</div>`, () =>
 			this.$body.find(".rf-tbl").on("click", (e) => {
@@ -1120,7 +1120,7 @@ class RestoFloor {
 	table_card(t) {
 		const o = t.order;
 		const pos = t.grid_row && t.grid_col ? `grid-row:${t.grid_row};grid-column:${t.grid_col};` : "";
-		const label = { free: __("Free", null, "Resto"), occupied: __("Occupied"), bill: __("Bill Requested"), reserved: __("Reserved"), paid: __("Paid, Waiting for the Food") }[t.status];
+		const label = { free: __("Free", null, "Resto"), occupied: __("Occupied"), bill: __("Bill Requested"), reserved: __("Reserved"), paid: t.paid && t.paid.eating ? __("Paid, Eating") : __("Paid, Waiting for the Food") }[t.status];
 		const seats = __("{0} seats", [t.seats || 0]);
 		let body;
 		if (o) {
@@ -1130,8 +1130,10 @@ class RestoFloor {
 					<span class="rf-tago">${__("for {0}", [dur(o.minutes)])}</span></div>
 				${this.kitchen_progress(o)}`;
 		} else if (t.paid) {
-			body = `<span class="rf-tsub">${esc(t.paid.name)}</span>
-				<span class="rf-tfoot rf-unsent">${__("{0} dish(es) not out of the kitchen yet", [t.paid.waiting])}</span>`;
+			body = `<span class="rf-tsub">${esc(t.paid.name)}${t.paid.guests ? ` · ${__("{0} guests", [t.paid.guests])}` : ""}</span>
+				<span class="rf-tfoot ${t.paid.eating ? "rf-thint" : "rf-unsent"}">${
+					t.paid.eating ? __("Free the table when they leave") : __("{0} dish(es) not served yet", [t.paid.waiting])
+				}</span>`;
 		} else if (t.reservation) {
 			body = `<span class="rf-tsub">${seats}</span>
 				<span class="rf-tfoot rf-tres">${esc(t.reservation.customer_name)} · ${esc(hhmm(t.reservation.reservation_time))} · ${__("{0} guests", [t.reservation.guests])}</span>`;
@@ -1201,21 +1203,25 @@ class RestoFloor {
 		this.ask_guests(t);
 	}
 
-	// A table paid while its food is still in the kitchen (D-220): it frees by itself once every dish
-	// is ready; the cashier may free it now, or seat new guests anyway.
+	// A table paid before its food was served (D-220, D-276): the guests are waiting for it or eating
+	// it, so it stays taken until the cashier, the host or the waiter frees it (or seats new guests).
 	paid_table(t) {
 		const r = this.floor.roles;
 		const d = new frappe.ui.Dialog({
-			title: `${__("Table {0}", [esc(t.name)], "Resto")} · ${__("Paid, Waiting for the Food")}`,
+			title: `${__("Table {0}", [esc(t.name)], "Resto")} · ${t.paid.eating ? __("Paid, Eating") : __("Paid, Waiting for the Food")}`,
 			fields: [
 				{
 					fieldname: "html",
 					fieldtype: "HTML",
-					options: `<p>${__("Order {0} is paid, and {1} dish(es) are not out of the kitchen yet. The table frees by itself when they are ready.", [esc(t.paid.name), t.paid.waiting])}</p>`,
+					options: `<p>${
+						t.paid.eating
+							? __("Order {0} is paid and its dishes are served: the guests are eating. Free the table when they leave.", [esc(t.paid.name)])
+							: __("Order {0} is paid, and {1} dish(es) are not served yet. Free the table when the guests leave.", [esc(t.paid.name), t.paid.waiting])
+					}</p>`,
 				},
 			],
 		});
-		if (r.cashier || r.host || r.manager) {
+		if (r.cashier || r.host || r.waiter || r.manager) {
 			d.set_primary_action(__("Free the Table"), async () => {
 				d.hide();
 				await call("free_table", { order: t.paid.name }, true);
@@ -4007,7 +4013,7 @@ class RestoFloor {
 						</div>
 					</div>
 					${bill.on_account_customer ? `<label class="rf-onacc" style="display:none"><input type="checkbox"> <span>${__("Leave the rest on the account of {0}", [esc(bill.on_account_customer_name || bill.on_account_customer)])}</span></label>` : ""}
-					${o.order_type === "Dine In" && o.items.some((x) => !["Ready", "Served", "Void"].includes(x.kitchen_status)) ? `<div class="rf-warn rf-pwarn">⚠ ${__("Some dishes are not out of the kitchen yet: the table stays taken until they are ready.")}</div>` : ""}
+					${o.order_type === "Dine In" && o.items.some((x) => !["Served", "Void"].includes(x.kitchen_status)) ? `<div class="rf-warn rf-pwarn">⚠ ${__("Some dishes are not served yet: the table stays taken until it is freed (Free the Table).")}</div>` : ""}
 					<div class="rf-pnote rf-muted"></div>
 					<div class="rf-pacts">
 						<button class="rf-btn rf-lg" data-p="exact"><span>${__("Exact Amount in Cash")}</span><kbd dir="ltr">Enter</kbd></button>
