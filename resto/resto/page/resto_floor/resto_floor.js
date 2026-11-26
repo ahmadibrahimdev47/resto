@@ -144,6 +144,19 @@ function ask_approval(floor, what) {
 }
 const money = (v) => format_currency(v || 0);
 
+// Before money is posted from a shift dialog (D-230): what will be posted is said back, line by line
+// (already escaped); No leaves the dialog as it was filled. true: go ahead.
+function confirm_post(lines) {
+	return new Promise((resolve) =>
+		frappe.confirm(
+			`${lines.join("")}<p><b>${__("Do you want to continue?", null, "Resto")}</b></p>`,
+			() => resolve(true),
+			() => resolve(false)
+		)
+	);
+}
+const fmt_stock_qty = (q) => String(flt(q, 6));
+
 // The floor's look (D-214): line icons drawn inline (no icon font to load), sized by CSS.
 const svg = (d, fill) =>
 	`<svg viewBox="0 0 24 24" fill="${fill ? "currentColor" : "none"}" stroke="${fill ? "none" : "currentColor"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
@@ -1570,13 +1583,24 @@ class RestoFloor {
 				{ fieldname: "remarks", fieldtype: "Data", label: __("For What"), reqd: 1 },
 				{ fieldname: "receipt", fieldtype: "Attach", label: __("Receipt"), reqd: data.receipt_required ? 1 : 0 },
 			],
-			primary_action_label: __("Save"),
-			primary_action: (v) =>
-				this.shift_busy(d, async () => {
+			primary_action_label: __("Save and Post"),
+			primary_action: async (v) => {
+				const account = (data.accounts.find((a) => a.name === v.expense_account) || {}).account_name || v.expense_account;
+				const sure = await confirm_post([
+					`<p>${__("{0} will be paid from the drawer «{1}» to {2}, for: {3}.", [
+						`<b>${money(v.amount)}</b>`,
+						esc(v.mode_of_payment),
+						`<b>${esc(account)}</b>`,
+						esc(v.remarks),
+					])}</p>`,
+				]);
+				if (!sure) return;
+				return this.shift_busy(d, async () => {
 					const je = await frappe.xcall("resto.resto.shift.add_expense", { ...v, request_id });
 					d.hide();
 					frappe.show_alert({ message: __("Expense recorded: {0}", [je]), indicator: "green" });
-				}),
+				});
+			},
 		});
 		d.show();
 	}
@@ -1636,11 +1660,25 @@ class RestoFloor {
 				{ fieldname: "remarks", fieldtype: "Data", label: __("Remarks") },
 				{ fieldname: "receipt", fieldtype: "Attach", label: __("Receipt") },
 			],
-			primary_action_label: __("Save"),
+			primary_action_label: __("Save and Post"),
 			primary_action: async (v) => {
 				const items = (v.items || []).filter((r) => r.item_code).map((r) => ({ item_code: r.item_code, qty: r.qty, amount: r.amount }));
 				if (!items.length) return frappe.msgprint(__("Add what was bought"));
 				const sum = total(items);
+				// What will be paid and received, said back before anything is posted.
+				const info = await Promise.all(
+					items.map((r) => frappe.db.get_value("Item", r.item_code, ["item_name", "stock_uom"]).then((x) => x.message || {}))
+				);
+				const supplier = v.supplier ? (suppliers.find((x) => x.value === v.supplier) || {}).label || v.supplier : "";
+				const sure = await confirm_post([
+					`<p>${__("{0} will be paid from the drawer «{1}» and received into {2}:", [`<b>${money(sum)}</b>`, esc(v.mode_of_payment), `<b>${esc(data.warehouse || "")}</b>`])}</p>`,
+					`<ul>${items
+						.map((r, i) => `<li>${esc(fmt_stock_qty(r.qty))} ${esc(__(info[i].stock_uom || ""))} ${esc(info[i].item_name || r.item_code)}: ${money(r.amount)}</li>`)
+						.join("")}</ul>`,
+					supplier ? `<p>${__("Supplier: {0}", [esc(supplier)])}</p>` : "",
+					`<p><b>${__("Total: {0}", [money(sum)])}</b></p>`,
+				]);
+				if (!sure) return;
 				// The manager's PIN is asked before the screen waits for the server.
 				let ok = {};
 				if (data.approval_above != null && sum > flt(data.approval_above) + 0.005) {
@@ -1695,12 +1733,18 @@ class RestoFloor {
 				{ fieldname: "mode_of_payment", fieldtype: "Select", label: __("Mode of Payment"), reqd: 1 },
 			],
 			primary_action_label: __("Collect"),
-			primary_action: (v) =>
-				this.shift_busy(d, async () => {
+			primary_action: async (v) => {
+				const who = (debt && debt.customer_name) || v.customer;
+				const sure = await confirm_post([
+					`<p>${__("{0} will be received from {1} into «{2}», against their oldest unpaid bills first.", [`<b>${money(v.amount)}</b>`, `<b>${esc(who)}</b>`, esc(v.mode_of_payment)])}</p>`,
+				]);
+				if (!sure) return;
+				return this.shift_busy(d, async () => {
 					const pe = await frappe.xcall("resto.resto.shift.collect_debt", { ...v, request_id });
 					d.hide();
 					frappe.show_alert({ message: __("Payment recorded: {0}", [pe]), indicator: "green" });
-				}),
+				});
+			},
 		});
 		const load = async () => {
 			const customer = d.get_value("customer");
