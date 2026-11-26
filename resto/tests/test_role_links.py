@@ -163,19 +163,86 @@ class TestSetupOnlyForTheManagers(IntegrationTestCase):
 					self.assertTrue(frappe.has_permission(doctype, "select", user=self.users[role]))
 
 	def test_the_sidebar_shows_the_setup_only_to_the_manager(self):
-		from frappe.desk.doctype.sidebar.sidebar import resolve_sidebar
-
-		def shown(user):
-			frappe.set_user(user)
-			frappe.clear_cache(user=user)
-			sidebar = resolve_sidebar("Resto", user)
-			frappe.set_user("Administrator")
-			return {i.get("link_to") for i in (sidebar.items if sidebar else []) if i.get("type") == "Link"}
-
 		for role in FLOOR_ROLES:
 			with self.subTest(role=role):
-				self.assertFalse(shown(self.users[role]) & set(SETUP))
-		self.assertTrue(set(SETUP) <= shown(self.users["Resto Manager"]))
+				self.assertFalse(shown_links(self.users[role]) & set(SETUP))
+		self.assertTrue(set(SETUP) <= shown_links(self.users["Resto Manager"]))
+
+
+def shown_links(user):
+	from frappe.desk.doctype.sidebar.sidebar import resolve_sidebar
+
+	frappe.set_user(user)
+	frappe.clear_cache(user=user)
+	sidebar = resolve_sidebar("Resto", user)
+	frappe.set_user("Administrator")
+	return {i.get("link_to") for i in (sidebar.items if sidebar else []) if i.get("type") == "Link"}
+
+
+class TestWorkersForTheManager(IntegrationTestCase):
+	"""The manager keeps the workers' records from the restaurant sidebar (D-238): read, write and
+	create on Employee, without HR User. The floor roles neither see nor read them; the cashier
+	keeps select, for the driver link and the staff advance's worker."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		cls.users = {role: user_with(role) for role in (*FLOOR_ROLES, "Resto Manager")}
+		for doctype, field, value in (("Gender", "gender", "Male"), ("Designation", "designation_name", "Cook")):
+			if not frappe.db.exists(doctype, value):
+				frappe.get_doc({"doctype": doctype, field: value}).insert(ignore_permissions=True)
+		frappe.db.commit()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def test_the_link_opens_the_employee_list_in_the_restaurant_sidebar(self):
+		names = [i.get("link_to") for i in links()]
+		self.assertEqual(names[names.index("Resto Reservation") + 1], "Employee")
+		item = next(i for i in links() if i.get("link_to") == "Employee")
+		self.assertEqual((item["label"], item["link_type"]), ("Workers", "DocType"))
+		self.assertFalse(item.get("open_in_new_tab"))
+
+	def test_only_the_manager_sees_the_link(self):
+		for role in FLOOR_ROLES:
+			with self.subTest(role=role):
+				self.assertNotIn("Employee", shown_links(self.users[role]))
+		self.assertIn("Employee", shown_links(self.users["Resto Manager"]))
+
+	def test_the_floor_roles_cannot_read_a_worker(self):
+		for role in FLOOR_ROLES:
+			user = self.users[role]
+			for right in ("read", "write", "create", "delete", "export"):
+				with self.subTest(role=role, right=right):
+					self.assertFalse(frappe.has_permission("Employee", right, user=user))
+		self.assertTrue(frappe.has_permission("Employee", "select", user=self.users["Resto Cashier"]))
+
+	def test_the_manager_adds_and_edits_a_worker_but_cannot_delete_one(self):
+		manager = self.users["Resto Manager"]
+		for right in ("read", "write", "create"):
+			self.assertTrue(frappe.has_permission("Employee", right, user=manager), right)
+		self.assertFalse(frappe.has_permission("Employee", "delete", user=manager))
+		for doctype in ("Gender", "Designation"):
+			self.assertTrue(frappe.has_permission(doctype, "select", user=manager), doctype)
+		frappe.set_user(manager)
+		doc = frappe.get_doc(
+			{
+				"doctype": "Employee",
+				"first_name": "Sidebar Worker",
+				"gender": "Male",
+				"date_of_birth": frappe.utils.add_years(frappe.utils.nowdate(), -22),
+				"date_of_joining": frappe.utils.nowdate(),
+				"company": fx.COMPANY,
+				"status": "Active",
+				"designation": "Cook",
+				"cell_number": "01000000000",
+			}
+		).insert()
+		doc.cell_number = "01111111111"
+		doc.save()
+		self.assertEqual(frappe.db.get_value("Employee", doc.name, "cell_number"), "01111111111")
+		self.assertIn(doc.name, frappe.get_list("Employee", pluck="name"))
 
 
 class TestShiftVisibility(IntegrationTestCase):

@@ -7,7 +7,7 @@ from resto.resto.utils import ALL_ROLES, CASHIER, HOST, KITCHEN, MANAGER, WAITER
 
 # What the Resto roles need on standard doctypes: ERPNext reads Item and Customer while it builds
 # a bill, the cashier prints the receipt, the manager runs the reports on invoices and stock.
-# Employee is "select" only (the delivery driver link), so no HR data is readable.
+# The floor gets "select" only on Employee (the delivery driver link), so no HR data is readable.
 STANDARD_PERMISSIONS = {
 	"Item": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"], KITCHEN: ["read"]},
 	# The kitchen runs the Prep Forecast: its Company and Item Group filters. A report checks
@@ -16,7 +16,12 @@ STANDARD_PERMISSIONS = {
 	"Item Group": {KITCHEN: ["read"], MANAGER: ["read"]},
 	"UOM": {KITCHEN: ["read"], MANAGER: ["read"]},
 	"Customer": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"]},
-	"Employee": {CASHIER: ["select"], MANAGER: ["select"]},
+	# The manager keeps the workers' records (D-238): their staff advances are owed by name. The
+	# cashier only picks one (the advance dialog's list comes from the server). Not HR User: no
+	# leave, attendance or payroll. Gender and Designation are the form's links.
+	"Employee": {CASHIER: ["select"], MANAGER: ["select", "read", "write", "create"]},
+	"Gender": {MANAGER: ["select"]},
+	"Designation": {MANAGER: ["select"]},
 	"Sales Invoice": {CASHIER: ["read", "print"], MANAGER: ["read", "print", "report"]},
 	# The kitchen runs Negative Prepared Stock (its prepared items' stock).
 	"Bin": {MANAGER: ["read", "report"], KITCHEN: ["read", "report"]},
