@@ -21,8 +21,10 @@ LANG = "ar"
 WRITTEN = "resto_translation_overrides"
 # Texts whose Resto wording must hold on every screen (D-180: a document is posted, not sent).
 # Journal Entry's remark and the Auto Repeat dialog (D-234): a later app words them otherwise.
+# The Employee form the manager fills (D-238): texts a later app leaves in English or words oddly.
 OVERRIDE = (
 	"Submit", "Submitted", "Remark", "Custom Remark", "Frequency", "End Date", "Submit on Creation", "Add Child", "Is Group",
+	"Employment", "Reports to", "Emergency Contact Name", "Personal Email",
 )
 
 
