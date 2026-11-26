@@ -155,6 +155,14 @@ class TestStaffMeal(IntegrationTestCase):
 		self.assertTrue(tickets)
 		self.assertEqual({t.order_type for t in tickets}, {"Staff Meal"})
 		self.assertEqual({t.order_no for t in tickets}, {doc.order_no})
+		# Shown in the tickets' list (D-273); a ticket from before it was kept gets it from its order.
+		df = frappe.get_meta("Resto Kitchen Ticket").get_field("order_type")
+		self.assertEqual((df.fieldtype, df.in_list_view, df.in_standard_filter), ("Select", 1, 1))
+		from resto.patches.v0_1 import kitchen_ticket_order_type
+
+		frappe.db.set_value("Resto Kitchen Ticket", tickets[0].name, "order_type", None)
+		kitchen_ticket_order_type.execute()
+		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", tickets[0].name, "order_type"), "Staff Meal")
 		rows = frappe.get_all(
 			"Resto Kitchen Ticket Item", filters={"parent": ("in", [t.name for t in tickets])}, fields=["item_code", "qty", "order_item"]
 		)

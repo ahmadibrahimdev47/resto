@@ -54,9 +54,13 @@
   },
   {
    "fieldname": "order_type",
-   "fieldtype": "Data",
+   "fieldtype": "Select",
    "read_only": 1,
-   "label": "Order Type"
+   "label": "Order Type",
+   "options": "\nDine In\nTakeaway\nDelivery\nStaff Meal",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "From the order when it was sent; a staff meal is its own type."
   },
   {
    "fieldname": "resto_table",
@@ -211,7 +215,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-26 02:00:00.000000",
+ "modified": "2026-11-27 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Kitchen Ticket",

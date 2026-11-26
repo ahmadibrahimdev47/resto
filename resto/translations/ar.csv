@@ -3181,3 +3181,8 @@
 "Discounted Lines","السطور المخصومة",""
 "Given Free (Value at Cost)","المقدَّم مجانًا (بالتكلفة)",""
 "Given or Approved By","منحه أو اعتمده",""
+"Dine In","صالة","Resto Kitchen Ticket"
+"Takeaway","تيك أواي","Resto Kitchen Ticket"
+"Delivery","توصيل","Resto Kitchen Ticket"
+"Staff Meal","وجبة العاملين","Resto Kitchen Ticket"
+"From the order when it was sent; a staff meal is its own type.","من الطلب عند إرساله؛ ووجبة العاملين نوع مستقل.",""
