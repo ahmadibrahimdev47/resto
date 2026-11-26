@@ -20,8 +20,10 @@ UNBILLED_CLOSED = "Not Billed: Order Closed"
 VOIDED = "Voided After Sending"
 OVER = "Billed More Than Sent"
 NOT_SENT = "Billed, Not Sent to the Kitchen"
+# A staff meal (D-231): no bill, taken from stock at cost by its Stock Entry.
+STAFF_MEAL = "Staff Meal, Posted to Stock"
 EXCEPTIONS = (OPEN, CANCELLED, UNBILLED_CLOSED, VOIDED, OVER, NOT_SENT)
-COLORS = {BILLED: "green", OPEN: "orange", VOIDED: "orange", CANCELLED: "red", UNBILLED_CLOSED: "red", OVER: "red", NOT_SENT: "red"}
+COLORS = {BILLED: "green", STAFF_MEAL: "blue", OPEN: "orange", VOIDED: "orange", CANCELLED: "red", UNBILLED_CLOSED: "red", OVER: "red", NOT_SENT: "red"}
 
 
 def execute(filters=None):
@@ -86,7 +88,7 @@ def _lines(filters, period):
 			oi.kitchen_status, oi.station, oi.ticket, oi.sent_at,
 			(select t.daily_no from `tabResto Kitchen Ticket` t where t.name = oi.ticket) as daily_no,
 			oi.modifiers_text, oi.sides_text, oi.sides_amount, oi.void_reason, oi.voided_by, oi.void_waste,
-			o.cancel_reason
+			o.cancel_reason, o.staff_meal
 		from `tabResto Order Item` oi join `tabResto Order` o on o.name = oi.parent
 		where o.company = %(company)s and o.status != 'Merged'
 			and (
@@ -110,6 +112,8 @@ def _result(l):
 		return CANCELLED
 	if l.kitchen_status == "Void":
 		return VOIDED
+	if l.staff_meal and l.order_status == "Posted":
+		return STAFF_MEAL
 	billed, qty = flt(l.billed_qty), flt(l.qty)
 	if billed > qty:
 		return OVER

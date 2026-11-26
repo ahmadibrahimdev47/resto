@@ -17,6 +17,7 @@
   "prepared_allow_negative",
   "column_break_stock",
   "waste_account",
+  "staff_meal_account",
   "food_cost_levels_section",
   "food_cost_alert_percent",
   "column_break_food_cost_levels",
@@ -138,6 +139,13 @@
    "fieldtype": "Link",
    "label": "Food Waste Account",
    "options": "Account"
+  },
+  {
+   "fieldname": "staff_meal_account",
+   "fieldtype": "Link",
+   "label": "Staff Meals Account",
+   "options": "Account",
+   "description": "The expense account a staff meal is posted to, at the stock's cost (no sale)."
   },
   {
    "fieldname": "column_break_stock",
@@ -465,7 +473,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-26 11:00:00.000000",
+ "modified": "2026-11-26 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

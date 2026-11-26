@@ -48,6 +48,7 @@ class SetupCheck:
 			self.check_kitchen_stock,
 			self.check_packaging,
 			self.check_cash_purchase,
+			self.check_staff_meal,
 			self.check_recipe_precision,
 			self.check_modifiers,
 			self.check_sides,
@@ -551,6 +552,19 @@ class SetupCheck:
 			)
 		else:
 			self.ok(area, _("Cash purchases from the drawer need no purchase order or receipt"))
+
+	def check_staff_meal(self):
+		"""Staff meals (D-231) are posted to the Staff Meals Account."""
+		area = _("Staff Meals")
+		name = self.s.get("staff_meal_account")
+		if not name:
+			self.warn(area, _("Set the Staff Meals Account in Resto Settings: staff meals cannot be posted without it"))
+			return
+		company, is_group, root_type = frappe.db.get_value("Account", name, ["company", "is_group", "root_type"]) or (None, None, None)
+		if company != self.s.company or cint(is_group) or root_type != "Expense":
+			self.error(area, _("The Staff Meals Account {0} must be an expense account of company {1}, not a group").format(name, self.s.company))
+		else:
+			self.ok(area, _("Staff meals are posted to {0} at the stock's cost").format(name))
 
 
 def short(names, limit=15):

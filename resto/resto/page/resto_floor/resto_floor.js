@@ -1089,11 +1089,11 @@ class RestoFloor {
 
 	// A takeaway or delivery order (and a dine-in order to bill again) in the lists.
 	order_row(o) {
-		const kind = o.rebill ? "rebill" : o.order_type === "Delivery" ? "delivery" : "takeaway";
-		const who = [esc(o.customer_name || __("Walk-in", null, "Resto")), o.phone ? `<bdi dir="ltr">${esc(o.phone)}</bdi>` : ""].filter(Boolean).join(" · ");
+		const kind = o.rebill ? "rebill" : o.staff_meal ? "staff" : o.order_type === "Delivery" ? "delivery" : "takeaway";
+		const who = o.staff_meal ? esc(o.staff_for || "") : [esc(o.customer_name || __("Walk-in", null, "Resto")), o.phone ? `<bdi dir="ltr">${esc(o.phone)}</bdi>` : ""].filter(Boolean).join(" · ");
 		return `<button class="rf-orow ${o.status === "Bill Requested" ? "bill" : ""}" data-order="${esc(o.name)}">
-			<div class="rf-orow1"><span class="rf-st k-${kind}">${__(o.order_type, null, "Resto")}</span><b>${o.order_no ? __("Order {0}", [o.order_no], "Resto") : esc(o.name)}</b>${o.order_no ? `<small class="rf-muted">${esc(o.name)}</small>` : ""}
-				<span class="rf-spacer"></span><b>${money(o.bill_grand_total || o.net_total)}</b></div>
+			<div class="rf-orow1"><span class="rf-st k-${kind}">${o.staff_meal ? __("Staff Meal", null, "Resto") : __(o.order_type, null, "Resto")}</span><b>${o.order_no ? __("Order {0}", [o.order_no], "Resto") : esc(o.name)}</b>${o.order_no ? `<small class="rf-muted">${esc(o.name)}</small>` : ""}
+				<span class="rf-spacer"></span>${o.staff_meal ? "" : `<b>${money(o.bill_grand_total || o.net_total)}</b>`}</div>
 			<div class="rf-orow2"><span>${who}</span>
 				${o.delivery_status ? `<span>· ${__(o.delivery_status, null, "Resto")}</span>` : ""}
 				${o.ready_count ? `<span class="rf-ok">· ${__("Ready")} ${o.ready_count}</span>` : ""}
@@ -1306,6 +1306,103 @@ class RestoFloor {
 		d.fields_dict.phone.$input.focus();
 	}
 
+	// A staff meal (D-231): made like an order, then sent to the kitchen and taken from stock at cost
+	// in one step (Send and Post), with no bill.
+	new_staff_meal() {
+		if (!(this.floor.roles.cashier || this.floor.roles.manager)) return;
+		const d = new frappe.ui.Dialog({
+			title: __("Staff Meal", null, "Resto"),
+			fields: [
+				{ fieldname: "note", fieldtype: "HTML", options: `<p class="text-muted">${__("Taken from the kitchen's stock at cost, with no bill. Add the dishes (and their sides) as for any order, and free ingredients for what is not on the menu.")}</p>` },
+				{ fieldname: "staff_for", fieldtype: "Data", label: __("For Whom") },
+			],
+			primary_action_label: __("Start", null, "Resto"),
+			primary_action: async (v) => {
+				const name = await frappe.xcall("resto.resto.staff_meal.create", { staff_for: v.staff_for || "" });
+				d.hide();
+				this.load_order(name);
+			},
+		});
+		d.show();
+	}
+
+	// A free ingredient of a staff meal: any stock item, in its stock unit. An unusual quantity
+	// (grams typed as kilos) needs a manager's PIN.
+	staff_item() {
+		const o = this.order;
+		let uom = "";
+		const d = new frappe.ui.Dialog({
+			title: __("Free Ingredient"),
+			fields: [
+				{
+					fieldname: "item_code",
+					fieldtype: "Link",
+					options: "Item",
+					label: __("Item"),
+					reqd: 1,
+					get_query: () => ({ filters: { is_stock_item: 1, disabled: 0, has_variants: 0 } }),
+					onchange: () => {
+						const code = d.get_value("item_code");
+						uom = "";
+						d.set_df_property("qty", "description", "");
+						if (!code) return;
+						frappe.db.get_value("Item", code, "stock_uom").then((r) => {
+							uom = (r.message || {}).stock_uom || "";
+							if (code === d.get_value("item_code")) d.set_df_property("qty", "description", __("In {0}", [esc(__(uom))]));
+						});
+					},
+				},
+				{ fieldname: "qty", fieldtype: "Float", label: __("Qty (stock unit)"), reqd: 1 },
+			],
+			primary_action_label: __("Add", null, "Resto"),
+			primary_action: async (v) => {
+				const send = (ok) =>
+					new Promise((resolve, reject) =>
+						frappe.call({
+							method: "resto.resto.staff_meal.set_item",
+							args: { order: o.name, item_code: v.item_code, qty: v.qty, ...ok },
+							callback: (r) => resolve(r.message),
+							error: (r) => reject(r || {}),
+						})
+					);
+				let done = null;
+				try {
+					done = await send({});
+				} catch (r) {
+					if (r.exc_type !== "ApprovalRequired" || this.floor.roles.manager) return;
+					const ok = await ask_approval(this.floor, __("Staff meal: {0} {1} of {2}", [fmt_stock_qty(v.qty), __(uom), v.item_code]));
+					if (!ok) return;
+					done = await send(ok).catch(() => null);
+				}
+				if (!done) return;
+				d.hide();
+				this.load_order(o.name);
+			},
+		});
+		d.show();
+	}
+
+	async remove_staff_item(item_code) {
+		const o = this.order;
+		await frappe.xcall("resto.resto.staff_meal.set_item", { order: o.name, item_code, qty: 0 });
+		this.load_order(o.name);
+	}
+
+	async post_staff_meal() {
+		const o = this.order;
+		const dishes = o.items.filter((d) => d.kitchen_status !== "Void").reduce((s, d) => s + flt(d.qty), 0);
+		const free = (o.staff_items || []).length;
+		if (!dishes && !free) return frappe.msgprint(__("Add what the staff eat first"));
+		const sure = await confirm_post([
+			`<p>${__("This staff meal goes to the kitchen now, and what it is made of is taken from the kitchen's stock at cost, with no bill.")}</p>`,
+			`<p><b>${__("{0} dishes, {1} free ingredients", [fmt_qty(dishes), free])}</b>${o.staff_for ? ` · ${__("For {0}", [esc(o.staff_for)])}` : ""}</p>`,
+		]);
+		if (!sure) return;
+		const r = await frappe.xcall("resto.resto.staff_meal.post", { order: o.name });
+		frappe.show_alert({ message: __("Staff meal posted at a cost of {0}", [money(r.cost)]), indicator: "green" }, 8);
+		this.close_order();
+	}
+
 	// ------------------------------------------------------------------ shift (Resto Shift, D-203)
 
 	// The shift as a pill in the header: open since when, or none (D-211).
@@ -1350,6 +1447,7 @@ class RestoFloor {
 		const s = this.floor.shift || {};
 		if (!s.shift) return this.open_shift();
 		this.menu_dialog(__("Shift", null, "Resto"), [
+			[__("Staff Meal", null, "Resto"), () => this.new_staff_meal()],
 			[__("Collect Debt"), () => this.collect_debt()],
 			[__("Drawer Expense"), () => this.drawer_expense()],
 			[__("Cash Purchase"), () => this.cash_purchase()],
@@ -1367,6 +1465,7 @@ class RestoFloor {
 			acts.push([__("Invoices", null, "Resto"), () => this.invoices()]);
 			if (s.shift) {
 				acts.push(
+					[__("Staff Meal", null, "Resto"), () => this.new_staff_meal()],
 					[__("Collect Debt"), () => this.collect_debt()],
 					[__("Drawer Expense"), () => this.drawer_expense()],
 					[__("Cash Purchase"), () => this.cash_purchase()]
@@ -1496,6 +1595,7 @@ class RestoFloor {
 				${s.debts_count ? metric(__("Debts Collected"), money(s.debts_total), __("{0} payments", [s.debts_count])) : ""}
 				${s.expenses_count || s.purchases_count ? metric(__("Net Cash Impact"), money(s.net_cash), s.purchases_count ? __("Collected - Expenses - Purchases") : __("Collected - Expenses")) : ""}
 				${metric(__("Tax Collected"), money(s.tax_total))}
+				${s.staff_meals_count ? metric(__("Staff Meals"), money(s.staff_meals_cost), __("{0} meals, at cost from stock: not cash", [s.staff_meals_count])) : ""}
 			</div>`);
 			const inv = (r.invoices || [])
 				.map(
@@ -1851,7 +1951,11 @@ class RestoFloor {
 	}
 
 	order_title(o) {
-		const where = o.order_type === "Dine In" ? __("Table {0}", [esc(o.resto_table)], "Resto") : __(o.order_type, null, "Resto");
+		const where = o.staff_meal
+			? `${__("Staff Meal", null, "Resto")}${o.staff_for ? ` · ${esc(o.staff_for)}` : ""}`
+			: o.order_type === "Dine In"
+			? __("Table {0}", [esc(o.resto_table)], "Resto")
+			: __(o.order_type, null, "Resto");
 		// The order's number of the day first, as on its kitchen tickets and bill (D-221).
 		const head = o.order_no ? `<span class="rf-ono">${__("Order {0}", [o.order_no], "Resto")}</span> · ${where}` : where;
 		const sub = [esc(o.name)];
@@ -2183,7 +2287,7 @@ class RestoFloor {
 				<button class="rf-btn rf-back">${ICON.back}<span>${__("Floor", null, "Resto")}</span></button>
 				<div class="rf-otitle">${this.order_title(o)}</div>
 				<span class="rf-spacer"></span>
-				<div class="rf-custchip"></div>
+				${o.staff_meal ? "" : `<div class="rf-custchip"></div>`}
 				<span class="rf-hide-sm">${this.shift_pill()}</span>
 				${this.net_pill()}
 			</header>
@@ -2200,16 +2304,17 @@ class RestoFloor {
 				<aside class="rf-cart">
 					<div class="rf-chead"><b>${__("Order", null, "Resto")}</b><span class="rf-ccount"></span><span class="rf-spacer"></span>
 						<button class="rf-btn rf-sm" data-act="note">${__("Note")}</button>
-						<button class="rf-btn rf-sm" data-act="discount">${__("Discount")}</button>
+						${o.staff_meal ? `<button class="rf-btn rf-sm" data-act="staff_item">${__("Free Ingredient")}</button>` : `<button class="rf-btn rf-sm" data-act="discount">${__("Discount")}</button>`}
 						<button class="rf-ib rf-sm" data-act="more" title="${__("More")}" aria-label="${__("More")}">${ICON.more}</button></div>
 					<div class="rf-lines"></div>
 					<div class="rf-cfoot"><div class="rf-totals"></div><div class="rf-cbtns">
+						${o.staff_meal ? (this.floor.roles.cashier || this.floor.roles.manager ? `<button class="rf-btn rf-btn-p rf-xl" data-act="staff_post">${ICON.send}<span>${__("Send and Post")}</span></button>` : `<small class="rf-muted">${__("Only a cashier or a manager makes a staff meal")}</small>`) : `
 						<button class="rf-btn rf-lg rf-fire" data-act="fire" style="display:none"></button>
 						<div class="rf-c2">
 							<button class="rf-btn rf-btn-d rf-lg" data-act="send">${ICON.send}<span class="rf-send-t"></span></button>
 							<button class="rf-btn rf-lg" data-act="bill">${ICON.print}<span>${__("Print Bill")}</span></button>
 						</div>
-						${this.floor.roles.cashier || this.floor.roles.manager ? `<button class="rf-btn rf-btn-p rf-xl rf-pay-b" data-act="pay"></button>` : ""}
+						${this.floor.roles.cashier || this.floor.roles.manager ? `<button class="rf-btn rf-btn-p rf-xl rf-pay-b" data-act="pay"></button>` : ""}`}
 					</div></div>
 				</aside>
 			</div>`);
@@ -2426,12 +2531,18 @@ class RestoFloor {
 					<button class="rf-ib" data-lm="1" title="${__("More")}" aria-label="${__("More")}">${ICON.more}</button>`;
 			return `<div class="rf-ln ${!sent ? "fresh" : ""} ${voided ? "void" : ""} ${d._pending ? "pending" : ""}" data-line="${esc(d.name)}" data-item="${esc(d.item_code)}">
 				<div class="rf-ln1"><div class="rf-lnm"><b>${esc(d.item_name)}</b>
-					<small>${fmt_qty(d.qty)} × ${money(each)}${extra.length ? ` · ${extra.join(" · ")}` : ""}</small>
+					<small>${o.staff_meal ? fmt_qty(d.qty) : `${fmt_qty(d.qty)} × ${money(each)}`}${extra.length ? ` · ${extra.join(" · ")}` : ""}</small>
 					${meta.length ? `<small>${meta.join(" · ")}</small>` : ""}</div>
-					<b class="rf-lamt">${money(d.amount)}</b></div>
+					${o.staff_meal ? "" : `<b class="rf-lamt">${money(d.amount)}</b>`}</div>
 				<div class="rf-ln2">${tag}<span class="rf-spacer"></span>${tools}</div></div>`;
 		});
-		this.$order.find(".rf-lines").html(lines.join("") || `<p class="rf-empty">${__("Tap menu items to add them.")}</p>`);
+		const free = (o.staff_items || []).map(
+			(r) => `<div class="rf-ln fresh"><div class="rf-ln1"><div class="rf-lnm"><b>${esc(r.item_name || r.item_code)}</b>
+				<small>${esc(fmt_stock_qty(r.qty))} ${esc(__(r.uom || ""))} · ${__("Free ingredient")}</small></div></div>
+				<div class="rf-ln2"><span class="rf-spacer"></span><button class="rf-ib rf-del" data-sfree="${esc(r.item_code)}" title="${__("Remove", null, "Resto")}" aria-label="${__("Remove", null, "Resto")}">${ICON.trash}</button></div></div>`
+		);
+		this.$order.find(".rf-lines").html([...lines, ...free].join("") || `<p class="rf-empty">${__("Tap menu items to add them.")}</p>`);
+		this.$order.find("[data-sfree]").on("click", (e) => this.remove_staff_item($(e.currentTarget).attr("data-sfree")));
 		this.$order.find("[data-q]").on("click", (e) => {
 			const $l = $(e.currentTarget).closest(".rf-ln");
 			const line = o.items.find((d) => d.name === $l.attr("data-line"));
@@ -2477,6 +2588,15 @@ class RestoFloor {
 		const disc = flt(o.discount_amount);
 		const total = o.bill_grand_total ? flt(o.bill_grand_total) : flt(o.net_total) - disc;
 		const added = !o.bill_grand_total && (flt(o.service_charge_percent) || this.floor.tax_added || (o.order_type === "Delivery" && flt(o.delivery_fee)));
+		if (o.staff_meal) {
+			const n = o.items.filter((d) => d.kitchen_status !== "Void").reduce((s, d) => s + flt(d.qty), 0);
+			this.$order.find(".rf-ccount").text(__("{0} items", [fmt_qty(n)]));
+			this.$order.find(".rf-totals").html(`<small class="rf-muted">${__("Taken from the kitchen's stock at cost when sent: no bill")}</small>`);
+			this.$order.find(".rf-onote").remove();
+			if (o.notes) this.$order.find(".rf-lines").prepend(`<div class="rf-onote">✎ ${esc(o.notes)}</div>`);
+			this.update_badges();
+			return;
+		}
 		this.$order.find(".rf-totals").html(`
 			<div class="rf-trow"><span>${__("Items Total")}</span><span class="rf-spacer"></span><span>${money(o.net_total)}</span></div>
 			${disc ? `<div class="rf-trow"><span>${__("Discount")}</span><span class="rf-spacer"></span><span dir="ltr">−${money(disc)}</span></div>` : ""}
@@ -2927,6 +3047,8 @@ class RestoFloor {
 			return this.reload_quietly(o.name);
 		}
 		if (act === "pay") return this.pay();
+		if (act === "staff_post") return this.post_staff_meal();
+		if (act === "staff_item") return this.staff_item();
 		if (act === "more") return this.more_menu(e);
 		if (act === "note") return this.edit_info(false, "notes");
 		if (act === "discount") return this.discount();
@@ -2936,6 +3058,14 @@ class RestoFloor {
 
 	more_menu() {
 		const o = this.order;
+		if (o.staff_meal) {
+			// A staff meal: no bill, customer, table or course firing.
+			const staff = [[__("Note"), () => this.action("note")]];
+			const many = o.sides_enabled ? o.items.filter((d) => d.kitchen_status === "Not Sent" && d.has_sides) : [];
+			if (many.length > 1 || (many.length === 1 && flt(many[0].qty) > 1)) staff.push([__("Sides for Several Dishes"), () => this.pick_side_lines(many)]);
+			staff.push([__("Open Full Form"), () => frappe.set_route("Form", "Resto Order", o.name)], [__("Cancel Order"), () => this.cancel(), "rf-danger"]);
+			return this.menu_dialog(__("Order Actions"), staff);
+		}
 		const acts = [
 			[__("Fire Course"), () => this.action("fire")],
 			[__("Served"), () => this.action("served")],
@@ -3673,6 +3803,7 @@ class RestoFloor {
 		.rf-st.k-takeaway { background:var(--rf-acc-soft); color:var(--rf-acc-ink); }
 		.rf-st.k-delivery { background:var(--rf-blue-soft); color:var(--rf-blue-ink); }
 		.rf-st.k-rebill { background:var(--rf-red-soft); color:var(--rf-red-ink); }
+		.rf-st.k-staff { background:var(--rf-purple-soft); color:var(--rf-purple-ink); }
 		.rf-ok { color:var(--rf-green-ink); font-weight:700; } .rf-warn { color:var(--rf-amber-ink); font-weight:700; font-size:13px; }
 		.rf-olist { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:12px; }
 		.rf-olist .rf-orow { background:var(--rf-card); border:1px solid var(--rf-line); border-radius:12px; }

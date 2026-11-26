@@ -28,6 +28,17 @@ class RestoSettings(Document):
 			if is_group:
 				frappe.throw(_("Account {0} is a group account").format(frappe.bold(self.waste_account)))
 
+		if self.get("staff_meal_account"):
+			company, is_group, root_type = frappe.db.get_value(
+				"Account", self.staff_meal_account, ["company", "is_group", "root_type"]
+			) or (None, None, None)
+			if company != self.company or is_group or root_type != "Expense":
+				frappe.throw(
+					_("The Staff Meals Account {0} must be an expense account of company {1}, not a group").format(
+						frappe.bold(self.staff_meal_account), frappe.bold(self.company)
+					)
+				)
+
 		for field in ("cash_over_short_account",):
 			account = self.get(field)
 			if not account:

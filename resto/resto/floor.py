@@ -117,6 +117,8 @@ def get_floor():
 			"bill_grand_total",
 			"rebill",
 			"order_no",
+			"staff_meal",
+			"staff_for",
 		],
 		order_by="opened_at asc",
 	)
@@ -811,6 +813,8 @@ def send_to_kitchen(order, printed=None, view=0, op=None, printed_at=None, lines
 		# What was printed on paper is recorded even if the shift closed meanwhile: it was cooked.
 		shift.require_ordering()
 	doc, done = _get_order_once(order, op) if op else (_get_order(order), False)
+	if cint(doc.staff_meal):
+		frappe.throw(_("A staff meal goes to the kitchen with Send and Post"))
 	if done:
 		if printed is not None:
 			# The send had reached the kitchen before the device printed it too: two papers.
@@ -872,6 +876,8 @@ def fire_course(order, course):
 	require_role(WAITER, CASHIER)
 	shift.require_ordering()
 	doc = _get_order(order)
+	if cint(doc.staff_meal):
+		frappe.throw(_("A staff meal goes to the kitchen with Send and Post"))
 	tickets = kitchen.send_lines(doc, course=course)
 	_save(doc)
 	return [t.name for t in tickets]
@@ -1132,6 +1138,8 @@ def merge_orders(target, source):
 	first, second = sorted((target, source))
 	locked = {first: _get_order(first), second: _get_order(second)}
 	tgt, src = locked[target], locked[source]
+	if cint(src.staff_meal) or cint(tgt.staff_meal):
+		frappe.throw(_("A staff meal cannot be merged with another order"))
 	if any(not d.cancelled for d in src.invoices) or any(not d.cancelled for d in tgt.invoices):
 		frappe.throw(_("Orders with a paid part cannot be merged"))
 	if src.company != tgt.company or src.pos_profile != tgt.pos_profile:

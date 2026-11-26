@@ -66,6 +66,7 @@ doc_events = {
 	"Journal Entry": {"before_cancel": "resto.resto.shift.check_cancel"},
 	# A cash purchase from a closed shift's drawer stays as the shift counted it (D-225).
 	"Purchase Invoice": {"before_cancel": "resto.resto.shift.check_cancel"},
+	"Stock Entry": {"before_cancel": "resto.resto.staff_meal.check_cancel"},
 }
 
 # Recipe costs follow purchase prices: refresh them every night.

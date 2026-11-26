@@ -58,6 +58,9 @@ def is_last_part(order, to_bill):
 
 def build_invoice(order, lines=None):
 	"""An unsaved, fully calculated POS Sales Invoice for the order (or part of it)."""
+	if cint(order.get("staff_meal")):
+		# Taken from stock at cost, with no sale (D-231).
+		frappe.throw(_("A staff meal has no bill: send and post it instead"))
 	settings = get_settings()
 	if not order.pos_profile:
 		frappe.throw(_("Set the POS Profile in Resto Settings first"))

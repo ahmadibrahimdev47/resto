@@ -2,6 +2,20 @@
 // without ticking them as cooked, or a void answered "not cooked" (resto.resto.floor.post_cooked_waste).
 frappe.ui.form.on("Resto Order", {
 	refresh(frm) {
+		if (frm.doc.staff_meal && frm.doc.status === "Posted" && frappe.user.has_role(["Resto Manager", "System Manager"])) {
+			frm.add_custom_button(__("Cancel Staff Meal"), () => {
+				frappe.prompt(
+					[{ fieldname: "reason", fieldtype: "Data", label: __("Reason"), reqd: 1 }],
+					async (v) => {
+						await frappe.xcall("resto.resto.staff_meal.cancel", { order: frm.doc.name, reason: v.reason });
+						frappe.show_alert({ message: __("Staff meal cancelled; its stock is back"), indicator: "green" });
+						frm.reload_doc();
+					},
+					__("Cancel Staff Meal"),
+					__("Cancel Staff Meal")
+				);
+			});
+		}
 		if (frm.is_new() || !frappe.user.has_role(["Resto Cashier", "Resto Manager", "System Manager"])) return;
 		const open = (frm.doc.items || []).filter((d) => d.ticket && d.kitchen_status === "Void" && !d.void_waste);
 		if (!open.length) return;

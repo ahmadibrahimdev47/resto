@@ -184,7 +184,8 @@ def _make_ticket(order, station, ticket_type, rows, now, printed=False):
 	ticket.update(
 		{
 			"resto_order": order.name,
-			"order_type": order.order_type,
+			# A staff meal is marked as one on the board and the paper (D-231).
+			"order_type": "Staff Meal" if cint(order.get("staff_meal")) else order.order_type,
 			"resto_table": order.resto_table,
 			"station": station,
 			"ticket_type": ticket_type,
@@ -213,6 +214,9 @@ def _make_ticket(order, station, ticket_type, rows, now, printed=False):
 				"course": d.course,
 			},
 		)
+	# A staff meal's free ingredients (D-231): text rows with no order line, on their station's ticket.
+	for row in (order.flags.get("resto_staff_rows") or {}).pop(station, []) if ticket_type == "Order" else []:
+		ticket.append("items", row)
 	if printed:
 		# Already on paper from the floor screen (D-219): no printer prints it again.
 		ticket.printed = 1

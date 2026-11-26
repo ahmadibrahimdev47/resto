@@ -31,6 +31,14 @@
   "address",
   "driver",
   "delivery_status",
+  "staff_section",
+  "staff_meal",
+  "staff_for",
+  "resto_shift",
+  "column_break_staff",
+  "staff_stock_entry",
+  "staff_cost",
+  "staff_items",
   "items_section",
   "items",
   "totals_section",
@@ -126,7 +134,7 @@
   {
    "fieldname": "status",
    "fieldtype": "Select",
-   "options": "Open\nBill Requested\nPaid\nCancelled\nMerged",
+   "options": "Open\nBill Requested\nPaid\nPosted\nCancelled\nMerged",
    "read_only": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
@@ -446,13 +454,72 @@
    "read_only": 1,
    "no_copy": 1,
    "hidden": 1
+  },
+  {
+   "fieldname": "staff_section",
+   "fieldtype": "Section Break",
+   "label": "Staff Meal",
+   "depends_on": "eval:doc.staff_meal",
+   "collapsible": 0
+  },
+  {
+   "fieldname": "staff_meal",
+   "fieldtype": "Check",
+   "label": "Staff Meal",
+   "read_only": 1,
+   "no_copy": 1,
+   "in_standard_filter": 1,
+   "default": "0"
+  },
+  {
+   "fieldname": "staff_for",
+   "fieldtype": "Data",
+   "label": "For Whom",
+   "no_copy": 1
+  },
+  {
+   "fieldname": "resto_shift",
+   "fieldtype": "Link",
+   "label": "Shift",
+   "options": "Resto Shift",
+   "read_only": 1,
+   "no_copy": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_staff",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "staff_stock_entry",
+   "fieldtype": "Link",
+   "label": "Stock Entry",
+   "options": "Stock Entry",
+   "read_only": 1,
+   "no_copy": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "staff_cost",
+   "fieldtype": "Currency",
+   "label": "Cost",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "staff_items",
+   "fieldtype": "Table",
+   "label": "Free Ingredients",
+   "options": "Resto Staff Meal Item",
+   "read_only": 1,
+   "no_copy": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-26 04:00:00.000000",
+ "modified": "2026-11-26 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",

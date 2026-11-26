@@ -87,7 +87,7 @@ def get_dashboard(from_date=None, to_date=None, company=None):
 	kitchen_minutes = (
 		sum(time_diff_in_seconds(t.ready_at, t.sent_at) for t in tickets) / 60 / len(tickets) if tickets else 0
 	)
-	open_now = frappe.db.count("Resto Order", {"status": ("in", ("Open", "Bill Requested")), "company": f.company})
+	open_now = frappe.db.count("Resto Order", {"status": ("in", ("Open", "Bill Requested")), "company": f.company, "staff_meal": 0})
 
 	kpis = {
 		"net_sales": net,

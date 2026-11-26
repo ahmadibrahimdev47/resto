@@ -242,6 +242,10 @@ def compute(shift):
 	collected = sum(r["paid_amount"] for r in inv_rows) + debts_total
 	expenses_total = sum(flt(e.amount) for e in expenses)
 	purchases_total = sum(flt(p.amount) for p in purchases)
+	# Staff meals (D-231): taken from stock at cost, no money in or out of the drawer.
+	from resto.resto import staff_meal
+
+	meals = staff_meal.of_shift(shift.name)
 	return {
 		"rows": rows,
 		"invoices": inv_rows,
@@ -266,6 +270,7 @@ def compute(shift):
 			{"payment_entry": p.name, "customer": p.party_name or p.party, "mode_of_payment": p.mode_of_payment, "amount": flt(p.received_amount)}
 			for p in debts
 		],
+		"staff_meals": [{"order": m.name, "order_no": m.order_no, "staff_for": m.staff_for, "cost": flt(m.staff_cost)} for m in meals],
 		"summary": {
 			"debts_count": len(debts),
 			"debts_total": flt(debts_total, ACCOUNTS_PRECISION),
@@ -283,6 +288,8 @@ def compute(shift):
 			"net_cash": flt(collected - expenses_total - purchases_total, ACCOUNTS_PRECISION),
 			"tax_total": flt(sum(flt(t.amount) for t in taxes), ACCOUNTS_PRECISION),
 			"total_quantity": flt(sum(flt(i.total_qty) for i in invoices)),
+			"staff_meals_count": len(meals),
+			"staff_meals_cost": flt(sum(flt(m.staff_cost) for m in meals), ACCOUNTS_PRECISION),
 		},
 	}
 
@@ -311,6 +318,7 @@ def _report(shift, figures):
 		"expenses": figures["expenses"],
 		"purchases": figures["purchases"],
 		"debts": figures["debts"],
+		"staff_meals": figures["staff_meals"],
 		"rows": figures["rows"],
 	}
 
@@ -532,7 +540,7 @@ def _over_short_entry(shift, rows):
 def shift_print_data(name):
 	"""For the shift print format (a Jinja method): the items sold and the debts collected."""
 	if not frappe.has_permission("Resto Shift", "read", name):
-		return {"items": [], "debts": []}
+		return {"items": [], "debts": [], "staff_meals": {"count": 0, "cost": 0}}
 	items = frappe.db.sql(
 		"""select sii.item_code, sii.item_name, sum(sii.stock_qty) as qty, sum(sii.base_net_amount) as amount
 		from `tabSales Invoice Item` sii join `tabSales Invoice` si on si.name = sii.parent
@@ -547,7 +555,10 @@ def shift_print_data(name):
 		fields=["name", "party_name", "party", "mode_of_payment", "received_amount"],
 		order_by="creation",
 	)
-	return {"items": items, "debts": debts}
+	from resto.resto import staff_meal
+
+	meals = staff_meal.of_shift(name)
+	return {"items": items, "debts": debts, "staff_meals": {"count": len(meals), "cost": flt(sum(flt(m.staff_cost) for m in meals), ACCOUNTS_PRECISION)}}
 
 
 # --------------------------------------------------------------------------- drawer expenses

@@ -9,7 +9,8 @@ from resto.resto import sides
 from resto.resto.utils import CASHIER, MANAGER, WAITER, get_settings, has_role
 
 ACTIVE = ("Open", "Bill Requested")
-CLOSED = ("Paid", "Cancelled", "Merged")
+# Posted: a staff meal taken from stock at cost, with no bill (D-231).
+CLOSED = ("Paid", "Posted", "Cancelled", "Merged")
 NOT_SENT = "Not Sent"
 VOID = "Void"
 # Fields of a line that cannot change once it went to the kitchen (void and re-add instead).
@@ -34,6 +35,11 @@ SERVER_HEADER_FIELDS = (
 	"extra_packaging",
 	"send_rounds",
 	"table_freed",
+	# A staff meal (D-231): made and posted only through resto.resto.staff_meal.
+	"staff_meal",
+	"staff_stock_entry",
+	"staff_cost",
+	"resto_shift",
 )
 # Changes that make a printed bill wrong.
 BILL_FIELDS = ("discount_amount", "service_charge_percent", "delivery_fee", "customer", "net_total")
@@ -53,6 +59,7 @@ class RestoOrder(Document):
 				if field not in ("status", "opened_at"):
 					self.set(field, None)
 			self.set("invoices", [])
+			self.set("staff_items", [])
 			if not has_role():
 				self.service_charge_percent = None
 		if not self.company:
@@ -61,6 +68,9 @@ class RestoOrder(Document):
 			self.pos_profile = settings.pos_profile
 		if not self.service_charge_percent:
 			self.service_charge_percent = default_service_percent(settings, self.order_type)
+		if cint(self.staff_meal):
+			# Never billed: no service charge, delivery fee or packaging (D-231).
+			self.service_charge_percent = 0
 		if self.order_type == "Delivery" and not self.delivery_fee:
 			self.delivery_fee = flt(settings.delivery_fee)
 		if not self.waiter:
@@ -76,8 +86,12 @@ class RestoOrder(Document):
 		if self.before_doc and not self.flags.resto_api:
 			for field in SERVER_HEADER_FIELDS:
 				self.set(field, self.before_doc.get(field))
-			# Invoices are written only by billing.
+			# Invoices are written only by billing, a staff meal's free ingredients only by its API.
 			self.set("invoices", [d.as_dict() for d in self.before_doc.invoices])
+			self.set("staff_items", [d.as_dict() for d in self.before_doc.staff_items])
+		if cint(self.staff_meal) and not has_role(CASHIER) and not self.flags.resto_allow_closed:
+			# A waiter or the kitchen cannot make or change a staff meal (D-231).
+			frappe.throw(_("Only a cashier or a manager makes a staff meal"), frappe.PermissionError)
 		self.set_price_list()
 		self.validate_order_type()
 		self.validate_table()
@@ -335,7 +349,9 @@ class RestoOrder(Document):
 			)
 
 	def set_title(self):
-		if self.order_type == "Dine In":
+		if cint(self.staff_meal):
+			self.title = f"{_('Staff Meal', context='Resto')} {self.staff_for or ''}".strip()
+		elif self.order_type == "Dine In":
 			self.title = _("Table {0}", context="Resto").format(self.resto_table)
 		else:
 			self.title = f"{_(self.order_type, context='Resto')} {self.customer_name or self.phone or ''}".strip()
