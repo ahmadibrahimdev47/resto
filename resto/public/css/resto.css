@@ -30,3 +30,26 @@ html[lang="ar"] body{font-family:'Almarai',Tahoma,'Segoe UI','Noto Sans Arabic',
 		mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 6h16M4 12h16M4 18h16'/%3E%3C/svg%3E") center / contain no-repeat;
 	}
 }
+
+/* A late backup (D-256): a red bar at the foot of every desk page, the floor screen included. */
+.resto-backup-bar {
+	position: fixed;
+	inset-inline: 0;
+	bottom: 0;
+	z-index: 1060;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	padding: 8px 16px;
+	background: #c0392b;
+	color: #fff;
+	font-weight: 700;
+}
+.resto-backup-bar button {
+	border: 0;
+	background: transparent;
+	color: #fff;
+	font-size: 20px;
+	line-height: 1;
+}

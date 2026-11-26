@@ -17,6 +17,7 @@ frappe.ui.form.on("Resto Settings", {
 	},
 
 	refresh(frm) {
+		show_backup_status(frm);
 		frm.add_custom_button(__("Setup Check"), () =>
 			frappe.call({
 				method: "resto.resto.setup_check.run",
@@ -51,6 +52,24 @@ frappe.ui.form.on("Resto Settings", {
 		);
 	},
 });
+
+// The nightly backup and its off-site copy, as the watch sees them now (D-256).
+function show_backup_status(frm) {
+	const $box = frm.fields_dict.backup_status && frm.fields_dict.backup_status.$wrapper;
+	if (!$box) return;
+	frappe.xcall("resto.resto.backup_watch.get_status").then((s) => {
+		const esc = (v) => frappe.utils.escape_html(v == null ? "" : String(v));
+		const state = !s.enabled
+			? `<span class="indicator-pill gray">${__("Not watched")}</span>`
+			: s.ok
+			? `<span class="indicator-pill green">${__("OK", null, "Resto")}</span>`
+			: `<span class="indicator-pill red">${s.problems.map(esc).join(" · ")}</span>`;
+		$box.html(`<table class="table table-bordered table-sm" style="margin:0">
+			<tr><th>${__("Last Backup")}</th><td>${esc(s.last_backup || __("None"))}</td></tr>
+			<tr><th>${__("Last Off-site Copy")}</th><td>${esc(s.last_offsite || __("None"))}</td></tr>
+			<tr><th>${__("Status")}</th><td>${state}</td></tr></table>`);
+	}).catch(() => $box.empty());
+}
 
 function show_setup_check(rows) {
 	const icon = { error: "red", warning: "orange", ok: "green" };

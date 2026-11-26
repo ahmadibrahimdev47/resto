@@ -311,3 +311,30 @@ $(document).on("app_ready", () => {
 		else resto.lock_hold();
 	});
 });
+
+// The red bar of a late backup or off-site copy (D-256), for managers, on the desk and the floor
+// screen. Checked at load and every hour (the floor stays open all day); closed, it comes back on
+// the next check while the backup is still late.
+resto.backup_bar = function (alert) {
+	$(".resto-backup-bar").remove();
+	if (!alert || !(alert.problems || []).length) return;
+	const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
+	const $bar = $(
+		`<div class="resto-backup-bar" role="alert"><span>${alert.problems.map(esc).join(" · ")}</span>
+			<button type="button" aria-label="${__("Close")}">×</button></div>`
+	).appendTo(document.body);
+	$bar.find("button").on("click", () => $bar.remove());
+};
+
+resto.watch_backups = function () {
+	if (resto._backup_watched || !frappe.boot || !frappe.boot.resto) return;
+	resto._backup_watched = true;
+	const roles = (frappe.boot.user && frappe.boot.user.roles) || [];
+	if (!roles.includes("Resto Manager") && !roles.includes("System Manager")) return;
+	resto.backup_bar(frappe.boot.resto.backup_alert);
+	setInterval(() => {
+		frappe.xcall("resto.resto.backup_watch.alert").then(resto.backup_bar).catch(() => {});
+	}, 60 * 60 * 1000);
+};
+$(document).on("app_ready", resto.watch_backups);
+$(() => setTimeout(resto.watch_backups, 2000));

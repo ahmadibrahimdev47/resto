@@ -79,7 +79,11 @@ doc_events = {
 # A password sign-in opens a lock screen PIN locked by wrong tries (D-216).
 on_login = "resto.resto.approval.on_login"
 
-scheduler_events = {"daily": ["resto.api.refresh_recipe_costs"]}
+scheduler_events = {
+	"daily": ["resto.api.refresh_recipe_costs"],
+	# The nightly backup and its off-site copy (D-256): managers are told once a day while late.
+	"hourly": ["resto.resto.backup_watch.check"],
+}
 
 # The shift print format reads the items sold and the debts collected (D-206).
 jinja = {"methods": ["resto.resto.shift.shift_print_data", "resto.resto.sides.sides_html"]}

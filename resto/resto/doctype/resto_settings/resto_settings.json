@@ -75,7 +75,12 @@
   "column_break_printing",
   "bill_copies",
   "receipt_copies",
-  "receipt_print_format"
+  "receipt_print_format",
+  "backup_section",
+  "watch_backups",
+  "backup_max_age_hours",
+  "column_break_backup",
+  "backup_status"
  ],
  "fields": [
   {
@@ -532,12 +537,41 @@
    "label": "Receipt Print Format",
    "default": "Resto Receipt",
    "description": "The receipt Resto prints, with all its copies. Resto Receipt shows each copy label, the side dishes on the copies that show them, the order number and the kitchen ticket numbers. Empty: the print format of the POS Profile."
+  },
+  {
+   "fieldname": "backup_section",
+   "fieldtype": "Section Break",
+   "label": "Backups",
+   "description": "The nightly backup and its off-site copy. The upload script marks each copy that left this machine (resto.resto.backup_watch.mark_offsite_ok, or the time in private/backups/.offsite_ok)."
+  },
+  {
+   "fieldname": "watch_backups",
+   "fieldtype": "Check",
+   "label": "Watch the Daily Backup",
+   "default": "0",
+   "description": "Managers get a notification and a red bar when the newest backup or its off-site copy is older than the limit."
+  },
+  {
+   "fieldname": "backup_max_age_hours",
+   "fieldtype": "Int",
+   "label": "Alert When Older Than (Hours)",
+   "default": "26",
+   "depends_on": "watch_backups"
+  },
+  {
+   "fieldname": "column_break_backup",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "backup_status",
+   "fieldtype": "HTML",
+   "label": "Backup Status"
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-26 12:00:00.000000",
+ "modified": "2026-11-26 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",
