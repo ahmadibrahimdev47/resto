@@ -159,6 +159,10 @@ function sides_paper(text) {
 	return lines.concat(left_out.map((p) => `<span class="w">${esc(p)}</span>`)).join("<br>");
 }
 
+// A slot served as one portion per dish, chosen as one of its options or none (D-268): a side
+// group of max 1 on one dish, not a choice shared with other dishes.
+const one_of = (r, s) => !!r.per_dish && !s.single && !s.shared && cint(s.max) === 1;
+
 // What Net In for the Shift is made of (D-235, D-245): only the parts the shift has.
 function net_caption(s) {
 	let text = __("Collected");
@@ -3569,9 +3573,10 @@ class RestoFloor {
 		d.show();
 	}
 
-	async sides_dialog(lines, together = false) {
-		const o = this.order;
-		const r = await call("get_sides", { order: o.name, lines: JSON.stringify(lines), together: together ? 1 : 0 });
+	// The sides dialog's fields (D-268). A slot of one portion per dish (a side group of max 1) is a
+	// choice of one of its options or «without»; a slot of more portions is a count per option,
+	// whole numbers unless a shared choice gives a part of one.
+	sides_fields(r, on_change) {
 		const fields = [
 			{
 				fieldtype: "HTML",
@@ -3581,6 +3586,21 @@ class RestoFloor {
 		r.slots.forEach((s, si) => {
 			const free = s.free ? " · " + __("{0} free", [s.free]) : "";
 			fields.push({ fieldtype: "Section Break", label: `${esc(s.label)} · ${__("max {0}", [s.max])}${free}${s.shared ? " · " + __("shared", null, "Resto") : ""}` });
+			if (one_of(r, s)) {
+				// The option served now (the most portions if a choice from before has more than one).
+				const now = s.options.reduce((a, opt, oi) => (flt(opt.total) > (a < 0 ? 0 : flt(s.options[a].total)) ? oi : a), -1);
+				const radio = (value, label, on) =>
+					`<label class="rf-radio"><input type="radio" name="rfs_${si}" value="${value}" ${on ? "checked" : ""}><span>${label}</span></label>`;
+				fields.push({
+					fieldname: `r_${si}`,
+					fieldtype: "HTML",
+					options: `<div class="rf-radios">${s.options
+						.map((opt, oi) => radio(oi, esc(opt.item_name) + (opt.price ? ` (+${money(opt.price)} ${__("per extra portion")})` : ""), oi === now))
+						.join("")}${radio("", __("Without", null, "Resto"), now < 0)}</div>`,
+				});
+				return;
+			}
+			const whole = r.per_dish && !s.shared && s.options.every((opt) => Math.abs(flt(opt.total) - Math.round(flt(opt.total))) < 1e-6);
 			s.options.forEach((opt, oi) => {
 				if (s.single && s.options.length === 1) {
 					// A side without a group: served or not.
@@ -3590,29 +3610,72 @@ class RestoFloor {
 					const price = opt.price ? ` (+${money(opt.price)} ${__("per extra portion")})` : "";
 					fields.push({
 						fieldname: `s_${si}_${oi}`,
-						fieldtype: "Float",
+						fieldtype: whole ? "Int" : "Float",
+						precision: whole ? undefined : "3",
 						label: esc(opt.item_name) + price,
-						default: opt.total,
+						default: whole ? Math.round(flt(opt.total)) : flt(opt.total, 3),
 						non_negative: 1,
-						onchange: () => show_extras(),
+						onchange: on_change,
 					});
 				}
 			});
 		});
+		return fields;
+	}
+
+	// The portions now on the dialog: {slot index: [portions per option]}. get(fieldname) reads a
+	// field, picked(si) the chosen option of a one-portion slot ("" for without).
+	sides_values(r, get, picked) {
+		return r.slots.map((s, si) => {
+			if (one_of(r, s)) {
+				const p = picked(si);
+				return s.options.map((opt, oi) => (p !== "" && p !== undefined && p !== null && cint(p) === oi ? 1 : 0));
+			}
+			return s.options.map((opt, oi) => flt(get(`s_${si}_${oi}`)));
+		});
+	}
+
+	// Only the slots that changed: the others keep their choice (a shared one too).
+	sides_choice(r, values) {
+		const choice = {};
+		r.slots.forEach((s, si) => {
+			const items = {};
+			let changed = false;
+			s.options.forEach((opt, oi) => {
+				const n = flt(values[si][oi]);
+				if (Math.abs(n - flt(opt.total)) > 0.0005) changed = true; // a shown 0.333 is the stored 1/3
+				if (n > 0) items[opt.item] = n;
+			});
+			if (changed) choice[s.key] = items;
+		});
+		return choice;
+	}
+
+	async sides_dialog(lines, together = false) {
+		const o = this.order;
+		const r = await call("get_sides", { order: o.name, lines: JSON.stringify(lines), together: together ? 1 : 0 });
+		let d = null;
+		const values = () =>
+			this.sides_values(
+				r,
+				(f) => d.get_value(f),
+				(si) => d.$wrapper.find(`input[name="rfs_${si}"]:checked`).val()
+			);
+		const fields = this.sides_fields(r, () => show_extras());
 		const priced = r.slots.some((s) => s.free && s.options.some((opt) => opt.price));
 		if (priced) fields.push({ fieldtype: "HTML", fieldname: "extras_preview" });
 		// What the extra portions will add, worked out as the server does: the recipe's own sides
 		// are free first, then the dearest options (sides.py split_extras). For several dishes the
 		// set's total is shared out, so this is the amount for all of them together.
-		let d = null;
 		const show_extras = () => {
 			if (!priced || !d) return;
+			const now = values();
 			let total = 0;
 			r.slots.forEach((s, si) => {
 				if (!s.free) return;
 				let left = flt(s.free);
 				s.options
-					.map((opt, oi) => ({ ...opt, n: flt(d.get_value(`s_${si}_${oi}`)) }))
+					.map((opt, oi) => ({ ...opt, n: flt(now[si][oi]) }))
 					.sort((a, b) => (b.default || 0) - (a.default || 0) || flt(b.price) - flt(a.price) || (a.item < b.item ? -1 : a.item > b.item ? 1 : 0))
 					.forEach((opt) => {
 						const take = Math.min(opt.n, Math.max(left, 0));
@@ -3629,19 +3692,8 @@ class RestoFloor {
 			title: esc(r.title || __("Change Sides")),
 			fields,
 			primary_action_label: __("Save"),
-			primary_action: async (v) => {
-				// Only the slots that changed: the others keep their choice (a shared one too).
-				const choice = {};
-				r.slots.forEach((s, si) => {
-					const items = {};
-					let changed = false;
-					s.options.forEach((opt, oi) => {
-						const n = flt(v[`s_${si}_${oi}`]);
-						if (Math.abs(n - flt(opt.total)) > 0.0005) changed = true; // a shown 0.333 is the stored 1/3
-						if (n > 0) items[opt.item] = n;
-					});
-					if (changed) choice[s.key] = items;
-				});
+			primary_action: async () => {
+				const choice = this.sides_choice(r, values());
 				if (!Object.keys(choice).length) return d.hide();
 				await call("set_sides", { order: o.name, lines: JSON.stringify(lines), sides_choice: JSON.stringify(choice), together: together ? 1 : 0 }, true);
 				d.hide();
@@ -3649,6 +3701,7 @@ class RestoFloor {
 			},
 		});
 		d.show();
+		d.$wrapper.find(".rf-radios input").on("change", () => show_extras());
 		show_extras();
 		// One tap selects the number, so typing replaces it.
 		d.$wrapper.find("input").on("focus", function () { this.select && this.select(); });
@@ -4341,6 +4394,10 @@ class RestoFloor {
 		.rf-tag.t-Ready, .rf-tag.t-Served { background:var(--rf-green-soft); color:var(--rf-green-ink); }
 		.rf-tag.t-Void { background:var(--rf-red-soft); color:var(--rf-red-ink); }
 		.rf-kprog { display:flex; flex-wrap:wrap; gap:4px; } .rf-kprog .rf-tag { height:22px; }
+		.rf-radios { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
+		.rf-radio { display:flex; align-items:center; gap:10px; min-height:44px; padding:0 12px; border:1px solid var(--border-color); border-radius:10px; cursor:pointer; margin:0; font-weight:600; }
+		.rf-radio input { width:18px; height:18px; margin:0; }
+		.rf-radio:has(input:checked) { border-color:var(--primary); background:var(--control-bg); }
 		.rf-tag.t-bill { background:var(--rf-amber-soft); color:var(--rf-amber-ink); vertical-align:middle; }
 		@keyframes rf-spin { to { transform:rotate(360deg); } }
 		.rf-busy svg { animation:rf-spin 1s linear infinite; } .rf-btn.rf-busy:disabled { opacity:.85; cursor:progress; }
