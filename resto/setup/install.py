@@ -15,6 +15,7 @@ STANDARD_PERMISSIONS = {
 	# show the UOM. It runs no report (D-242).
 	"Company": {KITCHEN: ["select"]},
 	"Item Group": {KITCHEN: ["read"], MANAGER: ["read"]},
+	# A waste row is typed in a unit the item converts to (D-250): the kitchen links the unit.
 	"UOM": {KITCHEN: ["read"], MANAGER: ["read"]},
 	"Customer": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"]},
 	# The manager keeps the workers' records (D-238): their staff advances are owed by name. The
@@ -23,8 +24,6 @@ STANDARD_PERMISSIONS = {
 	"Employee": {CASHIER: ["select"], MANAGER: ["select", "read", "write", "create"]},
 	"Gender": {MANAGER: ["select"]},
 	"Designation": {MANAGER: ["select"]},
-	# A waste row is typed in a unit the item converts to (D-250): the kitchen links the unit.
-	"UOM": {KITCHEN: ["select"]},
 	# The Employee form reads HR Settings on load and on save (hrms): read only, none of its settings
 	# change (D-248).
 	"HR Settings": {MANAGER: ["read"]},
@@ -46,6 +45,9 @@ STANDARD_PERMISSIONS = {
 	# company's Stock Adjustment Account), without Stock Manager, which opens items, warehouses and
 	# stock settings. Not the kitchen: a count carries the stock's value (D-242).
 	"Stock Reconciliation": {MANAGER: ["read", "write", "create", "submit", "cancel", "amend", "print", "report"]},
+	# The daily prep (Resto Prep) is a Manufacture entry by the prepared item's BOM, and ERPNext
+	# refuses one whose BOM the user cannot read (D-279). Read only: the BOM follows the recipe.
+	"BOM": {MANAGER: ["read"]},
 }
 
 # A customer's debt paid to the cashier during a shift is counted by that shift's drawer (D-203).

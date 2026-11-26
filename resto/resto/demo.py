@@ -331,6 +331,25 @@ class _Site:
 			self.parts(line.item_code, line.qty, raw, prep)
 			for mod_item in line.mod_items:
 				self.parts(mod_item, line.qty, raw, prep)
+		for item_code, qty in self.packaging(spec).items():
+			raw[item_code] = raw.get(item_code, 0) + qty
+
+	def packaging(self, spec):
+		"""The packaging and consumables the order's bill takes (Resto's own rules: each dish's
+		packaging for its order type, and the order type's automatic consumables)."""
+		from resto.resto import packaging
+
+		key = (spec.kind, spec.guests, tuple((x.item_code, x.qty) for x in spec.lines))
+		cache = self.__dict__.setdefault("_packaging", {})
+		if key not in cache:
+			need = {}
+			for line in spec.lines:
+				for item_code, qty in packaging.per_dish(line.item_code, spec.kind).items():
+					need[item_code] = need.get(item_code, 0) + qty * line.qty
+			for item_code, qty in packaging.per_order(frappe._dict(order_type=spec.kind, guests=spec.guests)).items():
+				need[item_code] = need.get(item_code, 0) + qty
+			cache[key] = {k: (math.ceil(v - 1e-9) if self.whole(k) else v) for k, v in need.items() if v > 0}
+		return cache[key]
 
 	# ---- buying
 
@@ -795,6 +814,10 @@ class _Run:
 			floor.apply_discount(st["order"], percentage=spec.discount, approver=site.manager, pin=PIN)
 
 		def pay():
+			for item_code, qty in site.packaging(spec).items():
+				short = qty - site.stock(item_code)
+				if short > 0:
+					self.top_up(item_code, short)
 			payable = flt(floor.get_bill(st["order"])["payable"], 2)
 			if spec.split and payable > 1:
 				first = flt(payable * spec.split[1], 2)
@@ -1185,6 +1208,45 @@ def _other_entries(openings):
 	return out
 
 
+def _kept(openings, keep=None):
+	"""The documents kept with the opening: the assets' purchases and payments and their
+	depreciation entries (ERPNext's asset schedules link them), and any named in keep."""
+	out = set(openings)
+	if frappe.db.table_exists("Journal Entry"):
+		for name in frappe.get_all("Journal Entry", filters={"voucher_type": "Depreciation Entry"}, pluck="name"):
+			out.add(("Journal Entry", name))
+		for name in frappe.db.sql_list(
+			"select distinct parent from `tabJournal Entry Account` where reference_type = 'Asset' and parenttype = 'Journal Entry'"
+		):
+			out.add(("Journal Entry", name))
+	if frappe.db.table_exists("Depreciation Schedule") and frappe.db.has_column("Depreciation Schedule", "journal_entry"):
+		for name in frappe.db.sql_list("select distinct journal_entry from `tabDepreciation Schedule` where ifnull(journal_entry, '') != ''"):
+			out.add(("Journal Entry", name))
+	invoices = set(
+		frappe.db.sql_list(
+			"""select distinct d.parent from `tabPurchase Invoice Item` d left join `tabItem` i on i.name = d.item_code
+			where d.parenttype = 'Purchase Invoice' and (d.is_fixed_asset = 1 or i.is_fixed_asset = 1)"""
+		)
+	)
+	if frappe.db.has_column("Asset", "purchase_invoice"):
+		invoices |= set(frappe.db.sql_list("select distinct purchase_invoice from `tabAsset` where ifnull(purchase_invoice, '') != ''"))
+	for name in invoices:
+		out.add(("Purchase Invoice", name))
+	if invoices:
+		for name in frappe.db.sql_list(
+			"""select distinct parent from `tabPayment Entry Reference`
+			where parenttype = 'Payment Entry' and reference_doctype = 'Purchase Invoice' and reference_name in %s""",
+			(tuple(invoices),),
+		):
+			out.add(("Payment Entry", name))
+	if isinstance(keep, str):
+		keep = json.loads(keep) if keep.strip().startswith("[") else [keep]
+	for entry in keep or []:
+		doctype, name = entry.split(":", 1) if isinstance(entry, str) else entry
+		out.add((doctype.strip(), name.strip()))
+	return out
+
+
 def _first_documents(limit=12):
 	"""The earliest documents on the ledgers, to tell the opening by: (date, type, name, remark)."""
 	rows = frappe.db.sql(
@@ -1263,8 +1325,8 @@ def _redate_opening(day_before, openings):
 
 
 @frappe.whitelist()
-def check(openings=None):
-	"""What the site has for the demo, and what stops it. openings: as for generate."""
+def check(openings=None, keep=None):
+	"""What the site has for the demo, and what stops it. openings, keep: as for generate."""
 	_guard()
 	frappe.only_for("System Manager")
 	from frappe.utils.scheduler import is_scheduler_disabled
@@ -1307,7 +1369,13 @@ def check(openings=None):
 		notes.append("no opening entry found: name them with openings=[\"Doctype:name\", ...]")
 	for row in _first_documents():
 		notes.append("earliest on the books: " + " | ".join(row))
-	other = _other_entries(openings)
+	kept = _kept(openings, keep)
+	extra = {}
+	for doctype, _name in kept - set(openings):
+		extra[doctype] = extra.get(doctype, 0) + 1
+	if extra:
+		notes.append(f"kept with the opening (assets, depreciation, named): {extra}")
+	other = _other_entries(kept)
 	done = frappe.db.get_global(MARK)
 	if other and not done:
 		problems.append(f"documents other than the opening are on the books (reset first): {other}")
@@ -1368,19 +1436,27 @@ def _chunks(names, size=500):
 
 
 @frappe.whitelist()
-def reset(confirm=None, openings=None):
+def reset(confirm=None, openings=None, keep=None, dry_run=0):
 	"""Delete every transaction but the opening entries (orders, shifts, invoices, payments, journal
 	and stock entries), with their ledger rows, and set the stock back to the opening's: the copy
-	starts clean for generate(). confirm: the site's name; openings: as for generate."""
+	starts clean for generate(). The assets' purchases, payments and depreciation entries stay with
+	the opening, and so do the documents named in keep (["Payment Entry:ACC-PAY-...", ...]).
+	dry_run: list what would go, delete nothing. confirm: the site's name; openings: as for generate."""
 	_guard()
 	frappe.only_for("System Manager")
-	if confirm != frappe.local.site:
+	if not cint(dry_run) and confirm != frappe.local.site:
 		frappe.throw(f"Pass confirm={frappe.local.site!r} to delete this site's transactions")
 	if frappe.db.table_exists("Serial and Batch Bundle") and frappe.db.count("Serial and Batch Bundle"):
 		frappe.throw("Serial and batch numbers are used here: the reset does not handle them")
 	openings = _openings(openings)
 	if not openings:
 		frappe.throw('No opening entry found: name them with openings=["Doctype:name", ...]')
+	kept = _kept(openings, keep)
+	if cint(dry_run):
+		return _would_delete(kept)
+	moved = [k for k in kept - set(openings) if frappe.db.exists("Stock Ledger Entry", {"voucher_type": k[0], "voucher_no": k[1]})]
+	if moved:
+		frappe.throw(f"Documents kept besides the opening move stock, which the reset does not handle: {moved[:10]}")
 	# An opening entry dated after other stock moves of its item has values that count them.
 	last_opening = {}
 	for r in frappe.db.sql(
@@ -1408,7 +1484,7 @@ def reset(confirm=None, openings=None):
 	for doctype in TRANSACTIONS:
 		if not frappe.db.table_exists(doctype):
 			continue
-		names = [n for n in frappe.db.sql_list(f"select name from `tab{doctype}`") if (doctype, n) not in openings]
+		names = [n for n in frappe.db.sql_list(f"select name from `tab{doctype}`") if (doctype, n) not in kept]
 		if not names:
 			continue
 		tables = [df.options for df in frappe.get_meta(doctype).get_table_fields()]
@@ -1424,7 +1500,7 @@ def reset(confirm=None, openings=None):
 		if not frappe.db.table_exists(ledger):
 			continue
 		rows = frappe.db.sql(f"select name, voucher_type, voucher_no from `tab{ledger}`")
-		gone = [n for n, vt, vn in rows if (vt, vn) not in openings]
+		gone = [n for n, vt, vn in rows if (vt, vn) not in kept]
 		for part in _chunks(gone):
 			frappe.db.sql(f"delete from `tab{ledger}` where name in %s", (tuple(part),))
 		deleted[ledger] = len(gone)
@@ -1465,8 +1541,33 @@ def reset(confirm=None, openings=None):
 	frappe.db.commit()  # nosemgrep: a whole reset or none
 	frappe.clear_cache()
 	_log(f"deleted: {deleted}")
-	_log(f"kept {len(openings)} opening entries")
+	_log(f"kept {len(openings)} opening entries and {len(kept) - len(openings)} documents with them")
 	return deleted
+
+
+def _would_delete(kept):
+	"""What a reset would delete, by document type: name, date, status and remark of each."""
+	out = {}
+	for doctype in TRANSACTIONS:
+		if not frappe.db.table_exists(doctype):
+			continue
+		meta = frappe.get_meta(doctype)
+		date = next((f for f in ("posting_date", "transaction_date", "opened_at", "opening_time", "creation") if f == "creation" or meta.has_field(f)), "creation")
+		remark = next((f for f in ("remark", "user_remark", "remarks", "purpose", "supplier", "customer") if meta.has_field(f)), None)
+		fields = ["name", "docstatus", f"{date} as on_date"] + ([f"{remark} as remark"] if remark else [])
+		rows = [r for r in frappe.get_all(doctype, fields=fields, order_by=f"{date} asc") if (doctype, r.name) not in kept]
+		if not rows:
+			continue
+		out[doctype] = len(rows)
+		_log(f"{doctype}: {len(rows)}")
+		for r in rows[:60]:
+			text = re.sub(r"\s+", " ", str(r.get("remark") or ""))[:70]
+			_log(f"  {r.on_date} {r.name} {('draft', 'submitted', 'cancelled')[r.docstatus]} {text}")
+		if len(rows) > 60:
+			_log(f"  ... and {len(rows) - 60} more")
+	kept_extra = sorted(k for k in kept if k[0] in TRANSACTIONS)
+	_log(f"kept ({len(kept_extra)}): " + ", ".join(f"{d} {n}" for d, n in kept_extra[:80]))
+	return out
 
 
 # --------------------------------------------------------------------------- generate
@@ -1478,7 +1579,7 @@ def _forget():
 
 
 @frappe.whitelist()
-def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=None, force_scheduler=0, opening=1, openings=None):
+def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=None, force_scheduler=0, opening=1, openings=None, keep=None):
 	"""Play the restaurant's days from start to end (see the module's notes).
 
 	monthly: expenses paid from the main safe each month, e.g.
@@ -1486,7 +1587,8 @@ def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=N
 	change_float: cash kept in the drawer after each cash drop (default: about five dishes' worth).
 	opening: 1 (the copy of a site): only the opening on the books, moved to the day before start;
 	0: the books are kept, and nothing may be dated on or after start (the tests' site).
-	openings: the opening entries when they are not marked as such, ["Journal Entry:ACC-JV-...", ...]."""
+	openings: the opening entries when they are not marked as such, ["Journal Entry:ACC-JV-...", ...].
+	keep: other documents left on the books, as for reset (the assets' are kept anyway)."""
 	_guard()
 	frappe.only_for("System Manager")
 	from frappe.utils.scheduler import is_scheduler_disabled
@@ -1507,7 +1609,7 @@ def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=N
 			frappe.throw(f"This site's demo was started with {saved}: run it with the same, or reset to start over")
 	else:
 		if cint(opening):
-			_first_day_ready(start, openings)
+			_first_day_ready(start, openings, keep)
 		else:
 			for ledger in ("GL Entry", "Stock Ledger Entry"):
 				if frappe.db.sql(f"select 1 from `tab{ledger}` where is_cancelled = 0 and posting_date >= %s limit 1", start):
@@ -1552,10 +1654,11 @@ def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=N
 	return last
 
 
-def _first_day_ready(start, named=None):
-	"""Before the first day: nothing on the books but the opening, which moves to the day before."""
+def _first_day_ready(start, named=None, keep=None):
+	"""Before the first day: nothing on the books but the opening (and the assets' entries), which
+	moves to the day before."""
 	openings = _openings(named)
-	other = _other_entries(openings)
+	other = _other_entries(_kept(openings, keep))
 	if other:
 		frappe.throw(f"Documents other than the opening are on the books, run reset first: {other}")
 	for doctype, value in _frozen_upto():
