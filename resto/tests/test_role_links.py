@@ -87,6 +87,17 @@ class TestRoleLinks(IntegrationTestCase):
 			with self.subTest(role=role):
 				self.assertTrue(frappe.has_permission("Item", "read", user=user))
 
+	def test_purchase_invoices_only_for_who_can_read_them(self):
+		# A DocType link is shown only to a user who can read the doctype, so shown means it opens.
+		item = next(i for i in links() if i.get("link_to") == "Purchase Invoice")
+		self.assertEqual(item["link_type"], "DocType")
+		self.assertTrue(item.get("open_in_new_tab"))
+		for role in ("Resto Cashier", "Resto Waiter", "Resto Host", "Resto Kitchen"):
+			with self.subTest(role=role):
+				self.assertFalse(frappe.has_permission("Purchase Invoice", "read", user=self.users[role]))
+		self.assertTrue(frappe.has_permission("Purchase Invoice", "read", user=self.users["Resto Manager"]))
+		self.assertTrue(frappe.has_permission("Purchase Invoice", "create", user=user_with("Accounts User")))
+
 	def test_each_doctype_link_is_a_doctype(self):
 		for item in links():
 			if item.get("link_type") == "DocType":
