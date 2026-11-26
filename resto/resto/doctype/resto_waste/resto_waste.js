@@ -29,11 +29,9 @@ frappe.ui.form.on("Resto Waste", {
 // A row's quantity is typed in a recipe unit (grams for an item stocked by the kilo, millilitres by
 // the litre, D-250) or another unit the item converts to; the stock quantity next to it follows.
 const waste_units = {};
-const waste_known = {};
 const units_of = (item_code) =>
 	(waste_units[item_code] ||= frappe
 		.xcall("resto.resto.units.item_units", { item_code })
-		.then((r) => (waste_known[item_code] = r))
 		.catch((e) => {
 			delete waste_units[item_code];
 			throw e;
@@ -49,12 +47,11 @@ async function waste_stock_qty(frm, cdt, cdn) {
 
 frappe.ui.form.on("Resto Waste", {
 	setup(frm) {
-		frm.set_query("entered_uom", "items", (doc, cdt, cdn) => {
-			const row = locals[cdt][cdn];
-			const r = row && row.item_code && waste_known[row.item_code];
-			// Only the units the item converts to.
-			return r ? { filters: { name: ["in", r.units.map((u) => u.uom)] } } : {};
-		});
+		// Only the units the row's item truly converts to, from the server (no unit before the item).
+		frm.set_query("entered_uom", "items", (doc, cdt, cdn) => ({
+			query: "resto.resto.units.uom_query",
+			filters: { item_code: (locals[cdt][cdn] || {}).item_code || "" },
+		}));
 	},
 });
 

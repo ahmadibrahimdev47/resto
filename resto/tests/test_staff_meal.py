@@ -349,6 +349,17 @@ class TestTypedInRecipeUnits(IntegrationTestCase):
 		self.assertEqual(got["units"][0]["uom"], "Gram")
 		self.assertEqual(units.item_units("RAW-BUN")["default"], "Nos")
 
+	def test_a_unit_the_item_does_not_convert_to_is_never_taken_as_one(self):
+		# ERPNext answers 1 for an unknown unit; 5 Gram of buns must not become 5 buns.
+		self.assertEqual(units.conversion("RAW-BUN", "Gram"), 0)
+		self.assertRaises(frappe.ValidationError, units.to_stock, "RAW-BUN", 5, "Gram")
+		self.assertEqual([u["uom"] for u in units.units_of("RAW-BUN")["units"]], ["Nos"])
+		# The Unit picker of a waste row offers only what the item converts to.
+		self.assertEqual(units.uom_query("UOM", "", "name", 0, 20, {"item_code": "RAW-BUN"}), [("Nos",)])
+		offered = {r[0] for r in units.uom_query("UOM", "", "name", 0, 20, {"item_code": self.cheese})}
+		self.assertTrue({"Gram", "Kg"} <= offered)
+		self.assertNotIn("Nos", offered)
+
 	def test_a_free_ingredient_in_grams_millilitres_or_whole_units(self):
 		order = staff_meal.create(staff_for="Typed units")
 		staff_meal.set_item(order, self.cheese, 20, uom="Gram")
