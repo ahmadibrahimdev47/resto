@@ -1604,11 +1604,16 @@ class RestoFloor {
 					: [{ fieldtype: "HTML", options: `<p class="text-danger">${__("No payment methods configured for this POS Profile")}</p>` }]),
 			],
 			primary_action_label: __("Open Shift"),
-			primary_action: (v) =>
-				this.shift_busy(d, async () => {
-					const amounts = {};
-					data.modes.forEach((m, i) => (amounts[m] = flt(v["m_" + i])));
-					const args = { amounts: JSON.stringify(amounts) };
+			primary_action: async (v) => {
+				// The questions come before the wait: a screen frozen by shift_busy would sit above
+				// their dialogs and nothing could be tapped. One opening at a time meanwhile.
+				const $b = d.get_primary_btn();
+				if ($b.prop("disabled")) return;
+				$b.prop("disabled", true);
+				const amounts = {};
+				data.modes.forEach((m, i) => (amounts[m] = flt(v["m_" + i])));
+				const args = { amounts: JSON.stringify(amounts) };
+				try {
 					// The count against the drawer's books (D-258): more needs a reason, less is told.
 					const found = await frappe.xcall("resto.resto.opening_check.preview", { amounts: args.amounts });
 					if (found.length) {
@@ -1621,11 +1626,16 @@ class RestoFloor {
 						}
 						args.extra = extra;
 					}
+				} finally {
+					$b.prop("disabled", false);
+				}
+				await this.shift_busy(d, async () => {
 					await frappe.xcall("resto.resto.shift.open_shift", args);
 					d.hide();
 					frappe.show_alert({ message: __("Shift opened"), indicator: "green" });
 					this.refresh();
-				}),
+				});
+			},
 		});
 		d.show();
 	}
