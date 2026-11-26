@@ -232,6 +232,9 @@ const ICON = {
 	send: svg('<path d="M4 12l16-8-6 16-2-6z"/>'),
 	print: svg('<path d="M6 9V3h12v6"/><rect x="4" y="9" width="16" height="8" rx="2"/><path d="M7 14h10v7H7z"/>'),
 	spin: svg('<path d="M21 12a9 9 0 1 1-3-6.7"/>'),
+	tag: svg('<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>'),
+	gift: svg('<rect x="3" y="8" width="18" height="5" rx="1"/><path d="M5 13v8h14v-8M12 8v13"/><path d="M12 8c-2-4-6-4-6-1.5S9 8 12 8c3 0 6 .5 6-1.5S14 4 12 8z"/>'),
+	swap: svg('<path d="M7 4L3 8l4 4"/><path d="M3 8h14"/><path d="M17 20l4-4-4-4"/><path d="M21 16H7"/>'),
 };
 // Minutes as "38 min" or "1 h 05 min".
 const dur = (minutes) => {
@@ -3183,8 +3186,7 @@ class RestoFloor {
 			fields.push(
 				{ fieldname: "notes", fieldtype: "Small Text", label: __("Kitchen Note"), default: line.notes },
 				{ fieldname: "course", fieldtype: "Select", options: COURSES.map((c) => ({ value: c, label: __(c) })), label: __("Course", null, "Resto"), default: line.course || "" },
-				{ fieldname: "hold", fieldtype: "Check", label: __("Hold Until Fired"), default: line.hold },
-				{ fieldname: "sides_btn", fieldtype: "HTML" }
+				{ fieldname: "hold", fieldtype: "Check", label: __("Hold Until Fired"), default: line.hold }
 			);
 		} else {
 			fields.push(
@@ -3199,10 +3201,18 @@ class RestoFloor {
 		}
 		// Its extra portions given free, or charged again (D-253): a cashier, within the limit or with a PIN.
 		const can_free = (this.floor.roles.cashier || this.floor.roles.manager) && !flt(line.billed_qty) && (line.can_free_extras || line.sides_free);
-		if (can_free) fields.unshift({ fieldname: "free_btn", fieldtype: "HTML" });
 		const can_discount =
 			(this.floor.roles.cashier || this.floor.roles.manager) && !flt(line.billed_qty) && !this.order.staff_meal && flt(line.rate) + flt(line.modifiers_amount) > 0;
-		if (can_discount) fields.unshift({ fieldname: "disc_btn", fieldtype: "HTML" });
+		const can_sides = !sent && this.order.sides_enabled && line.has_sides;
+		// The line's actions (D-275): real buttons, together at the top, each with its icon and colour;
+		// filled when it is in force (a discount given, extras given free).
+		const pct = flt(line.line_discount_percentage);
+		const acts = [
+			can_discount && ["disc", "rf-la-disc", pct, ICON.tag, pct >= 100 ? __("Free of charge") : pct ? __("Item Discount {0}%", [flt(pct, 2)]) : __("Item Discount")],
+			can_free && ["free", "rf-la-free", line.sides_free, ICON.gift, line.sides_free ? __("Charge the Extra Again") : __("Free Extra")],
+			can_sides && ["sides", "rf-la-sides", 0, ICON.swap, __("Change Sides")],
+		].filter(Boolean);
+		if (acts.length) fields.unshift({ fieldname: "acts", fieldtype: "HTML" });
 		const d = new frappe.ui.Dialog({
 			title: esc(line.item_name),
 			fields,
@@ -3216,35 +3226,31 @@ class RestoFloor {
 				else await this.line_call("update_line", { line: line.name, notes: v.notes || "", course: v.course || "", hold: v.hold ? 1 : 0 });
 			},
 		});
-		if (!sent && this.order.sides_enabled && line.has_sides) {
-			// Sides can be changed (Restaurant Settings) and this dish has some. What was typed in
-			// this dialog is saved first, so a kitchen note is not lost.
-			d.fields_dict.sides_btn.$wrapper.html(`<button class="btn btn-default btn-sm">${__("Change Sides")}</button>`);
-			d.fields_dict.sides_btn.$wrapper.find("button").on("click", async () => {
-				const v = d.get_values(true) || {};
-				d.hide();
-				await call("update_line", { order: this.order.name, line: line.name, notes: v.notes || "", course: v.course || "", hold: v.hold ? 1 : 0 });
-				this.sides_dialog([line.name]);
-			});
-		}
-		if (can_free) {
-			d.fields_dict.free_btn.$wrapper.html(
-				`<button class="btn btn-default btn-sm">${line.sides_free ? __("Charge the Extra Again") : __("Free Extra")}</button>`
+		if (acts.length) {
+			const run = {
+				disc: () => {
+					d.hide();
+					this.line_discount(line);
+				},
+				free: () => {
+					d.hide();
+					this.free_extras(line, !line.sides_free);
+				},
+				// Sides can be changed (Restaurant Settings) and this dish has some. What was typed in
+				// this dialog is saved first, so a kitchen note is not lost.
+				sides: async () => {
+					const v = d.get_values(true) || {};
+					d.hide();
+					await call("update_line", { order: this.order.name, line: line.name, notes: v.notes || "", course: v.course || "", hold: v.hold ? 1 : 0 });
+					this.sides_dialog([line.name]);
+				},
+			};
+			d.fields_dict.acts.$wrapper.html(
+				`<div class="rf-root rf-mdlg rf-line-acts">${acts
+					.map(([k, cls, on, icon, label]) => `<button type="button" class="rf-btn rf-la ${cls}${on ? " rf-la-on" : ""}" data-la="${k}">${icon}<span>${label}</span></button>`)
+					.join("")}</div>`
 			);
-			d.fields_dict.free_btn.$wrapper.find("button").on("click", () => {
-				d.hide();
-				this.free_extras(line, !line.sides_free);
-			});
-		}
-		if (can_discount) {
-			const pct = flt(line.line_discount_percentage);
-			d.fields_dict.disc_btn.$wrapper.html(
-				`<button class="btn btn-default btn-sm">${pct ? __("Item Discount {0}%", [flt(pct, 2)]) : __("Item Discount")}</button>`
-			);
-			d.fields_dict.disc_btn.$wrapper.find("button").on("click", () => {
-				d.hide();
-				this.line_discount(line);
-			});
+			d.fields_dict.acts.$wrapper.find("[data-la]").on("click", (e) => run[e.currentTarget.dataset.la]());
 		}
 		if (!sent) d.set_secondary_action_label(__("Remove", null, "Resto"));
 		if (!sent) d.set_secondary_action(() => { d.hide(); this.line_call("remove_line", { line: line.name }); });
@@ -4407,6 +4413,15 @@ class RestoFloor {
 		.rf-menu-cols { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; align-items:start; }
 		.rf-menu-foot { margin-top:12px; padding-top:12px; border-top:1px solid var(--rf-line, #e5e7eb); }
 		.rf-menu-out { color:var(--rf-red-ink); }
+		/* The line dialog's actions (D-275): outlined in their colour, filled when in force. */
+		.rf-line-acts { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid var(--rf-line); }
+		.rf-la { width:100%; justify-content:flex-start; min-height:48px; border-width:2px; }
+		.rf-la svg { width:20px; height:20px; flex:none; }
+		.rf-la-disc { border-color:var(--rf-acc); color:var(--rf-acc-ink); }
+		.rf-la-disc.rf-la-on { background:var(--rf-acc); border-color:var(--rf-acc); color:#fff; }
+		.rf-la-free { border-color:var(--rf-green); color:var(--rf-green-ink); }
+		.rf-la-free.rf-la-on { background:var(--rf-green); border-color:var(--rf-green); color:#fff; }
+		.rf-la-sides { border-color:var(--rf-blue); color:var(--rf-blue-ink); }
 		@media (max-width: 575px) { .rf-menu-cols { grid-template-columns:1fr; } }
 		.rf-acting [data-act] { opacity:.6; pointer-events:none; }
 		.rf-unsent { display:inline-flex; align-self:flex-start; height:22px; align-items:center; padding:0 8px; border-radius:999px; font-size:12px; font-weight:700;
