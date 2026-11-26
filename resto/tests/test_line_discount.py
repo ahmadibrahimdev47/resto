@@ -40,7 +40,7 @@ class TestLineDiscount(IntegrationTestCase):
 
 	def order(self, *rows):
 		order = floor.create_order(order_type="Takeaway", customer_name="Line Discount Guest")
-		floor.add_items(order, json.dumps([{"item_code": c, "qty": q} for c, q in rows]))
+		floor.add_items(order, json.dumps([r if isinstance(r, dict) else {"item_code": r[0], "qty": r[1]} for r in rows]))
 		return order
 
 	def line(self, order, item_code):
@@ -77,7 +77,9 @@ class TestLineDiscount(IntegrationTestCase):
 		self.assertEqual((flt(row.line_discount_percentage), flt(row.amount), row.line_discount_by), (0, 400, None))
 
 	def test_a_dish_given_free_issues_its_stock_and_posts_exactly(self):
-		order = self.order(("DISH-BURGER", 1), ("DISH-FRIES", 2))  # 150 + 80
+		# The burger's doneness is required (fixtures); its extra cheese is a priced option, free with it.
+		mods = [{"group": "Doneness", "option": "Medium"}, {"group": "Extras", "option": "Extra Cheese"}]
+		order = self.order({"item_code": "DISH-BURGER", "qty": 1, "modifiers": mods}, ("DISH-FRIES", 2))  # 150 + 15 + 80
 		floor.set_line_discount(order, self.line(order, "DISH-BURGER").name, 100, 0, "birthday")
 		self.assertEqual(flt(frappe.db.get_value("Resto Order", order, "net_total")), 80)
 		floor.send_to_kitchen(order)
@@ -85,6 +87,8 @@ class TestLineDiscount(IntegrationTestCase):
 		burger = next(d for d in si.items if d.item_code == "DISH-BURGER")
 		self.assertEqual((flt(burger.price_list_rate), flt(burger.rate), flt(burger.amount), flt(burger.discount_percentage)), (150, 0, 0, 100))
 		self.assertEqual((burger.resto_discount_reason, burger.resto_discount_by), ("birthday", "Administrator"))
+		cheese = next(d for d in si.items if d.item_code == "EXTRA-CHEESE")
+		self.assertEqual((flt(cheese.price_list_rate), flt(cheese.rate), flt(cheese.discount_percentage)), (15, 0, 100))
 		self.assertAlmostEqual(flt(si.total), 80, 2)
 		# Its recipe is issued all the same, at cost.
 		self.assertIn("RAW-BUN", {p.item_code for p in si.packed_items if p.parent_detail_docname == burger.name})
@@ -100,8 +104,8 @@ class TestLineDiscount(IntegrationTestCase):
 		# In the control report: at price, the discount and the cost.
 		filters = {"company": fx.COMPANY, "from_date": nowdate(), "to_date": nowdate(), "type": "Item Discounts"}
 		rows = [r for r in voids_report(filters)[1] if r.sales_invoice == si.name]
-		self.assertEqual(len(rows), 1)
-		r = rows[0]
+		self.assertEqual(sorted(r.item_code for r in rows), ["DISH-BURGER", "EXTRA-CHEESE"])
+		r = next(r for r in rows if r.item_code == "DISH-BURGER")
 		self.assertEqual((flt(r.value), flt(r.discount), flt(r.discount_percentage), r.reason), (150, 150, 100, "birthday"))
 		self.assertGreater(flt(r.cost), 0)
 
