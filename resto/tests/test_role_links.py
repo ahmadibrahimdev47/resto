@@ -349,8 +349,9 @@ class TestAppIconLanding(IntegrationTestCase):
 		from resto.www import restaurant
 
 		frappe.set_user("Guest")
-		with self.assertRaises(frappe.Redirect):
+		with self.assertRaises(frappe.Redirect) as sent:
 			restaurant.get_context(frappe._dict())
+		self.assertEqual(sent.exception.http_status_code, 302)  # not kept by the browser
 		self.assertTrue(frappe.local.flags.redirect_location.startswith("/login?redirect-to="))
 		frappe.set_user(self.users["Resto Kitchen"])
 		with self.assertRaises(frappe.Redirect):

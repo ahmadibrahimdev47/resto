@@ -30,4 +30,6 @@ def get_context(context):
 	else:
 		location = landing_route()
 	frappe.local.flags.redirect_location = location
-	raise frappe.Redirect
+	# 302, not the default 301: a browser keeps a 301, and the next user of a shared screen
+	# would land where the last one did.
+	raise frappe.Redirect(302)
