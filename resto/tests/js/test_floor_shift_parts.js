@@ -109,7 +109,9 @@ test("the shift summary now: opening and expected, no count and no difference (D
 	const html = t.floor.shift_report({ live: 1, as_of: "2026-11-25 20:00:00", summary: {}, rows: [CASH, CARD], open_orders: 2 }, false);
 	assert.ok(html.includes("Shift open · as of 2026-11-25 20:00:00"));
 	assert.ok(html.includes("2 orders are still open: not in these figures until they are paid."));
-	assert.ok(html.includes("<th>Opening</th><th>Expected</th>"));
+	// Each header over its column: the numbers sit at the end of the column, and so do their headers (D-280).
+	assert.ok(html.includes('<th class="rf-amt">Opening</th><th class="rf-amt">Expected</th>'));
+	assert.ok(html.includes('<table class="table table-condensed rf-recon">'));
 	assert.ok(!html.includes("Counted"));
 	assert.ok(!html.includes("Difference"));
 	assert.ok(!html.includes("<input"));

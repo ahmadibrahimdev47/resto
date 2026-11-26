@@ -1786,7 +1786,7 @@ class RestoFloor {
 			parts.push(
 				inv
 					? `<details><summary><b>${__("Invoice Details")}</b> (${(r.invoices || []).length})</summary>
-						<table class="table table-condensed"><tr><th>${__("Posting Date")}</th><th>${__("Invoice")}</th><th>${__("Customer")}</th><th>${__("Type")}</th><th>${__("Amount")}</th><th></th></tr>${inv}</table></details>`
+						<table class="table table-condensed"><tr><th>${__("Posting Date")}</th><th>${__("Invoice")}</th><th>${__("Customer")}</th><th>${__("Type")}</th><th class="rf-amt">${__("Amount")}</th><th></th></tr>${inv}</table></details>`
 					: `<p class="text-muted">${__("No Sales During This Shift")}</p>`
 			);
 			if ((r.expenses || []).length) {
@@ -1860,8 +1860,8 @@ class RestoFloor {
 				<th class="rf-amt" data-td>${entry ? "" : diff(sum("difference"))}</th>`}</tr>`;
 		parts.push(`<h5>${__("Payment Reconciliation")}</h5>
 			${entry ? `<p class="text-muted">${__("Count the money in the drawer and enter what you counted.")}</p>` : ""}
-			<table class="table table-condensed"><tr><th></th>
-				${blind ? "" : `<th>${__("Opening")}</th><th>${__("Expected")}</th>`}${live ? "" : `<th>${__("Counted")}</th>`}${blind || live ? "" : `<th>${__("Difference")}</th>`}</tr>
+			<table class="table table-condensed rf-recon"><tr><th></th>
+				${blind ? "" : `<th class="rf-amt">${__("Opening")}</th><th class="rf-amt">${__("Expected")}</th>`}${live ? "" : `<th class="rf-amt">${__("Counted")}</th>`}${blind || live ? "" : `<th class="rf-amt">${__("Difference")}</th>`}</tr>
 			${rows}${total}</table>`);
 		return parts.join("");
 	}
@@ -4281,6 +4281,13 @@ class RestoFloor {
 		.rf-metrics { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:10px; }
 		.rf-metric { border:1px solid var(--border-color); border-radius:8px; padding:6px 10px; }
 		.rf-xparts summary { cursor:pointer; }
+		/* The payment methods' table (D-280): each header over its column, the numbers at the column's end
+		   like their header; fixed widths, so a method's opened breakdown does not shift the columns. */
+		.rf-recon { table-layout:fixed; width:100%; }
+		.rf-recon th:first-child, .rf-recon td:first-child { width:40%; }
+		.rf-recon th, .rf-recon td { vertical-align:top; }
+		.rf-recon .rf-xline { min-width:0; }
+		.rf-recon input.rf-amt { width:100%; }
 		.rf-xline { display:flex; justify-content:space-between; gap:12px; font-size:12px; color:var(--text-muted); min-width:220px; }
 		.rf-xline.rf-xtotal { border-top:1px solid var(--border-color); color:var(--text-color); font-weight:600; margin-top:2px; }
 		.rf-print-alert { flex-basis:100%; border-radius:8px; padding:6px 10px; margin-bottom:6px; font-weight:600; background:var(--red-100, #fed7d7); color:var(--red-800, #9b2c2c); border:2px solid var(--red-500, #f56565); }
