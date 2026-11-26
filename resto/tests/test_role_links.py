@@ -98,6 +98,21 @@ class TestRoleLinks(IntegrationTestCase):
 		self.assertTrue(frappe.has_permission("Purchase Invoice", "read", user=self.users["Resto Manager"]))
 		self.assertTrue(frappe.has_permission("Purchase Invoice", "create", user=user_with("Accounts User")))
 
+	def test_supplier_dues_only_for_who_can_open_the_report(self):
+		# A Report link is shown by the report's roles (ERPNext's own), so a floor role never sees it.
+		names = [i.get("link_to") for i in links()]
+		self.assertEqual(names[names.index("Purchase Invoice") + 1], "Accounts Payable Summary")
+		item = next(i for i in links() if i.get("link_to") == "Accounts Payable Summary")
+		self.assertEqual(item["link_type"], "Report")
+		self.assertTrue(item.get("open_in_new_tab"))
+		report = frappe.get_doc("Report", "Accounts Payable Summary")
+		shown = {r.role for r in report.roles}
+		self.assertFalse(shown & {"Resto Cashier", "Resto Waiter", "Resto Host", "Resto Kitchen"})
+		self.assertIn("Accounts User", shown)
+		accountant = user_with("Accounts User")
+		self.assertTrue(frappe.has_permission(report.ref_doctype, "read", user=accountant))
+		self.assertTrue(frappe.has_permission(report.ref_doctype, "report", user=accountant))
+
 	def test_each_doctype_link_is_a_doctype(self):
 		for item in links():
 			if item.get("link_type") == "DocType":
