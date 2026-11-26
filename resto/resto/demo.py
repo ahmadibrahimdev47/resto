@@ -27,6 +27,7 @@ import json
 import math
 import random
 import re
+import traceback
 from contextlib import contextmanager
 from urllib.parse import unquote
 
@@ -213,14 +214,17 @@ class _Site:
 		)
 
 		profile_users = frappe.get_all("POS Profile User", {"parent": self.profile, "parenttype": "POS Profile"}, pluck="user")
-		self.cashiers = [u for u in _users("Resto Cashier") if not profile_users or u in profile_users]
+		managers = _users("Resto Manager")
+		cashiers = [u for u in _users("Resto Cashier") if not profile_users or u in profile_users]
+		# A manager who may also take the cash approves; the drawer is the other cashiers' where there are any.
+		self.cashiers = [u for u in cashiers if u not in managers] or cashiers
 		if not self.cashiers:
 			if profile_users and "Administrator" not in profile_users:
 				frappe.throw(f"No user with the Resto Cashier role is a user of POS Profile {self.profile}")
 			self.cashiers = ["Administrator"]
 		self.waiters = _users("Resto Waiter") or self.cashiers
 		self.cooks = _users("Resto Kitchen") or ["Administrator"]
-		self.manager = next((u for u in _users("Resto Manager") if u not in self.cashiers), "Administrator")
+		self.manager = next((u for u in managers if u not in self.cashiers), "Administrator")
 
 		self.modes = [m.mode_of_payment for m in shifts._modes(self.profile)]
 		if not self.modes:
@@ -587,7 +591,9 @@ class _Run:
 				state["failed"] = True
 			self.count("failed")
 			text = re.sub(r"<[^>]+>", "", str(e))[:300]
-			_log(f"  ! {when:%H:%M} {label}: {type(e).__name__}: {text}")
+			_log(f"  ! {when:%H:%M} {label} ({frappe.session.user}): {type(e).__name__}: {text}")
+			if not isinstance(e, frappe.ValidationError) or isinstance(e, frappe.PermissionError):
+				_log("    " + "    ".join(traceback.format_exception(e)[-7:]))
 			if critical:
 				raise
 			return None
@@ -894,8 +900,8 @@ class _Run:
 		for d in days:
 			for spec in self.planner.plan(d).orders:
 				site.order_parts(spec, raw, prep)
-		for item_code, qty in prep.items():
-			site.prep_raw(item_code, qty + site.prepared[item_code].par, raw)
+		for item_code, p in site.prepared.items():
+			site.prep_raw(item_code, prep.get(item_code, 0) + p.par, raw)
 		use = self.daily_use()
 		needs = {}
 		for item_code in set(raw) | set(use):
@@ -1144,9 +1150,22 @@ OPENING = (
 LEDGERS = ("GL Entry", "Stock Ledger Entry", "Payment Ledger Entry")
 
 
-def _openings():
-	"""{(doctype, name): posting_date} of the submitted opening entries."""
+def _openings(named=None):
+	"""{(doctype, name): posting_date} of the submitted opening entries: those marked as opening
+	(Opening Stock, Is Opening, Opening Entry), or the ones named, e.g.
+	["Journal Entry:ACC-JV-2026-00001", "Stock Reconciliation:MAT-RECO-2026-00001"]."""
 	out = {}
+	if isinstance(named, str):
+		named = json.loads(named) if named.strip().startswith("[") else [named]
+	if named:
+		for entry in named:
+			doctype, name = entry.split(":", 1) if isinstance(entry, str) else entry
+			doctype, name = doctype.strip(), name.strip()
+			row = frappe.db.get_value(doctype, name, ["posting_date", "docstatus"], as_dict=True)
+			if not row or row.docstatus != 1:
+				frappe.throw(f"{doctype} {name} is not a submitted document")
+			out[(doctype, name)] = getdate(row.posting_date)
+		return out
 	for doctype, filters in OPENING:
 		for r in frappe.get_all(doctype, filters={**filters, "docstatus": 1}, fields=["name", "posting_date"]):
 			out[(doctype, r.name)] = getdate(r.posting_date)
@@ -1154,12 +1173,34 @@ def _openings():
 
 
 def _other_entries(openings):
-	"""Ledger rows that are not the opening's, by voucher type."""
-	out = {}
+	"""The documents on the ledgers that are not the opening's: {voucher type: how many}."""
+	seen = set()
 	for ledger in ("GL Entry", "Stock Ledger Entry"):
-		for vt, vn, n in frappe.db.sql(f"select voucher_type, voucher_no, count(*) from `tab{ledger}` group by voucher_type, voucher_no"):
+		for vt, vn in frappe.db.sql(f"select distinct voucher_type, voucher_no from `tab{ledger}`"):
 			if (vt, vn) not in openings:
-				out[vt] = out.get(vt, 0) + n
+				seen.add((vt, vn))
+	out = {}
+	for vt, _vn in seen:
+		out[vt] = out.get(vt, 0) + 1
+	return out
+
+
+def _first_documents(limit=12):
+	"""The earliest documents on the ledgers, to tell the opening by: (date, type, name, remark)."""
+	rows = frappe.db.sql(
+		"""select min(posting_date) as d, voucher_type, voucher_no from `tabGL Entry` where is_cancelled = 0
+		group by voucher_type, voucher_no order by d, voucher_no limit %s""",
+		limit,
+	)
+	out = []
+	for d, vt, vn in rows:
+		remark = None
+		for field in ("remark", "user_remark", "remarks", "purpose"):
+			if frappe.db.has_column(vt, field):
+				remark = frappe.db.get_value(vt, vn, field)
+				if remark:
+					break
+		out.append((str(d), vt, vn, re.sub(r"\s+", " ", str(remark or ""))[:80]))
 	return out
 
 
@@ -1178,14 +1219,13 @@ def _frozen_upto():
 			value = frappe.db.get_single_value(doctype, field)
 		except Exception:
 			value = None
-		if value:
+		if value and getdate(value) > getdate("1900-01-01"):  # an empty date reads 0001-01-01
 			yield doctype, getdate(value)
 
 
-def _redate_opening(day_before):
+def _redate_opening(day_before, openings):
 	"""Move the opening entries back to day_before, every one by the same days (their order kept):
 	the documents and their ledger rows, so the stock and the accounts stay exactly as they were."""
-	openings = _openings()
 	if not openings:
 		return 0
 	delta = date_diff(max(openings.values()), day_before)
@@ -1223,8 +1263,8 @@ def _redate_opening(day_before):
 
 
 @frappe.whitelist()
-def check():
-	"""What the site has for the demo, and what stops it."""
+def check(openings=None):
+	"""What the site has for the demo, and what stops it. openings: as for generate."""
 	_guard()
 	frappe.only_for("System Manager")
 	from frappe.utils.scheduler import is_scheduler_disabled
@@ -1260,13 +1300,17 @@ def check():
 			notes.append(f"{len(no_cost)} recipe items have no cost known and are not bought: {sorted(no_cost)[:10]}")
 		if not site.cash_modes:
 			problems.append("the POS Profile has no cash payment method")
-	openings = _openings()
-	if openings:
-		notes.append(f"opening entries {len(openings)}, the last on {max(openings.values())}")
+	openings = _openings(openings)
+	for (doctype, name), day in sorted(openings.items(), key=lambda x: x[1]):
+		notes.append(f"opening: {day} {doctype} {name}")
+	if not openings:
+		notes.append("no opening entry found: name them with openings=[\"Doctype:name\", ...]")
+	for row in _first_documents():
+		notes.append("earliest on the books: " + " | ".join(row))
 	other = _other_entries(openings)
 	done = frappe.db.get_global(MARK)
 	if other and not done:
-		problems.append(f"entries other than the opening exist (reset first): {other}")
+		problems.append(f"documents other than the opening are on the books (reset first): {other}")
 	if done:
 		notes.append(f"demo done up to {done} with {frappe.db.get_global(ARGS)}")
 	for doctype, value in _frozen_upto():
@@ -1324,17 +1368,19 @@ def _chunks(names, size=500):
 
 
 @frappe.whitelist()
-def reset(confirm=None):
+def reset(confirm=None, openings=None):
 	"""Delete every transaction but the opening entries (orders, shifts, invoices, payments, journal
 	and stock entries), with their ledger rows, and set the stock back to the opening's: the copy
-	starts clean for generate(). confirm: the site's name."""
+	starts clean for generate(). confirm: the site's name; openings: as for generate."""
 	_guard()
 	frappe.only_for("System Manager")
 	if confirm != frappe.local.site:
 		frappe.throw(f"Pass confirm={frappe.local.site!r} to delete this site's transactions")
 	if frappe.db.table_exists("Serial and Batch Bundle") and frappe.db.count("Serial and Batch Bundle"):
 		frappe.throw("Serial and batch numbers are used here: the reset does not handle them")
-	openings = _openings()
+	openings = _openings(openings)
+	if not openings:
+		frappe.throw('No opening entry found: name them with openings=["Doctype:name", ...]')
 	# An opening entry dated after other stock moves of its item has values that count them.
 	last_opening = {}
 	for r in frappe.db.sql(
@@ -1432,14 +1478,15 @@ def _forget():
 
 
 @frappe.whitelist()
-def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=None, force_scheduler=0, opening=1):
+def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=None, force_scheduler=0, opening=1, openings=None):
 	"""Play the restaurant's days from start to end (see the module's notes).
 
 	monthly: expenses paid from the main safe each month, e.g.
 	[{"account": "Rent - X", "amount": 15000, "day": 1, "remarks": "Rent"}].
 	change_float: cash kept in the drawer after each cash drop (default: about five dishes' worth).
 	opening: 1 (the copy of a site): only the opening on the books, moved to the day before start;
-	0: the books are kept, and nothing may be dated on or after start (the tests' site)."""
+	0: the books are kept, and nothing may be dated on or after start (the tests' site).
+	openings: the opening entries when they are not marked as such, ["Journal Entry:ACC-JV-...", ...]."""
 	_guard()
 	frappe.only_for("System Manager")
 	from frappe.utils.scheduler import is_scheduler_disabled
@@ -1460,7 +1507,7 @@ def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=N
 			frappe.throw(f"This site's demo was started with {saved}: run it with the same, or reset to start over")
 	else:
 		if cint(opening):
-			_first_day_ready(start)
+			_first_day_ready(start, openings)
 		else:
 			for ledger in ("GL Entry", "Stock Ledger Entry"):
 				if frappe.db.sql(f"select 1 from `tab{ledger}` where is_cancelled = 0 and posting_date >= %s limit 1", start):
@@ -1505,17 +1552,17 @@ def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=N
 	return last
 
 
-def _first_day_ready(start):
+def _first_day_ready(start, named=None):
 	"""Before the first day: nothing on the books but the opening, which moves to the day before."""
-	openings = _openings()
+	openings = _openings(named)
 	other = _other_entries(openings)
 	if other:
-		frappe.throw(f"Entries other than the opening exist, run reset first: {other}")
+		frappe.throw(f"Documents other than the opening are on the books, run reset first: {other}")
 	for doctype, value in _frozen_upto():
 		if value >= add_days(start, -1):
 			frappe.throw(f"{doctype} is frozen up to {value}")
 	if frappe.db.exists("Period Closing Voucher", {"docstatus": 1}):
 		frappe.throw("A Period Closing Voucher is submitted")
-	delta = _redate_opening(add_days(start, -1))
+	delta = _redate_opening(add_days(start, -1), openings)
 	if delta:
 		_log(f"opening entries moved back {delta} days, to {add_days(start, -1)} at the latest")

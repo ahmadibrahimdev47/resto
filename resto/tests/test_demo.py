@@ -40,6 +40,24 @@ class TestDemo(IntegrationTestCase):
 		frappe.db.sql("delete from `tabDefaultValue` where parent = '__global' and defkey in (%s, %s)", (demo.MARK, demo.ARGS))
 		frappe.clear_cache()
 		frappe.local.conf.resto_demo_site = 1
+		# The kitchen's raw stock taken out (rolled back after): the first day's restock must buy it.
+		rows = [
+			(code, qty)
+			for code, qty in frappe.db.sql("select item_code, actual_qty from `tabBin` where warehouse = %s and actual_qty > 0", fx.KITCHEN)
+			if frappe.db.get_value("Item", code, "item_group") != "Resto Prepared"
+		]
+		if rows:
+			se = frappe.get_doc(
+				{
+					"doctype": "Stock Entry",
+					"stock_entry_type": "Material Issue",
+					"company": fx.COMPANY,
+					"from_warehouse": fx.KITCHEN,
+					"items": [{"item_code": c, "qty": q, "s_warehouse": fx.KITCHEN, "conversion_factor": 1} for c, q in rows],
+				}
+			)
+			se.insert(ignore_permissions=True)
+			se.submit()
 		self.start = getdate(add_days(nowdate(), 3))
 		self.end = getdate(add_days(self.start, 2))
 		if not demo._fiscal_year(self.end, fx.COMPANY):
@@ -118,6 +136,9 @@ class TestDemo(IntegrationTestCase):
 		# Restocked on the first day, received into the kitchen.
 		bought = frappe.get_all("Purchase Invoice", filters={"posting_date": self.start, "docstatus": 1, "update_stock": 1}, pluck="name")
 		self.assertTrue(bought)
+		self.assertTrue(frappe.db.exists("Purchase Invoice Item", {"parent": ("in", bought), "warehouse": fx.KITCHEN}))
+		# The day's prep was made (the par level of the prepared items).
+		self.assertTrue(frappe.db.exists("Resto Prep", {"posting_date": self.start, "docstatus": 1}))
 
 		# Again with the same arguments: nothing more.
 		count = len(orders)
