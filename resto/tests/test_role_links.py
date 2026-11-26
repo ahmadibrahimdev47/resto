@@ -475,11 +475,13 @@ class TestManagerCountsStock(IntegrationTestCase):
 		self.assertAlmostEqual(fx.bin_qty("RAW-BUN", fx.MAIN) - before, 1, 6)
 		adjustment = frappe.get_cached_value("Company", fx.COMPANY, "stock_adjustment_account")
 		self.assertEqual(doc.expense_account, adjustment)
-		credit = frappe.db.get_value(
+		gl = frappe.get_all(
 			"GL Entry",
-			{"voucher_type": "Stock Reconciliation", "voucher_no": doc.name, "account": adjustment, "is_cancelled": 0},
-			"sum(credit) - sum(debit)",
+			filters={"voucher_type": "Stock Reconciliation", "voucher_no": doc.name, "account": adjustment, "is_cancelled": 0},
+			fields=["debit", "credit"],
 		)
+		self.assertTrue(gl)
+		credit = sum(frappe.utils.flt(g.credit) - frappe.utils.flt(g.debit) for g in gl)
 		# What the count changed in the stock's value, with the other side in Stock Adjustment.
 		self.assertTrue(frappe.utils.flt(doc.difference_amount))
 		self.assertAlmostEqual(frappe.utils.flt(credit), frappe.utils.flt(doc.difference_amount), 2)
