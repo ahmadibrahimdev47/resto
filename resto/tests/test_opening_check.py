@@ -141,6 +141,40 @@ class TestOpeningCheck(IntegrationTestCase):
 		found = opening_check.preview(json.dumps({"Cash": book + 75}))
 		self.assertEqual(found[0]["message"], "The drawer holds more than the books. Where did it come from?")
 
+	def test_the_shift_summary_now_changes_nothing(self):
+		# D-262: the figures so far, read only; counting blind, a cashier gets no expected amount.
+		doc = self.open(self.book())
+		before = frappe.db.get_value("Resto Shift", doc.name, ["status", "modified"], as_dict=True)
+		rows_before = frappe.get_all("Resto Shift Payment", filters={"parent": doc.name}, fields=["name", "closing_amount", "expected_amount"], order_by="name")
+		frappe.set_user(CASHIER)
+		got = shift.shift_summary()
+		self.assertEqual((got["shift"], got["live"], got["blind"]), (doc.name, 1, False))
+		cash = next(r for r in got["rows"] if r["mode_of_payment"] == "Cash")
+		self.assertIn("expected_amount", cash)
+		self.assertIn("summary", got)
+		frappe.set_user("Administrator")
+		after = frappe.db.get_value("Resto Shift", doc.name, ["status", "modified"], as_dict=True)
+		self.assertEqual((after.status, after.modified), ("Open", before.modified))
+		self.assertEqual(
+			frappe.get_all("Resto Shift Payment", filters={"parent": doc.name}, fields=["name", "closing_amount", "expected_amount"], order_by="name"), rows_before
+		)
+
+		frappe.db.set_single_value("Resto Settings", "blind_shift_count", 1)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.set_user(CASHIER)
+		got = shift.shift_summary()
+		self.assertTrue(got["blind"])
+		self.assertNotIn("summary", got)
+		self.assertEqual({k for r in got["rows"] for k in r}, {"mode_of_payment"})
+		# A manager sees all, counting blind or not.
+		frappe.set_user(MANAGER_USER)
+		with patch.object(shift, "_own_shift", return_value=frappe.get_doc("Resto Shift", doc.name)):
+			got = shift.shift_summary()
+		self.assertFalse(got["blind"])
+		self.assertIn("expected_amount", got["rows"][0])
+		frappe.set_user("Administrator")
+		self.assertEqual(frappe.db.get_value("Resto Shift", doc.name, "status"), "Open")
+
 	def test_a_shared_account_is_not_compared(self):
 		with patch.object(opening_check, "_shared", return_value=True):
 			doc = self.open(self.book() + 99)

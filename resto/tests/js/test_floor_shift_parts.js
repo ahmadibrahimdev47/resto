@@ -103,3 +103,21 @@ test("cash into the drawer and drops to the main safe: their own lines, boxes an
 	assert.ok(html.includes("noon"));
 	t.done();
 });
+
+test("the shift summary now: opening and expected, no count and no difference (D-262)", () => {
+	const t = load(() => "ok");
+	const html = t.floor.shift_report({ live: 1, as_of: "2026-11-25 20:00:00", summary: {}, rows: [CASH, CARD], open_orders: 2 }, false);
+	assert.ok(html.includes("Shift open · as of 2026-11-25 20:00:00"));
+	assert.ok(html.includes("2 orders are still open: not in these figures until they are paid."));
+	assert.ok(html.includes("<th>Opening</th><th>Expected</th>"));
+	assert.ok(!html.includes("Counted"));
+	assert.ok(!html.includes("Difference"));
+	assert.ok(!html.includes("<input"));
+	assert.ok(html.includes("925"), "the total expected");
+	// Counting blind (a cashier): no figure at all, a note instead.
+	const blind = t.floor.shift_report({ live: 1, as_of: "2026-11-25 20:00:00", blind: true, rows: [{ mode_of_payment: "Cash" }] }, false);
+	assert.ok(!blind.includes("Expected"));
+	assert.ok(!blind.includes("Payment Reconciliation"));
+	assert.ok(blind.includes("shown to the manager only"));
+	t.done();
+});

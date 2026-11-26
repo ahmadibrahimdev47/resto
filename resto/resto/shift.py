@@ -578,6 +578,31 @@ def closing_data():
 	return report
 
 
+@frappe.whitelist()
+def shift_summary():
+	"""The open shift's figures so far, read only (D-262): what each payment method should hold now,
+	without closing. Counting blind, a cashier sees the payment methods only; a manager sees all."""
+	require_role(CASHIER)
+	shift = _own_shift()
+	report = _report(shift, compute(shift))
+	report.update({"live": 1, "as_of": str(now_datetime())})
+	report["blind"] = bool(_blind() and not has_role(MANAGER))
+	if report["blind"]:
+		report = {
+			"shift": report["shift"],
+			"pos_profile": report["pos_profile"],
+			"period_start": report["period_start"],
+			"live": 1,
+			"as_of": report["as_of"],
+			"blind": True,
+			"rows": [{"mode_of_payment": r["mode_of_payment"]} for r in report["rows"]],
+		}
+	from resto.resto.doctype.resto_order.resto_order import ACTIVE
+
+	report["open_orders"] = frappe.db.count("Resto Order", {"status": ("in", ACTIVE), "pos_profile": shift.pos_profile})
+	return report
+
+
 @frappe.whitelist(methods=["POST"])
 def close_shift(amounts):
 	"""Close the cashier's shift with the amounts counted. A bill being settled on it finishes

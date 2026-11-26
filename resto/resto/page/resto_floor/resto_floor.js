@@ -1551,6 +1551,8 @@ class RestoFloor {
 		if (f.screen_lock) acts.push([r.manager ? __("My Lock PIN") : __("My PIN"), () => this.set_my_pin("lock")]);
 		acts.push([__("Kitchen Display"), () => frappe.set_route("resto-kitchen")]);
 		if (r.cashier || r.manager) {
+			// What the drawer and each method should hold now, without closing (D-262).
+			if (s.shift) acts.push([__("Shift Summary Now"), () => this.shift_summary()]);
 			acts.push(s.shift ? [__("Close Shift"), () => this.close_shift()] : [__("Open Shift"), () => this.open_shift()]);
 		}
 		acts.push([
@@ -1695,6 +1697,10 @@ class RestoFloor {
 		const metric = (label, value, note) =>
 			`<div class="rf-metric"><div class="text-muted">${label}</div><b>${value}</b>${note ? `<div class="text-muted small">${note}</div>` : ""}</div>`;
 		const parts = [];
+		const live = !entry && !!r.live;
+		if (live) {
+			parts.push(`<div class="alert alert-info"><b>${__("Shift open · as of {0}", [esc(frappe.datetime.str_to_user(r.as_of))])}</b></div>`);
+		}
 		// The header: the profile, when the shift started (and ended), and how long it ran.
 		const start = r.period_start;
 		const end = r.period_end || frappe.datetime.now_datetime();
@@ -1705,6 +1711,8 @@ class RestoFloor {
 			${start ? ` · ${__("Duration")}: ${__("{0} h {1} min", [Math.floor(mins / 60), mins % 60])}` : ""}</p>`);
 		if (entry && r.open_orders) {
 			parts.push(`<div class="alert alert-warning">${__("{0} orders are still open: their bills are not in this shift.", [r.open_orders])}</div>`);
+		} else if (live && r.open_orders) {
+			parts.push(`<div class="alert alert-warning">${__("{0} orders are still open: not in these figures until they are paid.", [r.open_orders])}</div>`);
 		}
 		if (r.summary) {
 			parts.push(`<div class="rf-metrics">
@@ -1776,7 +1784,11 @@ class RestoFloor {
 					${r.taxes.map((t) => `<tr><td>${esc(t.account_head)}</td><td>${flt(t.rate)}%</td><td class="rf-amt">${money(t.amount)}</td></tr>`).join("")}</table></details>`);
 			}
 		}
-		const blind = entry && !r.summary;
+		const blind = (entry || live) && !r.summary;
+		if (live && blind) {
+			parts.push(`<p class="text-muted">${__("Counting blind: the amounts each payment method should hold are shown to the manager only.")}</p>`);
+			return parts.join("");
+		}
 		const list = r.rows || [];
 		const rows = list
 			.map((p, i) => {
@@ -1789,8 +1801,8 @@ class RestoFloor {
 					: `<details class="rf-xparts"><summary>${esc(p.mode_of_payment)}</summary>${expected_parts(p)}</details>`;
 				return `<tr><td>${name}</td>
 					${blind ? "" : `<td class="rf-amt">${money(p.opening_amount)}</td><td class="rf-amt">${money(p.expected_amount)}</td>`}
-					<td class="rf-amt">${counted}</td>
-					${blind ? "" : `<td class="rf-amt" data-d="${i}">${entry ? "" : diff(p.difference)}</td>`}</tr>`;
+					${live ? "" : `<td class="rf-amt">${counted}</td>`}
+					${blind || live ? "" : `<td class="rf-amt" data-d="${i}">${entry ? "" : diff(p.difference)}</td>`}</tr>`;
 			})
 			.join("");
 		// The totals of all methods (none while counting blind).
@@ -1799,12 +1811,12 @@ class RestoFloor {
 			? ""
 			: `<tr class="rf-total"><th>${__("Total", null, "Resto")}</th><th class="rf-amt">${money(sum("opening_amount"))}</th>
 				<th class="rf-amt">${money(sum("expected_amount"))}</th>
-				<th class="rf-amt" data-tc>${entry ? "" : money(sum("closing_amount"))}</th>
-				<th class="rf-amt" data-td>${entry ? "" : diff(sum("difference"))}</th></tr>`;
+				${live ? "" : `<th class="rf-amt" data-tc>${entry ? "" : money(sum("closing_amount"))}</th>
+				<th class="rf-amt" data-td>${entry ? "" : diff(sum("difference"))}</th>`}</tr>`;
 		parts.push(`<h5>${__("Payment Reconciliation")}</h5>
 			${entry ? `<p class="text-muted">${__("Count the money in the drawer and enter what you counted.")}</p>` : ""}
 			<table class="table table-condensed"><tr><th></th>
-				${blind ? "" : `<th>${__("Opening")}</th><th>${__("Expected")}</th>`}<th>${__("Counted")}</th>${blind ? "" : `<th>${__("Difference")}</th>`}</tr>
+				${blind ? "" : `<th>${__("Opening")}</th><th>${__("Expected")}</th>`}${live ? "" : `<th>${__("Counted")}</th>`}${blind || live ? "" : `<th>${__("Difference")}</th>`}</tr>
 			${rows}${total}</table>`);
 		return parts.join("");
 	}
@@ -2206,6 +2218,34 @@ class RestoFloor {
 			);
 			d.set_value("amount", debt.total > 0.005 ? debt.total : 0);
 		};
+		d.show();
+	}
+
+	// The open shift so far, read only (D-262): nothing is counted or written. Printed on the
+	// browser's printer with a banner that it is not a close.
+	async shift_summary() {
+		const data = await frappe.xcall("resto.resto.shift.shift_summary");
+		const d = new frappe.ui.Dialog({ title: __("Shift Summary Now"), size: "large", fields: [{ fieldname: "html", fieldtype: "HTML" }] });
+		const html = this.shift_report(data, false);
+		d.fields_dict.html.$wrapper.html(html);
+		if (!data.blind) {
+			d.set_primary_action(__("Print"), () => {
+				const w = window.open("", "_blank");
+				if (!w) return frappe.msgprint(__("Allow pop-ups for this site to print"));
+				const rtl = frappe.utils.is_rtl ? frappe.utils.is_rtl() : document.documentElement.dir === "rtl";
+				w.document.write(`<!doctype html><html dir="${rtl ? "rtl" : "ltr"}"><head><meta charset="utf-8"><title>${esc(data.shift)}</title>
+					<style>body{font-family:Almarai,Tahoma,sans-serif;direction:${rtl ? "rtl" : "ltr"};margin:12mm;font-size:12px}
+					.banner{border:2px solid #000;padding:6px;text-align:center;font-weight:800;font-size:15px;margin-bottom:8px}
+					table{width:100%;border-collapse:collapse;margin:6px 0}td,th{border-bottom:1px solid #ccc;padding:3px 4px;text-align:start}
+					.rf-amt{text-align:end}.rf-metrics{display:flex;flex-wrap:wrap;gap:6px}.rf-metric{border:1px solid #ccc;padding:4px 6px;min-width:30%}
+					details>summary{list-style:none;font-weight:700}.text-muted,.small{color:#555}</style></head>
+					<body><div class="banner">${__("Interim summary: the shift is not closed")}</div><h3>${esc(data.shift)}</h3>${html}</body></html>`);
+				w.document.close();
+				w.document.querySelectorAll("details").forEach((x) => (x.open = true));
+				w.focus();
+				w.print();
+			});
+		}
 		d.show();
 	}
 
