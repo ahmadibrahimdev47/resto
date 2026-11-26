@@ -480,7 +480,9 @@ class TestManagerCountsStock(IntegrationTestCase):
 			{"voucher_type": "Stock Reconciliation", "voucher_no": doc.name, "account": adjustment, "is_cancelled": 0},
 			"sum(credit) - sum(debit)",
 		)
-		self.assertAlmostEqual(frappe.utils.flt(credit), 5, 2)
+		# What the count changed in the stock's value, with the other side in Stock Adjustment.
+		self.assertTrue(frappe.utils.flt(doc.difference_amount))
+		self.assertAlmostEqual(frappe.utils.flt(credit), frappe.utils.flt(doc.difference_amount), 2)
 		frappe.set_user(self.manager)
 		frappe.get_doc("Stock Reconciliation", doc.name).cancel()
 		frappe.set_user("Administrator")
