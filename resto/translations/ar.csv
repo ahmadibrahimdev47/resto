@@ -3005,3 +3005,7 @@
 "You have no open shift, and no shift closed in the last {0} hours","ليست لديك وردية مفتوحة، ولا وردية أُقفلت خلال آخر {0} ساعة",""
 "{0} is the drawer's own account: money cannot come into the drawer from itself","{0} هو حساب الدرج نفسه: لا يُودَع في الدرج مال منه",""
 "Owed by the Worker","المتبقي على العامل",""
+"A Cashier's Own Advance Needs a Manager","سلفة الكاشير لنفسه تحتاج موافقة المدير",""
+"A cashier paying an advance to themself (the worker whose User is theirs) needs a manager's PIN, whatever the amount.","إذا صرف الكاشير سلفة لنفسه (العامل المربوط بمستخدمه) احتاج إلى رمز المدير مهما كان المبلغ.",""
+"{0}, their own advance","{0}، سلفة لنفسه",""
+"Staff advance of {0} to {1}, the cashier's own","سلفة {0} إلى {1}، سلفة الكاشير لنفسه",""

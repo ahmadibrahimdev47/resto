@@ -65,10 +65,10 @@ class TestStaffAdvance(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		frappe.flags.pop("resto_approvals", None)
-		fields = ("require_pos_shift", "blind_shift_count", "staff_advance_account", "staff_advance_cap")
+		fields = ("require_pos_shift", "blind_shift_count", "staff_advance_account", "staff_advance_cap", "self_advance_needs_manager")
 		self._kept = {f: frappe.db.get_single_value("Resto Settings", f) for f in fields}
 		frappe.db.set_single_value(
-			"Resto Settings", {"require_pos_shift": 0, "blind_shift_count": 0, "staff_advance_account": self.account, "staff_advance_cap": 0}
+			"Resto Settings", {"require_pos_shift": 0, "blind_shift_count": 0, "staff_advance_account": self.account, "staff_advance_cap": 0, "self_advance_needs_manager": 1}
 		)
 		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 		if frappe.db.exists("POS Profile User", {"parent": fx.PROFILE, "parenttype": "POS Profile"}) and not frappe.db.exists(
@@ -163,6 +163,32 @@ class TestStaffAdvance(IntegrationTestCase):
 		je = staff_advance.add_advance(self.ali, 150, "Cash", None, "req-cap-2", MANAGER_USER, "4321")
 		row = next(a for a in frappe.get_doc("Resto Shift", self.shift).advances if a.journal_entry == je)
 		self.assertEqual(row.approved_by, MANAGER_USER)
+
+	def test_a_cashiers_own_advance_needs_a_manager(self):
+		frappe.set_user("Administrator")
+		own = worker("Advance Self Cashier")
+		frappe.db.set_value("Employee", own, "user_id", CASHIER)
+		self.addCleanup(frappe.db.set_value, "Employee", own, "user_id", None)
+		frappe.set_user(MANAGER_USER)
+		approval.set_my_pin("4321")
+		frappe.set_user(CASHIER)
+		# On (the default): their own, whatever the amount, needs the PIN; a wrong one is refused.
+		self.assertEqual(staff_advance.advance_data()["own"], [own])
+		self.assertRaises(approval.ApprovalRequired, staff_advance.add_advance, own, 10, "Cash", None, "req-self-1")
+		self.assertRaises(approval.ApprovalRequired, staff_advance.add_advance, own, 10, "Cash", None, "req-self-1", MANAGER_USER, "9999")
+		je = staff_advance.add_advance(own, 10, "Cash", None, "req-self-1", MANAGER_USER, "4321")
+		row = next(a for a in frappe.get_doc("Resto Shift", self.shift).advances if a.journal_entry == je)
+		self.assertEqual(row.approved_by, MANAGER_USER)
+		# Another worker: no PIN under the limit.
+		self.assertTrue(staff_advance.add_advance(self.ali, 11, "Cash", None, "req-self-2"))
+		# Off: only the limit counts.
+		frappe.set_user("Administrator")
+		frappe.db.set_single_value("Resto Settings", "self_advance_needs_manager", 0)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.flags.pop("resto_approvals", None)
+		frappe.set_user(CASHIER)
+		self.assertEqual(staff_advance.advance_data()["own"], [])
+		self.assertTrue(staff_advance.add_advance(own, 12, "Cash", None, "req-self-3"))
 
 	def test_only_a_cashier_or_a_manager_pays_one(self):
 		for user in (WAITER_USER, KITCHEN_USER):

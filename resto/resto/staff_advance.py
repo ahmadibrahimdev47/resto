@@ -54,6 +54,16 @@ def _employee(employee, company):
 	return emp.employee_name or employee
 
 
+def _self_needs_manager():
+	"""Resto Settings: a cashier's advance to themself needs a manager's PIN (D-247)."""
+	return bool(cint(get_settings().get("self_advance_needs_manager")))
+
+
+def own_workers():
+	"""The workers linked to the session user (Employee.user_id): their own advance."""
+	return frappe.get_all("Employee", filters={"user_id": frappe.session.user}, pluck="name")
+
+
 @frappe.whitelist()
 def advance_data():
 	"""What the Staff Advance dialog needs: the shift's cash methods and the approval limit."""
@@ -75,6 +85,8 @@ def advance_data():
 		),
 		# Above this a manager's PIN is asked (None: never, or the user is a manager).
 		"approval_above": cap if cap and not has_role() else None,
+		# The cashier's own worker: a manager's PIN whatever the amount (none for a manager).
+		"own": own_workers() if _self_needs_manager() and not has_role() else [],
 	}
 
 
@@ -109,6 +121,9 @@ def add_advance(employee, amount, mode_of_payment, remarks=None, request_id=None
 	cap = flt(get_settings().get("staff_advance_cap"))
 	if cap and amount > cap + 0.005:
 		approved_by = approval.approve("staff_advance", shift.name, amount, approver, pin, details=name)
+	elif _self_needs_manager() and employee in own_workers():
+		# Paying oneself from the drawer one is counting: a second person sees it (D-247).
+		approved_by = approval.approve("staff_advance", shift.name, amount, approver, pin, details=_("{0}, their own advance").format(name))
 	note = (remarks or "").strip()
 	je = frappe.new_doc("Journal Entry")
 	je.update({"voucher_type": "Cash Entry", "company": shift.company, "posting_date": nowdate()})

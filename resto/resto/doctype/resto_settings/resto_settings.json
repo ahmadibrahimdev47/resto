@@ -35,6 +35,7 @@
   "cash_supplier",
   "staff_advance_account",
   "staff_advance_cap",
+  "self_advance_needs_manager",
   "main_safe_account",
   "drawer_cash_in_accounts",
   "allow_side_changes",
@@ -263,6 +264,13 @@
    "fieldtype": "Currency",
    "label": "Staff Advance Needs a Manager Above",
    "description": "A staff advance from the drawer above this amount needs a manager's PIN. 0: never."
+  },
+  {
+   "fieldname": "self_advance_needs_manager",
+   "fieldtype": "Check",
+   "default": "1",
+   "label": "A Cashier's Own Advance Needs a Manager",
+   "description": "A cashier paying an advance to themself (the worker whose User is theirs) needs a manager's PIN, whatever the amount."
   },
   {
    "fieldname": "main_safe_account",
@@ -504,7 +512,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-27 05:00:00.000000",
+ "modified": "2026-11-27 05:10:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

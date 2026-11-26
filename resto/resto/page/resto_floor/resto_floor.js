@@ -1923,6 +1923,10 @@ class RestoFloor {
 				if (data.approval_above != null && flt(v.amount) > flt(data.approval_above) + 0.005) {
 					ok = await ask_approval(this.floor, __("Staff advance of {0} to {1} (above {2})", [money(v.amount), name_of(v.employee), money(data.approval_above)]));
 					if (!ok) return;
+				} else if ((data.own || []).includes(v.employee)) {
+					// The cashier's own advance: a manager's PIN whatever the amount (D-247).
+					ok = await ask_approval(this.floor, __("Staff advance of {0} to {1}, the cashier's own", [money(v.amount), name_of(v.employee)]));
+					if (!ok) return;
 				}
 				return this.shift_busy(d, async () => {
 					const je = await frappe.xcall("resto.resto.staff_advance.add_advance", { ...v, request_id, ...ok });
