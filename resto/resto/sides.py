@@ -194,7 +194,7 @@ def extra_billing_error(option, portion, billing):
 	cache = getattr(frappe.local, "resto_extra_billing", None)
 	if cache is None:
 		cache = frappe.local.resto_extra_billing = {}
-	key = (option, flt(portion, 9), billing)
+	key = (option, flt(portion, 9), billing, get_settings().get("packaging_item_group"))
 	if key not in cache:
 		cache[key] = _extra_billing_error(option, portion, billing)
 	return cache[key]
