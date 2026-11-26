@@ -77,8 +77,6 @@
   "column_break_printing",
   "bill_copies",
   "receipt_copies",
-  "hide_free_lines_for_customer",
-  "free_lines_note",
   "receipt_print_format",
   "backup_section",
   "watch_backups",
@@ -551,22 +549,6 @@
    "description": "One row per copy, each printed with its label. No rows: one copy."
   },
   {
-   "fieldname": "hide_free_lines_for_customer",
-   "fieldtype": "Check",
-   "label": "Hide Free Items on the Customer Copy",
-   "default": "0",
-   "depends_on": "eval:doc.cashier_print_method!='No Printing'",
-   "description": "On the bill and receipt copies marked Customer Copy, leave out the lines at 0: dishes given free (item discount 100%) and free extra portions. With no copy rows, the one copy is the customer's. The restaurant copy, the kitchen ticket, the invoice and the reports keep them."
-  },
-  {
-   "fieldname": "free_lines_note",
-   "fieldtype": "Check",
-   "label": "Note That It Includes Free Items",
-   "default": "1",
-   "depends_on": "eval:doc.hide_free_lines_for_customer",
-   "description": "Print «Includes items given free» under the items of a customer copy that left some out."
-  },
-  {
    "fieldname": "receipt_print_format",
    "fieldtype": "Link",
    "options": "Print Format",
@@ -607,7 +589,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-27 12:00:00.000000",
+ "modified": "2026-11-27 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

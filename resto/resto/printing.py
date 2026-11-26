@@ -22,23 +22,17 @@ def copy_labels(rows):
 
 
 def copy_specs(rows):
-	"""One {label, show_sides, customer_copy} per bill or receipt copy row; no rows: one copy, no label,
-	no sides, and it is the customer's."""
-	return [
-		{"label": cstr(r.label).strip(), "show_sides": cint(r.get("show_sides")), "customer_copy": cint(r.get("customer_copy"))}
-		for r in rows or []
-	] or [{"label": "", "show_sides": 0, "customer_copy": 1}]
+	"""One {label, show_sides} per bill or receipt copy row; no rows: one copy, no label, no sides."""
+	return [{"label": cstr(r.label).strip(), "show_sides": cint(r.get("show_sides"))} for r in rows or []] or [
+		{"label": "", "show_sides": 0}
+	]
 
 
 def _set_copy(doc, copy):
-	"""Print-only attributes of one copy: resto_copy_label, and for bills and receipts resto_show_sides
-	and resto_hide_free (a customer copy leaves out the lines given free, D-272) with resto_free_note."""
+	"""Print-only attributes of one copy: resto_copy_label, and resto_show_sides for bills and receipts."""
 	if isinstance(copy, dict):
 		doc.resto_copy_label = copy.get("label") or ""
 		doc.resto_show_sides = cint(copy.get("show_sides"))
-		settings = get_settings()
-		doc.resto_hide_free = cint(copy.get("customer_copy")) and cint(settings.get("hide_free_lines_for_customer"))
-		doc.resto_free_note = doc.resto_hide_free and cint(settings.get("free_lines_note"))
 	else:
 		doc.resto_copy_label = copy
 
