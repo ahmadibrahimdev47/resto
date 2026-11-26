@@ -222,7 +222,9 @@ class _Site:
 			if profile_users and "Administrator" not in profile_users:
 				frappe.throw(f"No user with the Resto Cashier role is a user of POS Profile {self.profile}")
 			self.cashiers = ["Administrator"]
-		self.waiters = _users("Resto Waiter") or self.cashiers
+		# Resto lets a cashier take orders only on their own open shift: a waiter who is also a cashier
+		# would need one. Only plain waiters wait tables; with none, the day's cashier takes the orders.
+		self.waiters = [u for u in _users("Resto Waiter") if u not in set(_users("Resto Cashier")) | set(managers)]
 		self.cooks = _users("Resto Kitchen") or ["Administrator"]
 		self.manager = next((u for u in managers if u not in self.cashiers), "Administrator")
 
@@ -494,7 +496,7 @@ class _Planner:
 			kind=kind,
 			guests=guests,
 			lines=lines,
-			waiter=rng.choice(site.waiters),
+			waiter=rng.choice(site.waiters) if site.waiters else None,
 			table=None,
 			customer=None,
 			driver=None,
@@ -682,10 +684,14 @@ class _Run:
 		if plan.staff and site.settings.get("staff_meal_account"):
 			add(plan.staff.at, cashier, lambda: self.staff_meal(plan.staff), "staff meal")
 		for m in self.monthly:
-			if day.day == min(cint(m.get("day") or 1), get_last_day(day).day):
+			# Due on its day; not paid yet (the safe was short), it is tried again each day of the month.
+			if day.day >= min(cint(m.get("day") or 1), get_last_day(day).day):
 				add(_at(day, "12:30"), site.manager, lambda m=m: self.monthly_expense(m), "monthly expense")
 		if day == get_last_day(day):
 			add(_at(day, "16:00"), site.manager, lambda: self.salaries(day), "salaries")
+		elif day.day <= 15 and date_diff(day, self.planner.start) >= day.day:
+			# Last month's salaries, if the safe could not pay them at its end.
+			add(_at(day, "16:00"), site.manager, lambda: self.salaries(add_days(get_first_day(day), -1)), "salaries")
 		add(_at(day, "22:45"), site.manager, lambda: self.waste(plan.waste_seed), "waste")
 		add(_at(day, "23:12"), cashier, self.leftovers, "orders left open")
 		add(_at(day, "23:20"), cashier, lambda: self.close_shift(plan.over_short), "close shift", critical=True)
@@ -765,7 +771,8 @@ class _Run:
 		site = self.site
 		st = {}
 		t = spec.t
-		taker = spec.waiter if spec.kind == "Dine In" else cashier
+		waiter = spec.waiter or cashier
+		taker = waiter if spec.kind == "Dine In" else cashier
 		at = lambda minutes: spec.at + datetime.timedelta(minutes=minutes)  # noqa: E731
 
 		def tickets(statuses):
@@ -837,12 +844,12 @@ class _Run:
 		add(at(t.start), site.cooks[0] if len(site.cooks) == 1 else self.rng.choice(site.cooks), lambda: cook("In Progress", ["New"]), "kitchen start", st)
 		add(at(t.ready), site.cooks[0], lambda: cook("Ready", ["New", "In Progress"]), "kitchen ready", st)
 		if spec.kind == "Dine In":
-			add(at(t.served), spec.waiter, lambda: floor.mark_served(st["order"]), "served", st)
+			add(at(t.served), waiter, lambda: floor.mark_served(st["order"]), "served", st)
 			if spec.line_discount:
 				add(at(t.served + 1), cashier, line_discount, "item discount", st)
 			if spec.discount:
 				add(at(t.served + 2), cashier, discount, "discount", st)
-			add(at(t.bill), spec.waiter, lambda: floor.request_bill(st["order"]), "bill", st)
+			add(at(t.bill), waiter, lambda: floor.request_bill(st["order"]), "bill", st)
 		else:
 			if spec.line_discount:
 				add(at(t.ready + 0.5), cashier, line_discount, "item discount", st)
@@ -1115,7 +1122,7 @@ class _Run:
 			return self.warn_once("No active worker has a monthly salary: no salaries")
 		net = sum(flt(w["net"]) for w in workers)
 		if self.safe_balance() < net:
-			return _log(f"  ! {day}: the main safe holds less than the salaries ({flt(net, 2)}): not paid")
+			return _log(f"  ! the main safe holds less than {getdate(day):%Y-%m}'s salaries ({flt(net, 2)}): tried again tomorrow")
 		doc = frappe.new_doc("Resto Salary Entry")
 		doc.update({"salary_month": month, "posting_date": frappe.utils.nowdate(), "company": site.company, "pay_from_account": site.safe})
 		for w in workers:
@@ -1132,11 +1139,21 @@ class _Run:
 		amount = flt(m.get("amount"), 2)
 		if amount <= 0 or not m.get("account"):
 			return
+		remark = m.get("remarks") or m["account"]
+		today = getdate(frappe.utils.nowdate())
+		paid = frappe.db.sql(
+			"""select 1 from `tabJournal Entry` je join `tabJournal Entry Account` a on a.parent = je.name
+			where je.docstatus = 1 and je.company = %s and je.user_remark = %s and a.account = %s and a.debit > 0
+			and je.posting_date between %s and %s limit 1""",
+			(site.company, remark, m["account"], get_first_day(today), get_last_day(today)),
+		)
+		if paid:
+			return
 		if self.safe_balance() < amount:
-			return _log(f"  ! the main safe holds less than {m['account']} ({amount}): not paid")
+			return _log(f"  ! the main safe holds less than {m['account']} ({amount}): tried again tomorrow")
 		je = frappe.new_doc("Journal Entry")
 		je.update({"voucher_type": "Cash Entry", "company": site.company, "posting_date": frappe.utils.nowdate()})
-		_set_remark(je, m.get("remarks") or m["account"])
+		_set_remark(je, remark)
 		je.append("accounts", {"account": m["account"], "debit_in_account_currency": amount, "cost_center": site.cost_center})
 		je.append("accounts", {"account": site.safe, "credit_in_account_currency": amount, "cost_center": site.cost_center})
 		je.flags.ignore_permissions = True
