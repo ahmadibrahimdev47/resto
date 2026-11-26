@@ -83,7 +83,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-21 13:31:36.000000",
+ "modified": "2026-11-26 20:30:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Modifier Group",
@@ -116,23 +116,27 @@
   },
   {
    "role": "Resto Waiter",
-   "read": 1,
-   "print": 1
+   "select": 1,
+   "read": 0,
+   "export": 0
   },
   {
    "role": "Resto Cashier",
-   "read": 1,
-   "print": 1
+   "select": 1,
+   "read": 0,
+   "export": 0
   },
   {
    "role": "Resto Host",
-   "read": 1,
-   "print": 1
+   "select": 1,
+   "read": 0,
+   "export": 0
   },
   {
    "role": "Resto Kitchen",
-   "read": 1,
-   "print": 1
+   "select": 1,
+   "read": 0,
+   "export": 0
   }
  ],
  "quick_entry": 0,

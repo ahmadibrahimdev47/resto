@@ -161,6 +161,12 @@ class TestFloorShift(IntegrationTestCase):
 		self.assertRaises(frappe.ValidationError, shift.add_expense, "Cash", account, 100000, "Too much")
 		je = shift.add_expense("Cash", account, 20, "Ice")
 		self.assertEqual(frappe.db.get_value("Journal Entry", je, "docstatus"), 1)
+		# The reason shows on the form (D-234): Remark, kept as written.
+		shown = frappe.db.get_value("Journal Entry", je, ["custom_remark", "remark", "user_remark"], as_dict=True)
+		self.assertEqual(shown.custom_remark, 1)
+		self.assertIn("Ice", shown.remark)
+		self.assertIn(name, shown.remark)
+		self.assertEqual(shown.remark, shown.user_remark)
 		cash_account = frappe.db.get_value("Mode of Payment Account", {"parent": "Cash", "company": fx.COMPANY}, "default_account")
 		self.assertAlmostEqual(
 			flt(frappe.db.get_value("Journal Entry Account", {"parent": je, "account": cash_account}, "credit_in_account_currency")), 20, 2
@@ -674,6 +680,9 @@ class TestDrawerControls(IntegrationTestCase):
 		self.assertAlmostEqual(flt(by[self.over_short].debit_in_account_currency), 10, 2)
 		self.assertAlmostEqual(flt(by[cash].credit_in_account_currency), 10, 2)
 		self.assertEqual(len(rows), 2)  # the card counted right: no line for it
+		shown = frappe.db.get_value("Journal Entry", doc.over_short_entry, ["custom_remark", "remark"], as_dict=True)
+		self.assertEqual(shown.custom_remark, 1)
+		self.assertIn(doc.name, shown.remark)
 		frappe.set_user("Administrator")
 		self.assertRaises(frappe.ValidationError, frappe.get_doc("Journal Entry", doc.over_short_entry).cancel)
 		html = frappe.get_print("Resto Shift", doc.name, "Resto Shift Close")

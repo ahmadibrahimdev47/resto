@@ -127,6 +127,57 @@ class TestRoleLinks(IntegrationTestCase):
 				self.assertTrue(frappe.db.exists("DocType", item["link_to"]), item["link_to"])
 
 
+SETUP = ("Resto Settings", "Resto Hall", "Resto Table", "Resto Kitchen Station", "Resto Modifier Group", "Resto Side Group")
+FLOOR_ROLES = ("Resto Cashier", "Resto Waiter", "Resto Host", "Resto Kitchen")
+
+
+class TestSetupOnlyForTheManagers(IntegrationTestCase):
+	"""The floor roles neither change nor see the restaurant's setup (D-233): no Setup section, no
+	settings form. They keep select on halls, tables, stations and groups, for the links of an
+	order, a reservation and the kitchen screen; the floor and kitchen read the setup on the server."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		cls.users = {role: user_with(role) for role in (*FLOOR_ROLES, "Resto Manager")}
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def test_the_floor_roles_cannot_open_or_change_the_setup(self):
+		for role in FLOOR_ROLES:
+			user = self.users[role]
+			for doctype in SETUP:
+				with self.subTest(role=role, doctype=doctype):
+					for right in ("read", "write", "create", "delete", "submit"):
+						self.assertFalse(frappe.has_permission(doctype, right, user=user), right)
+		for doctype in SETUP:
+			with self.subTest(manager=doctype):
+				self.assertTrue(frappe.has_permission(doctype, "write", user=self.users["Resto Manager"]))
+
+	def test_the_floor_roles_can_still_pick_a_table_or_a_station(self):
+		for role in FLOOR_ROLES:
+			for doctype in ("Resto Hall", "Resto Table", "Resto Kitchen Station"):
+				with self.subTest(role=role, doctype=doctype):
+					self.assertTrue(frappe.has_permission(doctype, "select", user=self.users[role]))
+
+	def test_the_sidebar_shows_the_setup_only_to_the_manager(self):
+		from frappe.desk.doctype.sidebar.sidebar import resolve_sidebar
+
+		def shown(user):
+			frappe.set_user(user)
+			frappe.clear_cache(user=user)
+			sidebar = resolve_sidebar("Resto", user)
+			frappe.set_user("Administrator")
+			return {i.get("link_to") for i in (sidebar.items if sidebar else []) if i.get("type") == "Link"}
+
+		for role in FLOOR_ROLES:
+			with self.subTest(role=role):
+				self.assertFalse(shown(self.users[role]) & set(SETUP))
+		self.assertTrue(set(SETUP) <= shown(self.users["Resto Manager"]))
+
+
 class TestShiftVisibility(IntegrationTestCase):
 	"""A cashier reads only their own shifts (the shift's owner is its cashier: it is opened by them);
 	the manager reads every cashier's shift (D-223)."""

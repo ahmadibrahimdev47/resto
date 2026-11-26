@@ -473,7 +473,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-26 19:00:00.000000",
+ "modified": "2026-11-26 20:30:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",
@@ -504,22 +504,6 @@
    "read": 1,
    "role": "Resto Manager",
    "write": 1
-  },
-  {
-   "read": 1,
-   "role": "Resto Waiter"
-  },
-  {
-   "read": 1,
-   "role": "Resto Cashier"
-  },
-  {
-   "read": 1,
-   "role": "Resto Kitchen"
-  },
-  {
-   "read": 1,
-   "role": "Resto Host"
   }
  ],
  "sort_field": "creation",

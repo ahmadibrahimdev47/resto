@@ -494,6 +494,15 @@ def close_shift(amounts):
 	return report
 
 
+def _set_remark(je, text):
+	"""The reason of a Journal Entry, where its form shows it (D-234). v16 hides User Remark and shows
+	Remark, which ERPNext rebuilds from cheque and references unless Custom Remark is ticked; the
+	General Ledger's remarks are taken from it too. User Remark keeps the same text for older reads."""
+	je.user_remark = text
+	je.custom_remark = 1
+	je.remark = text
+
+
 def _cost_center(shift):
 	return frappe.db.get_value("POS Profile", shift.pos_profile, "cost_center") or frappe.get_cached_value(
 		"Company", shift.company, "cost_center"
@@ -517,9 +526,9 @@ def _over_short_entry(shift, rows):
 			"voucher_type": "Cash Entry",
 			"company": shift.company,
 			"posting_date": frappe.utils.nowdate(),
-			"user_remark": _("Cash over/short, shift {0}").format(shift.name),
-		}
+			}
 	)
+	_set_remark(je, _("Cash over/short, shift {0}").format(shift.name))
 	for r in rows:
 		diff = flt(r.get("difference"), ACCOUNTS_PRECISION)
 		if abs(diff) < 0.005 or frappe.get_cached_value("Mode of Payment", r["mode_of_payment"], "type") != "Cash":
@@ -701,9 +710,9 @@ def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_
 			"voucher_type": "Cash Entry",
 			"company": shift.company,
 			"posting_date": frappe.utils.nowdate(),
-			"user_remark": _("Drawer expense, shift {0}: {1}").format(shift.name, remarks.strip()),
-		}
+			}
 	)
+	_set_remark(je, _("Drawer expense, shift {0}: {1}").format(shift.name, remarks.strip()))
 	je.append("accounts", {"account": expense_account, "debit_in_account_currency": amount, "cost_center": cost_center})
 	je.append(
 		"accounts",

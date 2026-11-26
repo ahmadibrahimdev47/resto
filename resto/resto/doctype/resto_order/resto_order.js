@@ -2,6 +2,9 @@
 // without ticking them as cooked, or a void answered "not cooked" (resto.resto.floor.post_cooked_waste).
 frappe.ui.form.on("Resto Order", {
 	refresh(frm) {
+		// The floor roles do not read the setup (D-233): a table is moved on the floor screen, which
+		// also frees the old one; here its hall could not be fetched.
+		frm.set_df_property("resto_table", "read_only", frappe.model.can_read("Resto Table") ? 0 : 1);
 		if (frm.doc.staff_meal && frm.doc.status === "Posted" && frappe.user.has_role(["Resto Manager", "System Manager"])) {
 			frm.add_custom_button(__("Cancel Staff Meal"), () => {
 				frappe.prompt(

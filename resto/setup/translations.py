@@ -20,7 +20,8 @@ import frappe
 LANG = "ar"
 WRITTEN = "resto_translation_overrides"
 # Texts whose Resto wording must hold on every screen (D-180: a document is posted, not sent).
-OVERRIDE = ("Submit", "Submitted")
+# Journal Entry's remark and the Auto Repeat dialog (D-234): a later app words them otherwise.
+OVERRIDE = ("Submit", "Submitted", "Remark", "Custom Remark", "Frequency", "End Date", "Submit on Creation")
 
 
 def resto_rows():
