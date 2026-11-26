@@ -144,6 +144,37 @@ class TestSalaryEntry(IntegrationTestCase):
 		self.assertAlmostEqual(self.owed(self.sami), sami_owed, 2)
 		self.assertIn("01-2031", frappe.db.get_value("Journal Entry", doc.journal_entry, "remark"))
 
+	def test_the_worker_salaries_report(self):
+		from resto.resto.report.resto_worker_salaries.resto_worker_salaries import execute
+
+		self.fresh_month("2031-03-01")
+		give_advance(self.amr, 200, self.advances, self.safe)
+		doc = self.entry(
+			"2031-03-05",
+			[
+				{"employee": self.amr, "salary": 3000, "deduct": 1, "deduct_amount": 200},
+				{"employee": self.sami, "salary": 2000, "deduct": 0, "deduct_amount": 0},
+			],
+		)
+		doc.insert()
+		doc.submit()
+		filters = {"company": fx.COMPANY, "from_month": "2031-03-01", "to_month": "2031-03-31"}
+		_cols, data = execute({**filters, "employee": self.amr})
+		self.assertEqual(len(data), 1)
+		r = data[0]
+		self.assertEqual((r.month, flt(r.salary), flt(r.deducted), flt(r.net)), ("03-2031", 3000, 200, 2800))
+		self.assertEqual((r.salary_entry, r.journal_entry), (doc.name, doc.journal_entry))
+		_cols, data = execute({**filters, "by_worker": 1})
+		self.assertEqual({d.employee: flt(d.net) for d in data}, {self.amr: 2800, self.sami: 2000})
+		# A cancelled entry is not a salary paid.
+		frappe.set_user("Administrator")
+		doc.reload()
+		doc.cancel()
+		self.assertEqual(execute({**filters, "employee": self.amr})[1], [])
+		# The manager and the admin only.
+		roles = {r.role for r in frappe.get_doc("Report", "Resto Worker Salaries").roles}
+		self.assertEqual(roles, {"System Manager", "Resto Manager"})
+
 	def test_never_more_than_owed_nor_the_salary(self):
 		give_advance(self.sami, 400, self.advances, self.safe)
 		owed = self.owed(self.sami)
