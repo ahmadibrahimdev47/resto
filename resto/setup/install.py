@@ -22,6 +22,9 @@ STANDARD_PERMISSIONS = {
 	"Employee": {CASHIER: ["select"], MANAGER: ["select", "read", "write", "create"]},
 	"Gender": {MANAGER: ["select"]},
 	"Designation": {MANAGER: ["select"]},
+	# The Employee form reads HR Settings on load and on save (hrms): read only, none of its settings
+	# change (D-248).
+	"HR Settings": {MANAGER: ["read"]},
 	"Sales Invoice": {CASHIER: ["read", "print"], MANAGER: ["read", "print", "report"]},
 	# The kitchen runs Negative Prepared Stock (its prepared items' stock).
 	# Not the kitchen: a Bin holds the stock value (D-242).

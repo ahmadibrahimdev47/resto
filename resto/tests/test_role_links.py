@@ -225,6 +225,13 @@ class TestWorkersForTheManager(IntegrationTestCase):
 		self.assertFalse(frappe.has_permission("Employee", "delete", user=manager))
 		for doctype in ("Gender", "Designation"):
 			self.assertTrue(frappe.has_permission(doctype, "select", user=manager), doctype)
+		# The Employee form reads HR Settings (D-248): read, never write.
+		if frappe.db.exists("DocType", "HR Settings"):
+			self.assertTrue(frappe.has_permission("HR Settings", "read", user=manager))
+			self.assertFalse(frappe.has_permission("HR Settings", "write", user=manager))
+			frappe.set_user(manager)
+			frappe.get_doc("HR Settings").check_permission("read")
+			frappe.set_user("Administrator")
 		frappe.set_user(manager)
 		doc = frappe.get_doc(
 			{
