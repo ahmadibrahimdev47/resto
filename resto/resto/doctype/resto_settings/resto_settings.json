@@ -256,7 +256,7 @@
    "fieldtype": "Link",
    "label": "Staff Advances Account",
    "options": "Account",
-   "description": "A receivable (asset) account: an advance paid to a worker from the drawer is owed by them, by name, until it is taken off their salary."
+   "description": "A receivable (asset) account: an advance paid to a worker from the drawer is owed by them, by name, until it is taken off their salary or paid back."
   },
   {
    "fieldname": "staff_advance_cap",
@@ -504,7 +504,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-27 03:00:00.000000",
+ "modified": "2026-11-27 05:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

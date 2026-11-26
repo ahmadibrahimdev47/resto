@@ -70,7 +70,7 @@ test("staff advances: a line of their own in the breakdown and a box of their ow
 		true
 	);
 	assert.deepEqual(lines(html, "Cash")[4], ["Staff Advances", "−100"]);
-	assert.ok(html.includes("2 advances · taken off salaries, not an expense"));
+	assert.ok(html.includes("2 advances · owed by the workers, not an expense"));
 	assert.ok(html.includes("Collected − Advances"));
 	assert.ok(html.includes("Ali"));
 	t.done();

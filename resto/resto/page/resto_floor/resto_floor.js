@@ -1634,7 +1634,7 @@ class RestoFloor {
 				${s.debts_count ? metric(__("Debts Collected"), money(s.debts_total), __("{0} payments", [s.debts_count])) : ""}
 				${s.expenses_count ? metric(__("Drawer Running Expenses"), "-" + money(s.expenses_total), __("{0} expenses · transport, cleaning and the like, not into stock", [s.expenses_count])) : ""}
 				${s.purchases_count ? metric(__("Drawer Stock Purchases"), "-" + money(s.purchases_total), __("{0} purchase invoices · into the kitchen's stock", [s.purchases_count])) : ""}
-				${s.advances_count ? metric(__("Staff Advances"), "-" + money(s.advances_total), __("{0} advances · taken off salaries, not an expense", [s.advances_count])) : ""}
+				${s.advances_count ? metric(__("Staff Advances"), "-" + money(s.advances_total), __("{0} advances · owed by the workers, not an expense", [s.advances_count])) : ""}
 				${s.cash_in_count ? metric(__("Cash In to the Drawer"), "+" + money(s.cash_in_total), __("{0} times · advances paid back, change and the like, not sales", [s.cash_in_count])) : ""}
 				${s.drops_count ? metric(__("Cash Drops to the Main Safe"), "-" + money(s.drops_total), __("{0} drops · moved to the safe, not spent", [s.drops_count])) : ""}
 				${s.expenses_count || s.purchases_count || s.advances_count || s.cash_in_count || s.drops_count ? metric(__("Net In for the Shift"), money(s.net_cash), net_caption(s)) : ""}
@@ -1914,7 +1914,7 @@ class RestoFloor {
 			primary_action: async (v) => {
 				const sure = await confirm_post([
 					`<p>${__("{0} will be paid from the drawer «{1}» as an advance to {2}.", [`<b>${money(v.amount)}</b>`, esc(v.mode_of_payment), `<b>${esc(name_of(v.employee))}</b>`])}</p>`,
-					`<p class="text-muted">${__("It is taken off their salary at the month's end; it is not an expense.")}</p>`,
+					`<p class="text-muted">${__("It is recorded as owed by the worker until it is taken off their salary or paid back; it is not an expense.")}</p>`,
 					v.remarks ? `<p>${esc(v.remarks)}</p>` : "",
 				]);
 				if (!sure) return;

@@ -581,7 +581,7 @@ class SetupCheck:
 		if problem:
 			self.error(area, problem)
 		else:
-			self.ok(area, _("Staff advances are owed on {0}, by worker, until taken off their salary").format(name))
+			self.ok(area, _("Staff advances are owed on {0}, by worker, until taken off their salary or paid back").format(name))
 
 	def check_main_safe(self):
 		"""Cash drops and change for the drawer (D-245) go through the Main Safe Account."""

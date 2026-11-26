@@ -27,7 +27,7 @@ def account_problem(account, company):
 		)
 	if acc.root_type != "Asset" or acc.account_type != "Receivable":
 		return _(
-			"The Staff Advances Account {0} must be an asset account of type Receivable: the worker owes the advance until it is taken off their salary"
+			"The Staff Advances Account {0} must be an asset account of type Receivable: the worker owes the advance until it is taken off their salary or paid back"
 		).format(frappe.bold(account))
 	return None
 
