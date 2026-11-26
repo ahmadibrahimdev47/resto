@@ -44,6 +44,22 @@ STANDARD_PERMISSIONS = {
 }
 
 # A customer's debt paid to the cashier during a shift is counted by that shift's drawer (D-203).
+# Each worker's fixed monthly salary, for the month's salary entry (D-249): money, so at permlevel 1
+# (read by the roles that read a worker's record, never by the floor). HRMS's CTC is a yearly
+# cost to the company, not the monthly pay.
+EMPLOYEE_FIELDS = {
+	"Employee": [
+		{
+			"fieldname": "resto_monthly_salary",
+			"fieldtype": "Currency",
+			"label": "Monthly Salary",
+			"insert_after": "ctc",
+			"permlevel": 1,
+			"description": "The fixed pay of a month, taken by the month's salary entry (Monthly Salaries)",
+		}
+	]
+}
+
 PAYMENT_ENTRY_FIELDS = {
 	"Payment Entry": [
 		{
@@ -213,6 +229,7 @@ def setup():
 	create_custom_fields(SALES_INVOICE_FIELDS, update=True)
 	create_custom_fields(CUSTOMER_FIELDS, update=True)
 	create_custom_fields(PAYMENT_ENTRY_FIELDS, update=True)
+	create_custom_fields(EMPLOYEE_FIELDS, update=True)
 	from resto.resto.item_recipe import item_fields
 
 	create_custom_fields(item_fields(), update=True)
@@ -233,7 +250,7 @@ KITCHEN_SELECT_ONLY = ("Resto Order",)
 ITEM_MONEY = ("valuation_rate", "standard_rate", "last_purchase_rate", "prices_html")
 # Resto's doctypes whose money is at permlevel 1 in their JSON: a site that customised their
 # rights (Custom DocPerm) gets the same level 1 rows.
-MONEY_DOCTYPES = ("Item", "Resto Recipe", "Resto Waste")
+MONEY_DOCTYPES = ("Item", "Resto Recipe", "Resto Waste", "Employee")
 
 
 def keep_money_from_the_kitchen():

@@ -65,6 +65,13 @@ class RestoSettings(Document):
 					)
 				)
 
+		if self.get("salary_account"):
+			from resto.resto.doctype.resto_salary_entry.resto_salary_entry import salary_account_problem
+
+			problem = salary_account_problem(self.salary_account, self.company)
+			if problem:
+				frappe.throw(problem)
+
 		for field in ("cash_over_short_account",):
 			account = self.get(field)
 			if not account:

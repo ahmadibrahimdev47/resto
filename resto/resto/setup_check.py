@@ -51,6 +51,7 @@ class SetupCheck:
 			self.check_staff_meal,
 			self.check_staff_advance,
 			self.check_main_safe,
+			self.check_salaries,
 			self.check_recipe_precision,
 			self.check_modifiers,
 			self.check_sides,
@@ -607,6 +608,30 @@ class SetupCheck:
 			self.error(area, _("The Main Safe Account {0} is also the account of the drawer's {1}: the safe needs its own cash account").format(name, ", ".join(same)))
 		else:
 			self.ok(area, _("Cash drops go into {0}, and change for the drawer comes out of it").format(name))
+
+
+	def check_salaries(self):
+		"""The month's salary entry (D-249) posts to the Salaries Account; each worker needs a Monthly Salary."""
+		from resto.resto.doctype.resto_salary_entry.resto_salary_entry import salary_account_problem
+
+		area = _("Monthly Salaries")
+		name = self.s.get("salary_account")
+		if not name:
+			self.warn(area, _("Set the Salaries Account in Resto Settings for the month's salary entry"))
+			return
+		problem = salary_account_problem(name, self.s.company)
+		if problem:
+			self.error(area, problem)
+			return
+		missing = frappe.get_all(
+			"Employee",
+			filters={"company": self.s.company, "status": "Active", "resto_monthly_salary": 0},
+			pluck="employee_name",
+		)
+		if missing:
+			self.warn(area, _("Workers with no Monthly Salary: {0}").format(short(missing)))
+		else:
+			self.ok(area, _("Salaries are posted to {0}").format(name))
 
 
 def short(names, limit=15):

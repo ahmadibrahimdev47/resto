@@ -13,6 +13,7 @@ frappe.ui.form.on("Resto Settings", {
 			filters: { company: frm.doc.company, is_group: 0, root_type: "Asset", account_type: "Cash" },
 		}));
 		frm.set_query("drawer_cash_in_accounts", by_company);
+		frm.set_query("salary_account", () => ({ filters: { company: frm.doc.company, is_group: 0, root_type: "Expense" } }));
 	},
 
 	refresh(frm) {

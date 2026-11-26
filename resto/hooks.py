@@ -63,7 +63,13 @@ doc_events = {
 		"before_submit": "resto.resto.shift.link_payment_entry",
 		"before_cancel": "resto.resto.shift.check_cancel",
 	},
-	"Journal Entry": {"before_cancel": "resto.resto.shift.check_cancel"},
+	# A salary entry's Journal Entry is cancelled with the salary entry (D-249).
+	"Journal Entry": {
+		"before_cancel": [
+			"resto.resto.shift.check_cancel",
+			"resto.resto.doctype.resto_salary_entry.resto_salary_entry.check_journal_cancel",
+		]
+	},
 	# A cash purchase from a closed shift's drawer stays as the shift counted it (D-225).
 	"Purchase Invoice": {"before_cancel": "resto.resto.shift.check_cancel"},
 	"Stock Entry": {"before_cancel": "resto.resto.staff_meal.check_cancel"},

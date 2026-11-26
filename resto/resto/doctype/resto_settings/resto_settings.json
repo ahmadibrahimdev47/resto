@@ -38,6 +38,7 @@
   "self_advance_needs_manager",
   "main_safe_account",
   "drawer_cash_in_accounts",
+  "salary_account",
   "allow_side_changes",
   "charge_extra_sides",
   "column_break_pos",
@@ -287,6 +288,13 @@
    "description": "The accounts money put into the drawer for another reason may come from (a manager's PIN and a note each time). Empty: no other reason is offered."
   },
   {
+   "fieldname": "salary_account",
+   "fieldtype": "Link",
+   "label": "Salaries Account",
+   "options": "Account",
+   "description": "The expense account the month's salary entry posts the workers' salaries to."
+  },
+  {
    "default": "0",
    "fieldname": "allow_side_changes",
    "fieldtype": "Check",
@@ -512,7 +520,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-27 05:10:00.000000",
+ "modified": "2026-11-27 06:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

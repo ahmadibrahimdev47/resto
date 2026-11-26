@@ -1,0 +1,93 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-11-27 06:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "Worker",
+   "options": "Employee",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "label": "Worker Name",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "salary",
+   "fieldtype": "Currency",
+   "label": "Salary",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "owed",
+   "fieldtype": "Currency",
+   "label": "Open Advance",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "deduct",
+   "fieldtype": "Check",
+   "label": "Take Off This Month",
+   "default": "1",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "deduct_amount",
+   "fieldtype": "Currency",
+   "label": "Taken Off",
+   "in_list_view": 1,
+   "columns": 1,
+   "depends_on": "deduct",
+   "description": "Up to the open advance and the salary"
+  },
+  {
+   "fieldname": "net",
+   "fieldtype": "Currency",
+   "label": "Net",
+   "read_only": 1,
+   "in_list_view": 1,
+   "columns": 2
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-27 06:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Resto",
+ "name": "Resto Salary Entry Worker",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 0,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0,
+ "field_order": [
+  "employee",
+  "employee_name",
+  "salary",
+  "owed",
+  "deduct",
+  "deduct_amount",
+  "net"
+ ]
+}
