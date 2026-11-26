@@ -357,3 +357,83 @@ class TestAppIconLanding(IntegrationTestCase):
 		with self.assertRaises(frappe.Redirect):
 			restaurant.get_context(frappe._dict())
 		self.assertEqual(frappe.local.flags.redirect_location, "/desk/resto-kitchen")
+
+
+class TestKitchenSeesNoMoney(IntegrationTestCase):
+	"""The kitchen has nothing to do with bills or money (D-242): no order, no report, no price or
+	cost on what it opens. It keeps its screen, tickets, items, recipe quantities, prep and waste drafts."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		cls.kitchen = user_with("Resto Kitchen")
+		cls.manager = user_with("Resto Manager")
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def opened(self, user, doctype, name):
+		"""The document as the form gets it (getdoc), for `user`."""
+		from frappe.desk.form.load import getdoc
+
+		frappe.set_user(user)
+		try:
+			frappe.local.response = frappe._dict({"docs": []})
+			getdoc(doctype, name)
+			return frappe.local.response.docs[0]
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_no_order_and_no_report(self):
+		self.assertFalse(frappe.has_permission("Resto Order", "read", user=self.kitchen))
+		self.assertTrue(frappe.has_permission("Resto Order", "select", user=self.kitchen))
+		self.assertFalse(frappe.has_permission("Bin", "read", user=self.kitchen))
+		shown = shown_links(self.kitchen)
+		self.assertNotIn("Resto Order", shown)
+		reports = frappe.get_all("Report", filters={"module": "Resto"}, pluck="name")
+		self.assertTrue(reports)
+		self.assertFalse(shown & set(reports))
+		frappe.set_user(self.kitchen)
+		for report in reports:
+			with self.subTest(report=report):
+				self.assertFalse(frappe.get_doc("Report", report).is_permitted())
+		frappe.set_user("Administrator")
+		self.assertTrue({"Resto Kitchen Ticket", "Item", "Resto Recipe", "Resto Prep", "Resto Waste"} <= shown)
+
+	def test_the_kitchen_cannot_open_a_whole_order(self):
+		from resto.resto import floor
+
+		order = floor.create_order(order_type="Takeaway", customer_name="Kitchen Guest")
+		frappe.set_user(self.kitchen)
+		self.assertRaises(frappe.PermissionError, floor.get_order, order)
+
+	def test_a_recipe_shows_its_quantities_not_its_cost(self):
+		frappe.get_doc("Resto Recipe", "DISH-BURGER").update_cost_fields()
+		kitchen = self.opened(self.kitchen, "Resto Recipe", "DISH-BURGER")
+		manager = self.opened(self.manager, "Resto Recipe", "DISH-BURGER")
+		# A value the user may not read is taken off the document: get() gives None.
+		for field in ("total_cost", "selling_rate", "food_cost_percent", "main_cost", "cost_per_unit"):
+			with self.subTest(field=field):
+				self.assertIsNone(kitchen.get(field))
+				self.assertIsNotNone(manager.get(field))
+		self.assertTrue(kitchen.items and all(r.qty for r in kitchen.items))
+		self.assertFalse([r for r in kitchen.items if r.get("rate") is not None or r.get("amount") is not None])
+		self.assertGreater(frappe.utils.flt(manager.total_cost), 0)
+
+	def test_an_item_shows_no_price_or_cost(self):
+		for code in ("RAW-BEEF", "DISH-BURGER"):
+			kitchen = self.opened(self.kitchen, "Item", code)
+			manager = self.opened(self.manager, "Item", code)
+			for field in ("valuation_rate", "standard_rate", "last_purchase_rate"):
+				with self.subTest(item=code, field=field):
+					self.assertIsNone(kitchen.get(field))
+					self.assertIsNotNone(manager.get(field))
+			self.assertEqual(kitchen.item_name, manager.item_name)
+		self.assertGreater(frappe.utils.flt(self.opened(self.manager, "Item", "RAW-BEEF").valuation_rate), 0)
+		# The recipe tab: its quantities, not its cost.
+		burger = self.opened(self.kitchen, "Item", "DISH-BURGER")
+		self.assertTrue(burger.resto_recipe_items and all(r.qty for r in burger.resto_recipe_items))
+		self.assertFalse([r for r in burger.resto_recipe_items if r.get("rate") is not None])
+		self.assertIsNone(burger.get("resto_recipe_total_cost"))
+		self.assertIsNotNone(self.opened(self.manager, "Item", "DISH-BURGER").get("resto_recipe_total_cost"))

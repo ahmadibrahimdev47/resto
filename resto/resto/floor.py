@@ -382,7 +382,8 @@ def get_modifiers(item_code):
 
 @frappe.whitelist()
 def get_order(order):
-	require_role(*STAFF, KITCHEN)
+	# Not the kitchen: the order carries its bill (D-242); the kitchen screen has its own calls.
+	require_role(*STAFF)
 	return _order_view(frappe.get_doc("Resto Order", order))
 
 

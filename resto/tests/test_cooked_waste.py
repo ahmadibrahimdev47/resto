@@ -205,6 +205,9 @@ class TestNewWasteForm(IntegrationTestCase):
 			(waste.docstatus, waste.company, waste.warehouse, waste.waste_account),
 			(0, settings.company, settings.kitchen_warehouse, settings.waste_account),
 		)
+		# Its cost is on the record, though the kitchen does not see it (D-242).
+		self.assertGreater(frappe.db.get_value("Resto Waste", waste.name, "total_amount"), 0)
+		self.assertFalse(frappe.get_doc("Resto Waste", waste.name).has_permlevel_access_to("total_amount"))
 		self.assertRaises(frappe.PermissionError, waste.submit)
 		frappe.set_user(MANAGER_USER)
 		doc = frappe.get_doc("Resto Waste", waste.name)

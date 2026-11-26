@@ -142,12 +142,18 @@ class TestDemandReports(IntegrationTestCase):
 		columns, data, message = forecast.execute({"company": fx.COMPANY, "target_date": "2026-02-03", "weeks": 2})
 		self.assertEqual(data, [])
 
-	def test_forecast_report_runs_for_the_kitchen(self):
+	def test_forecast_report_runs_for_the_manager_not_the_kitchen(self):
+		# The kitchen gets no report (D-242); the manager runs it and drafts the prep.
 		from frappe.desk.query_report import run
 
+		from resto.tests.test_floor_customers_shift import MANAGER_USER, _manager
+
+		_manager()
 		filters = {"company": fx.COMPANY, "target_date": TARGET, "weeks": 4, "item_group": self.group}
-		frappe.set_user("kitchen@resto.test")
 		try:
+			frappe.set_user("kitchen@resto.test")
+			self.assertRaises(frappe.PermissionError, run, "Resto Prep Forecast", filters={**filters, "view": "Dishes"})
+			frappe.set_user(MANAGER_USER)
 			for view in ("Dishes", "Ingredients"):
 				result = run("Resto Prep Forecast", filters={**filters, "view": view})
 				self.assertTrue(result["result"], view)

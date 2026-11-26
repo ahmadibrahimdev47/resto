@@ -74,14 +74,15 @@ def _fields():
 		description="Sides served with this dish on every order (rice, bread, salad, sauces). They are not taken when this dish is part of another dish. Boxes and cups go in Packaging.")
 	add(PACK, "Table", label="Packaging", options="Resto Recipe Item", depends_on=IS_MENU,
 		description="Boxes, cups and lids this dish takes. Each row is taken on the order types ticked on it (takeaway and delivery by default; tick Dine In when the dish is served in it there too), never when this dish is part of another dish. Its cost is shown apart from the food cost.")
-	add(P + "cost_section", "Section Break", label="Cost", depends_on=HAS_TYPE)
-	add(P + "total_cost", "Currency", label="Recipe Cost", options=CURRENCY, read_only=1)
-	add(P + "cost_per_unit", "Currency", label="Cost per Unit", options=CURRENCY, read_only=1, depends_on=IS_PREP)
-	add(P + "cost_column", "Column Break")
-	add(P + "selling_rate", "Currency", label="Selling Price", options=CURRENCY, read_only=1, depends_on=IS_MENU)
-	add(P + "food_cost_percent", "Percent", label="Food Cost %", read_only=1, depends_on=IS_MENU)
-	add(P + "packaging_cost", "Currency", label="Packaging Cost", options=CURRENCY, read_only=1, depends_on=IS_MENU)
-	add(TARGET, "Percent", label="Target Food Cost %", depends_on=IS_MENU,
+	# Money is at permlevel 1, which every role of Item reads but the kitchen (D-242).
+	add(P + "cost_section", "Section Break", label="Cost", depends_on=HAS_TYPE, permlevel=1)
+	add(P + "total_cost", "Currency", label="Recipe Cost", options=CURRENCY, read_only=1, permlevel=1)
+	add(P + "cost_per_unit", "Currency", label="Cost per Unit", options=CURRENCY, read_only=1, depends_on=IS_PREP, permlevel=1)
+	add(P + "cost_column", "Column Break", permlevel=1)
+	add(P + "selling_rate", "Currency", label="Selling Price", options=CURRENCY, read_only=1, depends_on=IS_MENU, permlevel=1)
+	add(P + "food_cost_percent", "Percent", label="Food Cost %", read_only=1, depends_on=IS_MENU, permlevel=1)
+	add(P + "packaging_cost", "Currency", label="Packaging Cost", options=CURRENCY, read_only=1, depends_on=IS_MENU, permlevel=1)
+	add(TARGET, "Percent", label="Target Food Cost %", depends_on=IS_MENU, permlevel=1,
 		description="This dish's own target. Empty: the target in Resto Settings is used.")
 	add(P + "preparation_section", "Section Break", label="Preparation", depends_on=HAS_TYPE)
 	add(PREP, "Text Editor", label="Preparation Method")

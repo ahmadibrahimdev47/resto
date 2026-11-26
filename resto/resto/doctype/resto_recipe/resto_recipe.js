@@ -66,7 +66,8 @@ frappe.ui.form.on("Resto Recipe", {
 		window.resto?.food_cost_headline?.(frm);
 		frm.add_custom_button(__("Recipe Status"), () => window.resto?.recipe_status?.());
 
-		if (!frm.is_new()) {
+		// The kitchen reads the quantities, never the cost (D-242).
+		if (!frm.is_new() && frm.perm[0]?.write && frm.perm[1]?.read) {
 			frm.add_custom_button(__("Update Cost"), () =>
 				frm.call("update_cost").then(() => frm.reload_doc())
 			);

@@ -9,7 +9,7 @@
  "idx": 0,
  "is_standard": "Yes",
  "letterhead": null,
- "modified": "2026-11-22 15:00:00.000000",
+ "modified": "2026-11-27 01:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Prep Forecast",
@@ -30,9 +30,6 @@
   },
   {
    "role": "Manufacturing Manager"
-  },
-  {
-   "role": "Resto Kitchen"
   }
  ]
 }

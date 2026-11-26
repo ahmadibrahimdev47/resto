@@ -10,8 +10,8 @@ from resto.resto.utils import ALL_ROLES, CASHIER, HOST, KITCHEN, MANAGER, WAITER
 # The floor gets "select" only on Employee (the delivery driver link), so no HR data is readable.
 STANDARD_PERMISSIONS = {
 	"Item": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"], KITCHEN: ["read"]},
-	# The kitchen runs the Prep Forecast: its Company and Item Group filters. A report checks
-	# read on the doctype of every Link column it shows (Item Group, UOM).
+	# The kitchen's waste and prep forms link a Company; its item lists filter by Item Group and
+	# show the UOM. It runs no report (D-242).
 	"Company": {KITCHEN: ["select"]},
 	"Item Group": {KITCHEN: ["read"], MANAGER: ["read"]},
 	"UOM": {KITCHEN: ["read"], MANAGER: ["read"]},
@@ -24,7 +24,8 @@ STANDARD_PERMISSIONS = {
 	"Designation": {MANAGER: ["select"]},
 	"Sales Invoice": {CASHIER: ["read", "print"], MANAGER: ["read", "print", "report"]},
 	# The kitchen runs Negative Prepared Stock (its prepared items' stock).
-	"Bin": {MANAGER: ["read", "report"], KITCHEN: ["read", "report"]},
+	# Not the kitchen: a Bin holds the stock value (D-242).
+	"Bin": {MANAGER: ["read", "report"]},
 	# ERPNext checks the customer's receivable account (select) while it builds any bill.
 	"Account": {WAITER: ["select"], CASHIER: ["select"], MANAGER: ["select"]},
 	# ... and reads the POS Profile (item details) while it builds the bill and its preview.
@@ -210,8 +211,79 @@ def setup():
 	create_custom_fields(item_fields(), update=True)
 	set_new_setting_defaults()
 	grant_standard_permissions()
+	keep_money_from_the_kitchen()
 	add_accounting_summary_links()
 	sync_translations()
+
+
+# The kitchen has nothing to do with bills or money (D-242). Rights Resto gave it before, taken
+# back on every migrate: a Bin holds the stock value and its rate.
+KITCHEN_TAKEN_BACK = ("Bin",)
+# Doctypes the kitchen only links (select), even where a site customised their rights.
+KITCHEN_SELECT_ONLY = ("Resto Order",)
+# Item's money, moved to permlevel 1: every role that reads Item at level 0 reads it at level 1
+# too (and writes it where it writes level 0), except the kitchen.
+ITEM_MONEY = ("valuation_rate", "standard_rate", "last_purchase_rate", "prices_html")
+# Resto's doctypes whose money is at permlevel 1 in their JSON: a site that customised their
+# rights (Custom DocPerm) gets the same level 1 rows.
+MONEY_DOCTYPES = ("Item", "Resto Recipe", "Resto Waste")
+
+
+def keep_money_from_the_kitchen():
+	from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+	from frappe.permissions import setup_custom_perms
+
+	for doctype in KITCHEN_TAKEN_BACK:
+		if frappe.db.exists("Custom DocPerm", {"parent": doctype, "role": KITCHEN}):
+			frappe.db.delete("Custom DocPerm", {"parent": doctype, "role": KITCHEN})
+			frappe.clear_cache(doctype=doctype)
+
+	for doctype in KITCHEN_SELECT_ONLY:
+		for name in frappe.get_all("Custom DocPerm", filters={"parent": doctype, "role": KITCHEN}, pluck="name"):
+			frappe.db.set_value(
+				"Custom DocPerm", name, {"select": 1, **dict.fromkeys((*DEFAULT_RIGHTS, *OTHER_RIGHTS), 0)}
+			)
+			frappe.clear_cache(doctype=doctype)
+
+	meta = frappe.get_meta("Item")
+	for fieldname in ITEM_MONEY:
+		df = meta.get_field(fieldname)
+		if df and not df.permlevel:
+			make_property_setter("Item", fieldname, "permlevel", 1, "Int", validate_fields_for_doctype=False)
+	setup_custom_perms("Item")  # Item's level 1 rows live with its other custom rows
+
+	for doctype in MONEY_DOCTYPES:
+		if frappe.db.exists("DocType", doctype) and frappe.db.exists("Custom DocPerm", {"parent": doctype}):
+			_mirror_level_one(doctype)
+
+
+def _mirror_level_one(doctype):
+	"""Every role that reads the doctype at level 0 reads level 1 too (writes it where it writes
+	level 0); the kitchen holds no level 1 row."""
+	rows = frappe.get_all(
+		"Custom DocPerm", filters={"parent": doctype, "permlevel": 0, "if_owner": 0}, fields=["role", "read", "write"]
+	)
+	for r in rows:
+		if r.role == KITCHEN or not r.read:
+			continue
+		have = frappe.db.get_value("Custom DocPerm", {"parent": doctype, "role": r.role, "permlevel": 1}, ["name", "write"], as_dict=True)
+		if not have:
+			frappe.get_doc(
+				{
+					"doctype": "Custom DocPerm",
+					"parent": doctype,
+					"parenttype": "DocType",
+					"parentfield": "permissions",
+					"role": r.role,
+					"permlevel": 1,
+					"read": 1,
+					"write": r.write,
+				}
+			).insert(ignore_permissions=True)
+		elif r.write and not have.write:
+			frappe.db.set_value("Custom DocPerm", have.name, "write", 1)
+	frappe.db.delete("Custom DocPerm", {"parent": doctype, "role": KITCHEN, "permlevel": 1})
+	frappe.clear_cache(doctype=doctype)
 
 
 def after_app_install(app_name):
