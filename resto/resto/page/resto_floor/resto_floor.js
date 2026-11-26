@@ -1608,13 +1608,53 @@ class RestoFloor {
 				this.shift_busy(d, async () => {
 					const amounts = {};
 					data.modes.forEach((m, i) => (amounts[m] = flt(v["m_" + i])));
-					await frappe.xcall("resto.resto.shift.open_shift", { amounts: JSON.stringify(amounts) });
+					const args = { amounts: JSON.stringify(amounts) };
+					// The count against the drawer's books (D-258): more needs a reason, less is told.
+					const found = await frappe.xcall("resto.resto.opening_check.preview", { amounts: args.amounts });
+					if (found.length) {
+						const extra = await this.opening_choice(found);
+						if (!extra) return;
+						if (extra === "change") {
+							const ok = await ask_approval(this.floor, __("Change from the main safe at the opening"));
+							if (!ok) return;
+							Object.assign(args, ok);
+						}
+						args.extra = extra;
+					}
+					await frappe.xcall("resto.resto.shift.open_shift", args);
 					d.hide();
 					frappe.show_alert({ message: __("Shift opened"), indicator: "green" });
 					this.refresh();
 				}),
 		});
 		d.show();
+	}
+
+	// The opening count is not what the drawer's books hold (D-258). More: change from the main
+	// safe (posted now, a manager's PIN) or to review later; less: the shift opens and is marked.
+	opening_choice(found) {
+		return new Promise((resolve) => {
+			const more = found.some((f) => f.more);
+			let chosen = null;
+			const lines = found.map((f) => `<p><b>${esc(__(f.mode_of_payment))}</b>: ${esc(f.message)}</p>`).join("");
+			const note = `<p class="text-muted">${__("The manager is told of a shift opened to review or short.")}</p>`;
+			const d = new frappe.ui.Dialog({
+				title: __("The Drawer Does Not Match the Books"),
+				fields: [{ fieldtype: "HTML", options: lines + note }],
+				primary_action_label: more ? __("Change from the Main Safe") : __("Open Shift"),
+				primary_action: () => {
+					chosen = more ? "change" : "review";
+					d.hide();
+				},
+				secondary_action_label: more ? __("Review Later") : __("Cancel"),
+				secondary_action: () => {
+					chosen = more ? "review" : null;
+					d.hide();
+				},
+			});
+			d.onhide = () => resolve(chosen);
+			d.show();
+		});
 	}
 
 	// One tap at a time: the button waits for the server, and the dialog (with what was typed) stays
@@ -1700,6 +1740,16 @@ class RestoFloor {
 				parts.push(`<details><summary><b>${__("Staff Advances")}</b></summary><table class="table table-condensed">
 					${r.advances
 						.map((a) => `<tr><td>${esc(a.employee_name || a.employee)}</td><td>${esc(a.remarks || "")}</td><td class="rf-amt">${money(a.amount)}</td></tr>`)
+						.join("")}</table></details>`);
+			}
+			const opened = (r.rows || []).filter((x) => x.opening_check && x.opening_check !== "Matches");
+			if (opened.length) {
+				parts.push(`<details open><summary><b>${__("Opening Difference")}</b></summary><table class="table table-condensed">
+					${opened
+						.map(
+							(x) => `<tr><td>${esc(__(x.mode_of_payment))}</td><td>${esc(__(x.opening_check))}${x.opening_entry ? ` · ${esc(x.opening_entry)}` : ""}</td>
+								<td class="rf-amt">${x.opening_check === "Not Checked" ? "" : money(x.opening_difference)}</td></tr>`
+						)
 						.join("")}</table></details>`);
 			}
 			if ((r.cash_moves || []).length) {

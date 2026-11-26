@@ -18,6 +18,8 @@ from resto.resto import approval
 from resto.resto.utils import CASHIER, MANAGER, get_settings, has_role, publish, require_role
 
 ACCOUNTS_PRECISION = 2
+# The opening count against the books (D-258), kept on each payment row through the close.
+OPENING_FIELDS = ("book_amount", "opening_difference", "opening_check", "opening_entry")
 
 
 def _profile():
@@ -223,6 +225,7 @@ def compute(shift):
 			modes.append(mv.mode_of_payment)
 			opening[mv.mode_of_payment] = received[mv.mode_of_payment] = change[mv.mode_of_payment] = 0
 
+	checked = {p.mode_of_payment: {f: p.get(f) for f in OPENING_FIELDS} for p in shift.payments}
 	rows = []
 	for m in modes:
 		expected = flt(
@@ -253,6 +256,7 @@ def compute(shift):
 				"sales_amount": flt(sold.get(m, 0) - change[m], ACCOUNTS_PRECISION),
 				"debts_amount": flt(debts_in.get(m, 0), ACCOUNTS_PRECISION),
 				"refunds_amount": flt(refunded.get(m, 0), ACCOUNTS_PRECISION),
+				**checked.get(m, {}),
 			}
 		)
 
@@ -474,8 +478,13 @@ def opening_data():
 
 
 @frappe.whitelist(methods=["POST"])
-def open_shift(amounts=None):
-	"""Open the cashier's shift on the restaurant's POS Profile, with the money in the drawer."""
+def open_shift(amounts=None, extra=None, approver=None, pin=None):
+	"""Open the cashier's shift on the restaurant's POS Profile, with the money in the drawer.
+	extra: where cash counted above the books came from (D-258): "change" (from the main safe,
+	posted now with a manager's PIN) or "review" (opened and marked for the manager), also when
+	nothing was chosen (a call from elsewhere): the managers are told either way."""
+	from resto.resto import drawer_cash, opening_check
+
 	require_role(CASHIER)
 	profile = _profile()
 	_fresh()
@@ -509,8 +518,39 @@ def open_shift(amounts=None):
 		if amount < 0:
 			frappe.throw(_("{0}: the opening amount cannot be negative").format(m.mode_of_payment))
 		shift.append("payments", {"mode_of_payment": m.mode_of_payment, "opening_amount": amount, "currency": p.currency})
+
+	checks = opening_check.compare(profile, p.company, {r.mode_of_payment: r.opening_amount for r in shift.payments})
+	more = [r for r in checks if r["check"] == opening_check.MORE]
+	safes = {}
+	if more and extra == "change":
+		for r in more:
+			safes[r["mode_of_payment"]] = drawer_cash.main_safe(p.company, r["account"])
+		approval.approve(
+			"drawer_cash_in",
+			f"{profile}: {frappe.session.user}",
+			flt(sum(r["difference"] for r in more), ACCOUNTS_PRECISION),
+			approver,
+			pin,
+			details=_("Change from the main safe at the opening"),
+		)
+	for r in checks:
+		if r["check"] == opening_check.MORE:
+			r["check"] = opening_check.CHANGE if extra == "change" else opening_check.REVIEW
+		row = next(x for x in shift.payments if x.mode_of_payment == r["mode_of_payment"])
+		row.update({"book_amount": r.get("book"), "opening_difference": r.get("difference"), "opening_check": r["check"]})
+
 	shift.flags.resto_shift = True
 	shift.insert(ignore_permissions=True)
+	if safes:
+		# Not a cash move of the shift: the opening amount already counts this money.
+		for r in more:
+			row = next(x for x in shift.payments if x.mode_of_payment == r["mode_of_payment"])
+			row.opening_entry = drawer_cash._post(
+				shift, r["account"], safes[r["mode_of_payment"]], r["difference"], _("Change from the main safe at the opening of shift {0}").format(shift.name)
+			)
+		shift.flags.resto_shift = True
+		shift.save(ignore_permissions=True)
+	opening_check.notify(shift, checks)
 	publish("shift")  # waiters' screens may take orders now (D-211)
 	return shift.name
 
@@ -1146,6 +1186,7 @@ def check_cancel(doc, method=None):
 			frappe.db.get_value("Resto Shift Expense", {"journal_entry": doc.name}, "parent")
 			or frappe.db.get_value("Resto Shift Advance", {"journal_entry": doc.name}, "parent")
 			or frappe.db.get_value("Resto Shift Cash Move", {"journal_entry": doc.name}, "parent")
+			or frappe.db.get_value("Resto Shift Payment", {"opening_entry": doc.name}, "parent")
 			or frappe.db.get_value("Resto Shift", {"over_short_entry": doc.name}, "name")
 		)
 	if name and shift_status(name, lock=True) == "Closed":
