@@ -184,3 +184,46 @@ class TestNewWasteForm(IntegrationTestCase):
 		self.assertTrue(d["warehouse"] and d["waste_account"])
 		frappe.set_user("waiter@resto.test")
 		self.assertRaises(frappe.PermissionError, new_waste_defaults)
+
+	def test_the_kitchen_drafts_without_picking_a_warehouse_or_an_account(self):
+		# The kitchen cannot pick either link (D-241): the server fills both on save from the
+		# settings, and the manager posts the draft.
+		from resto.resto.utils import get_settings
+		from resto.tests.test_floor_customers_shift import MANAGER_USER, _manager
+
+		_manager()
+		settings = get_settings()
+		frappe.set_user("kitchen@resto.test")
+		for doctype in ("Account", "Warehouse"):
+			self.assertFalse(frappe.has_permission(doctype, "select"), doctype)
+		meta = frappe.get_meta("Resto Waste")
+		self.assertFalse(meta.get_field("warehouse").reqd or meta.get_field("waste_account").reqd)
+		waste = frappe.get_doc(
+			{"doctype": "Resto Waste", "items": [{"item_code": "RAW-POTATO", "qty": 0.5, "reason": "Spoiled"}]}
+		).insert()
+		self.assertEqual(
+			(waste.docstatus, waste.company, waste.warehouse, waste.waste_account),
+			(0, settings.company, settings.kitchen_warehouse, settings.waste_account),
+		)
+		self.assertRaises(frappe.PermissionError, waste.submit)
+		frappe.set_user(MANAGER_USER)
+		doc = frappe.get_doc("Resto Waste", waste.name)
+		doc.submit()
+		self.assertTrue(doc.stock_entry)
+		frappe.set_user("Administrator")
+		doc.cancel()
+
+	def test_without_the_settings_the_draft_says_what_is_missing(self):
+		kept = frappe.db.get_single_value("Resto Settings", "waste_account")
+		frappe.db.set_single_value("Resto Settings", "waste_account", None)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		try:
+			frappe.set_user("kitchen@resto.test")
+			waste = frappe.get_doc(
+				{"doctype": "Resto Waste", "items": [{"item_code": "RAW-POTATO", "qty": 0.5, "reason": "Spoiled"}]}
+			)
+			self.assertRaises(frappe.ValidationError, waste.insert)
+		finally:
+			frappe.set_user("Administrator")
+			frappe.db.set_single_value("Resto Settings", "waste_account", kept)
+			frappe.clear_document_cache("Resto Settings", "Resto Settings")

@@ -17,6 +17,9 @@ class RestoWaste(Document):
 		self.company = self.company or settings.company
 		self.warehouse = self.warehouse or settings.kitchen_warehouse
 		self.waste_account = self.waste_account or settings.waste_account
+		if not self.warehouse or not self.waste_account:
+			# Not required on the form (the kitchen drafts it without reading accounts, D-241).
+			frappe.throw(_("Set the Kitchen Warehouse and the Food Waste Account in Resto Settings first"))
 		if self.warehouse and frappe.db.get_value("Warehouse", self.warehouse, "company") != self.company:
 			frappe.throw(_("Warehouse {0} does not belong to company {1}").format(frappe.bold(self.warehouse), self.company))
 		if self.waste_account:

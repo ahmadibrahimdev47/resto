@@ -56,15 +56,15 @@
    "fieldname": "warehouse",
    "fieldtype": "Link",
    "options": "Warehouse",
-   "reqd": 1,
-   "label": "Warehouse"
+   "label": "Warehouse",
+   "description": "Left empty, it is filled from Resto Settings when saved"
   },
   {
    "fieldname": "waste_account",
    "fieldtype": "Link",
    "options": "Account",
-   "reqd": 1,
-   "label": "Food Waste Account"
+   "label": "Food Waste Account",
+   "description": "Left empty, it is filled from Resto Settings when saved"
   },
   {
    "fieldname": "items_section",
@@ -127,7 +127,7 @@
  "is_submittable": 1,
  "istable": 0,
  "links": [],
- "modified": "2026-11-26 23:30:00.000000",
+ "modified": "2026-11-27 00:30:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Waste",
