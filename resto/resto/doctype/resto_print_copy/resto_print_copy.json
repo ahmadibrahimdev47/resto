@@ -8,7 +8,8 @@
  "engine": "InnoDB",
  "field_order": [
   "label",
-  "show_sides"
+  "show_sides",
+  "customer_copy"
  ],
  "fields": [
   {
@@ -26,13 +27,22 @@
    "default": "0",
    "depends_on": "eval:doc.parentfield!='copies'",
    "description": "Print on this copy the side dishes changed from the recipe (with / without), as on the kitchen ticket. Usually on for the restaurant copy, off for the customer copy. Extra portions billed always print, and the order tick Print Sides on the Receipt prints them on every copy."
+  },
+  {
+   "fieldname": "customer_copy",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Customer Copy",
+   "default": "0",
+   "depends_on": "eval:doc.parentfield!='copies'",
+   "description": "The copy handed to the guest. With Restaurant Settings \"Hide Free Items on the Customer Copy\" on, the dishes and extras given free (at 0) are left out of it; the other copies, the invoice and the reports keep them."
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-24 14:00:00.000000",
+ "modified": "2026-11-27 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Print Copy",

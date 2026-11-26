@@ -507,7 +507,8 @@ PACKAGING_GROUP = "مواد التغليف"
 
 def set_new_setting_defaults():
 	"""Settings added in later versions get their default once (a Single keeps no default by itself)."""
-	defaults = [("vat_on_service", 1), ("negative_cash", "Warn Only")]
+	# The note under a customer copy that left out the items given free (D-272).
+	defaults = [("vat_on_service", 1), ("negative_cash", "Warn Only"), ("free_lines_note", 1)]
 	# Resto's receipt prints the copy labels, sides per copy and the kitchen ticket numbers.
 	if frappe.db.exists("Print Format", "Resto Receipt"):
 		defaults.append(("receipt_print_format", "Resto Receipt"))
