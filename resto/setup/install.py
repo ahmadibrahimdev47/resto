@@ -484,12 +484,18 @@ def _select_only(doctype, role, rights):
 		frappe.clear_cache(doctype=doctype)
 
 
+PACKAGING_GROUP = "مواد التغليف"
+
+
 def set_new_setting_defaults():
 	"""Settings added in later versions get their default once (a Single keeps no default by itself)."""
 	defaults = [("vat_on_service", 1), ("negative_cash", "Warn Only")]
 	# Resto's receipt prints the copy labels, sides per copy and the kitchen ticket numbers.
 	if frappe.db.exists("Print Format", "Resto Receipt"):
 		defaults.append(("receipt_print_format", "Resto Receipt"))
+	# The packaging an extra portion may be served in (D-265), when the site has such a group.
+	if frappe.db.exists("Item Group", PACKAGING_GROUP):
+		defaults.append(("packaging_item_group", PACKAGING_GROUP))
 	for field, value in defaults:
 		if not frappe.db.sql("select 1 from `tabSingles` where doctype = %s and field = %s", ("Resto Settings", field)):
 			frappe.db.set_single_value("Resto Settings", field, value)

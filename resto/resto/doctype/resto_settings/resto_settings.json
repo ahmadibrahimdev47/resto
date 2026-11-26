@@ -43,6 +43,7 @@
   "allow_side_changes",
   "charge_extra_sides",
   "free_extras_limit",
+  "packaging_item_group",
   "show_sides_in_kitchen",
   "column_break_pos",
   "screen_refresh_seconds",
@@ -334,6 +335,14 @@
    "description": "Per order, at the extra price: a cashier may give extra portions free up to this value; above it, or when it is 0, a manager's PIN is needed. Stock is still issued."
   },
   {
+   "fieldname": "packaging_item_group",
+   "fieldtype": "Link",
+   "options": "Item Group",
+   "label": "Packaging Item Group",
+   "depends_on": "charge_extra_sides",
+   "description": "Items of this group (and the groups under it) may be in the recipe an extra portion is billed as, besides the one portion: the cup or box it is served in."
+  },
+  {
    "default": "0",
    "fieldname": "show_sides_in_kitchen",
    "fieldtype": "Check",
@@ -580,7 +589,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-26 16:00:00.000000",
+ "modified": "2026-11-27 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

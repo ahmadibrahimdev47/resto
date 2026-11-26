@@ -657,6 +657,66 @@ class TestSides(IntegrationTestCase):
 		self.assertAlmostEqual(flt(si.net_total), 120 + 160 + 5, 2)
 		self.assert_accounts_match_stock(si)
 
+	def test_an_extra_portion_billed_with_its_cup(self):
+		# D-265: the billing recipe may hold packaging besides exactly one portion of the option.
+		if not frappe.db.exists("Item Group", "Test Packaging"):
+			frappe.get_doc(
+				{"doctype": "Item Group", "item_group_name": "Test Packaging", "parent_item_group": "All Item Groups"}
+			).insert(ignore_permissions=True)
+		fx.item("PACK-CUP", "Nos", group="Test Packaging", valuation=1)
+		fx.receive(fx.KITCHEN, [("PACK-CUP", 20, 1)])
+		for code, mains in (
+			("DISH-XT-CUP", [("SAUCE-TAHINI", 1), ("PACK-CUP", 1)]),
+			("DISH-XT-RICE", [("SAUCE-TAHINI", 1), ("SIDE-RICE", 0.1)]),
+			("DISH-XT-TWO", [("SAUCE-TAHINI", 2), ("PACK-CUP", 1)]),
+		):
+			fx.item(code, stock=0, group="Resto Food")
+			fx.price(code, 5)
+			dish(code, mains, [])
+		kept = frappe.db.get_single_value("Resto Settings", "packaging_item_group")
+		self.addCleanup(self.packaging_group, kept)
+
+		def error(billing):
+			frappe.local.resto_extra_billing = {}
+			return sides.extra_billing_error("SAUCE-TAHINI", 1, billing)
+
+		self.packaging_group(None)
+		self.assertIn("Pack Cup", error("DISH-XT-CUP") or "")  # no packaging group: the cup is not allowed
+		self.packaging_group("Test Packaging")
+		self.assertIsNone(error("DISH-XT-CUP"))
+		self.assertIn("also deducts", error("DISH-XT-RICE") or "")  # another food: refused, named
+		self.assertIn("Side Rice", error("DISH-XT-RICE"))
+		self.assertIn("is not exactly one portion", error("DISH-XT-TWO") or "")  # two portions: refused
+
+		# The cup is deducted with each extra portion, charged or free.
+		group = frappe.get_doc("Resto Side Group", GROUP)
+		next(o for o in group.options if o.item == "SAUCE-TAHINI").billing_item = "DISH-XT-CUP"
+		frappe.local.resto_extra_billing = {}
+		group.save(ignore_permissions=True)
+		self.addCleanup(self.bill_tahini_as, "SAUCE-TAHINI")
+		self.charge()
+		for free in (0, 1):
+			order, line = self.tahini_plates(1)
+			if free:
+				floor.set_extras_free(order, line)
+			cup, tahini = fx.bin_qty("PACK-CUP"), fx.bin_qty("SAUCE-TAHINI")
+			si = self.pay(order)
+			extra = [r for r in si.items if r.item_code == "DISH-XT-CUP"]
+			self.assertEqual([(flt(r.qty), flt(r.amount)) for r in extra], [(1, 0 if free else 5)])
+			self.assertAlmostEqual(cup - fx.bin_qty("PACK-CUP"), 1, 6)
+			self.assertAlmostEqual(tahini - fx.bin_qty("SAUCE-TAHINI"), 2, 6)
+
+	def packaging_group(self, group):
+		frappe.db.set_single_value("Resto Settings", "packaging_item_group", group)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.local.resto_extra_billing = {}
+
+	def bill_tahini_as(self, billing):
+		group = frappe.get_doc("Resto Side Group", GROUP)
+		next(o for o in group.options if o.item == "SAUCE-TAHINI").billing_item = billing
+		frappe.local.resto_extra_billing = {}
+		group.save(ignore_permissions=True)
+
 	def test_a_portion_is_typed_in_grams(self):
 		# D-264: typed in a recipe unit, kept in the stock unit; a unit the item has not is refused.
 		from resto.tests.test_staff_meal import small_unit

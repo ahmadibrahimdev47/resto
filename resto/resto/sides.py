@@ -203,7 +203,9 @@ def extra_billing_error(option, portion, billing):
 def _extra_billing_error(option, portion, billing):
 	"""Why the extra portions of an option cannot be billed as `billing`, or None. The invoice line
 	of the billing item must deduct exactly what one portion of the option deducts: the option's own
-	stock item when one portion is one stock unit, or a menu dish whose recipe is one portion."""
+	stock item when one portion is one stock unit, or a menu dish whose recipe is one portion. Its
+	recipe may also hold packaging (items of Restaurant Settings' packaging group, D-265): a cup or a
+	box the extra portion is served in, deducted with each extra portion, charged or free."""
 	from resto.resto.doctype.resto_recipe.resto_recipe import get_flat_components
 
 	name = frappe.get_cached_value("Item", billing, "item_name") or billing
@@ -232,13 +234,39 @@ def _extra_billing_error(option, portion, billing):
 	except frappe.ValidationError:
 		frappe.clear_last_message()
 		served = None
-	if not served or set(served) != {k for k, v in billed.items() if flt(v) > EPS} or any(
-		abs(flt(billed[k]) - served[k]) > 1e-6 for k in served
-	):
+	option_name = frappe.bold(frappe.get_cached_value("Item", option, "item_name") or option)
+	if not served:
 		return _(
 			"{0} does not deduct exactly one portion of {1}: bill it as {1} itself when one portion is one stock unit, or as a menu dish whose recipe is one portion"
-		).format(frappe.bold(name), frappe.bold(frappe.get_cached_value("Item", option, "item_name") or option))
+		).format(frappe.bold(name), option_name)
+	billed = {k: flt(v) for k, v in billed.items() if flt(v) > EPS}
+	packaging = packaging_items(set(billed) | set(served))
+	other = sorted(k for k in billed if k not in served and k not in packaging)
+	if other:
+		return _(
+			"{0} also deducts {1}, which is neither in one portion of {2} nor packaging (Restaurant Settings, Packaging Item Group)"
+		).format(frappe.bold(name), ", ".join(frappe.bold(frappe.get_cached_value("Item", k, "item_name") or k) for k in other), option_name)
+	food = {k: v for k, v in served.items() if k not in packaging}
+	if any(abs(flt(billed.get(k)) - v) > 1e-6 for k, v in food.items()):
+		return _(
+			"The food that {0} deducts is not exactly one portion of {1} ({2}): its recipe must hold one portion, besides any packaging"
+		).format(frappe.bold(name), option_name, ", ".join(f"{frappe.get_cached_value('Item', k, 'item_name') or k} {_num(v)}" for k, v in food.items()))
 	return None
+
+
+def packaging_item_groups():
+	"""The packaging item group of Restaurant Settings and the groups under it (D-265)."""
+	group = get_settings().get("packaging_item_group")
+	if not group or not frappe.db.exists("Item Group", group):
+		return set()
+	lft, rgt = frappe.db.get_value("Item Group", group, ["lft", "rgt"])
+	return set(frappe.get_all("Item Group", filters={"lft": (">=", lft), "rgt": ("<=", rgt)}, pluck="name"))
+
+
+def packaging_items(items):
+	"""Those of `items` that are packaging: in the packaging item group or under it."""
+	groups = packaging_item_groups()
+	return {i for i in items if groups and frappe.get_cached_value("Item", i, "item_group") in groups}
 
 
 def default_choice(item_code):
