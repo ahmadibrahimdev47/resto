@@ -7,6 +7,7 @@ from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, getdate, now_datetime
 
 from resto.resto.routing import get_station
+from resto.resto.sides import sides_html
 from resto.resto.utils import KITCHEN, MANAGER, WAITER, CASHIER, publish, require_role
 
 # How a station's tickets are printed (Resto Kitchen Station.print_method).
@@ -471,6 +472,7 @@ def get_tickets(station=None, include_done_minutes=15):
 						"qty": d.qty,
 						"modifiers_text": d.modifiers_text,
 						"sides_text": d.sides_text,
+						"sides_html": sides_html(d.sides_text),
 						"notes": d.notes,
 						"course": d.course,
 						"voided": d.voided,

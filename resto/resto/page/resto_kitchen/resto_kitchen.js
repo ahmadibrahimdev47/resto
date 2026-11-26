@@ -156,7 +156,7 @@ class RestoKitchen {
 							(d) => `<li class="${d.voided ? "rk-voided" : ""}"><b>${d.qty} × ${esc(d.item_name)}</b>${d.voided ? ` <span class="rk-vtag">${__("VOID")}</span>` : ""}
 							${d.course ? `<span class="rk-course">${__(d.course)}</span>` : ""}
 							${d.modifiers_text ? `<div class="rk-mod">${esc(d.modifiers_text)}</div>` : ""}
-							${d.sides_text ? `<div class="rk-sides">${esc(d.sides_text)}</div>` : ""}
+							${d.sides_text ? `<div class="rk-sides">${d.sides_html || esc(d.sides_text)}</div>` : ""}
 							${d.notes ? `<div class="rk-note">✎ ${esc(d.notes)}</div>` : ""}</li>`
 						)
 						.join("");
@@ -545,6 +545,7 @@ class RestoKitchen {
 		.rk-mod { font-size:13px; color:var(--text-muted); }
 		.rk-note { font-size:13px; color:var(--red-600, #e53e3e); font-weight:600; }
 		.rk-sides { font-size:14px; font-weight:700; color:var(--orange-600, #c05621); }
+		.rk-sides .resto-without { color:var(--red-600, #c53030); font-weight:800; font-size:17px; }
 		.rk-course { font-size:11px; background:var(--gray-100); border-radius:6px; padding:0 6px; margin-inline-start:4px; }
 		.rk-actions { display:flex; gap:6px; } .rk-saving { opacity:.75; } .rk-round { background:#111; color:#fff; border-radius:6px; padding:0 6px; font-size:13px; } .rk-wait { align-self:center; font-size:13px; color:#555; } .rk-busy { cursor:progress; opacity:.7; }
 		.rk-no { font-size:20px; font-weight:800; }

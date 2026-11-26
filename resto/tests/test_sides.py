@@ -204,6 +204,24 @@ class TestSides(IntegrationTestCase):
 
 	# ------------------------------------------------------------------ one line
 
+	def test_the_without_part_stands_out_in_the_kitchen(self):
+		# D-251: on the kitchen screen and paper the «without» part is red, bold and larger.
+		from resto.resto import kitchen
+		from resto.resto.sides import sides_html
+
+		order, _line = self.swapped_plate(1)
+		text = lines(order)[0].sides_text
+		html = sides_html(text)
+		start = html.index('<span class="resto-without">')
+		self.assertIn("Side Rice", html[start:])
+		self.assertNotIn("Sauce Tahini", html[start:])  # the dish's sides served stay as they were
+		self.assertEqual(sides_html(None), "")
+		self.assertEqual(sides_html("<b>x</b>"), "&lt;b&gt;x&lt;/b&gt;")
+		tickets = floor.send_to_kitchen(order)
+		self.assertIn('class="resto-without"', frappe.get_print("Resto Kitchen Ticket", tickets[0], "Resto Kitchen Ticket"))
+		shown = [d for t in kitchen.get_tickets() for d in t["items"] if t["name"] in tickets]
+		self.assertTrue(any('class="resto-without"' in d["sides_html"] for d in shown))
+
 	def test_swapped_side_is_deducted_and_costed_on_the_dish(self):
 		order, line = self.swapped_plate(2)
 		row = lines(order)[0]

@@ -144,6 +144,22 @@ function ask_approval(floor, what) {
 }
 const money = (v) => format_currency(v || 0);
 
+// A line's sides text with its «without» part red, bold and larger (D-251), escaped. The text was
+// written in the site's language; the cashier's screen is in it too.
+function sides_paper(text) {
+	const head = __("Sides: {0}", [""], "Resto");
+	const without = __("without: {0}", [""], "Resto").trim();
+	const start = head && text.startsWith(head) ? head : "";
+	return (
+		esc(start) +
+		text
+			.slice(start.length)
+			.split(" | ")
+			.map((p) => (without && p.startsWith(without) ? `<span class="w">${esc(p)}</span>` : esc(p)))
+			.join(" | ")
+	);
+}
+
 // What Net In for the Shift is made of (D-235, D-245): only the parts the shift has.
 function net_caption(s) {
 	let text = __("Collected");
@@ -3232,7 +3248,7 @@ class RestoFloor {
 			body { margin: 0; padding: 4mm; width: 72mm; font-family: Almarai, Tahoma, Arial, sans-serif; font-size: 12px; color: #000; direction: ${dir}; }
 			h1 { font-size: 15px; margin: 0 0 2mm; text-align: center; } h2 { font-size: 13px; margin: 0 0 2mm; text-align: center; border: 1px solid #000; padding: 1mm; }
 			.m { display: flex; justify-content: space-between; gap: 2mm; } .s { font-size: 11px; } hr { border: 0; border-top: 1px dashed #000; margin: 2mm 0; }
-			.big { font-size: 15px; font-weight: 700; } .k { font-size: 16px; font-weight: 700; margin-top: 2mm; } .n { font-size: 12px; padding-inline-start: 4mm; }
+			.big { font-size: 15px; font-weight: 700; } .k { font-size: 16px; font-weight: 700; margin-top: 2mm; } .n { font-size: 12px; padding-inline-start: 4mm; } .n .w { color: #c00; font-weight: 800; font-size: 15px; }
 		</style></head><body>${body}</body></html>`;
 	}
 
@@ -3247,7 +3263,8 @@ class RestoFloor {
 		const rows = lines
 			.map((d) => {
 				const notes = [d.modifiers_text, d.sides_text || d.extras_text, d.notes, d.course ? __(d.course) : ""].filter(Boolean);
-				return `<div class="k">${fmt_qty(d.qty)} × ${esc(d.item_name)}</div>${notes.map((n) => `<div class="n">${esc(n)}</div>`).join("")}`;
+				// The «without» part of the sides stands out, as on the kitchen's own paper (D-251).
+				return `<div class="k">${fmt_qty(d.qty)} × ${esc(d.item_name)}</div>${notes.map((n) => `<div class="n">${n === d.sides_text ? sides_paper(n) : esc(n)}</div>`).join("")}`;
 			})
 			.join("");
 		return this.paper(

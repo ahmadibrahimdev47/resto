@@ -82,4 +82,4 @@ on_login = "resto.resto.approval.on_login"
 scheduler_events = {"daily": ["resto.api.refresh_recipe_costs"]}
 
 # The shift print format reads the items sold and the debts collected (D-206).
-jinja = {"methods": ["resto.resto.shift.shift_print_data"]}
+jinja = {"methods": ["resto.resto.shift.shift_print_data", "resto.resto.sides.sides_html"]}

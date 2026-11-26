@@ -91,6 +91,23 @@ def _sep():
 	return "، " if _lang().startswith("ar") else ", "
 
 
+def sides_html(text):
+	"""A line's sides text for the kitchen screen and paper (D-251), escaped: its «without» part red,
+	bold and larger, so a cook never misses what is left out. The text is in the site's language."""
+	from frappe.utils import escape_html
+
+	if not text:
+		return ""
+	head = _t("Sides: {0}", "")
+	without = _t("without: {0}", "").strip()
+	start = head if head and text.startswith(head) else ""
+	parts = text[len(start) :].split(" | ")
+	out = [
+		f'<span class="resto-without">{escape_html(p)}</span>' if without and p.startswith(without) else escape_html(p) for p in parts
+	]
+	return escape_html(start) + " | ".join(out)
+
+
 # --------------------------------------------------------------------------- slots
 
 
