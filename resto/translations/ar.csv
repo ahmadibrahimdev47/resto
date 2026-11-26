@@ -3160,3 +3160,4 @@
 "{0} also deducts {1}, which is neither in one portion of {2} nor packaging (Restaurant Settings, Packaging Item Group)","{0} يخصم أيضًا {1}، وهو ليس من الحصة الواحدة من {2} ولا من مواد التغليف (إعدادات المطعم، مجموعة مواد التغليف)",""
 "The food that {0} deducts is not exactly one portion of {1} ({2}): its recipe must hold one portion, besides any packaging","الطعام الذي يخصمه {0} ليس حصة واحدة بالضبط من {1} ({2}): يجب أن تحوي وصفته حصة واحدة، إلى جانب أي تغليف",""
 "Without","بدون","Resto"
+"{0}: at most {1} portions","{0}: {1} حصص على الأكثر",""

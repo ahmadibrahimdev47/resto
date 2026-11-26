@@ -67,3 +67,20 @@ test("more than one portion: whole counts per option; shared or several dishes s
 	assert.ok(!many.some((x) => x.fieldname === "r_0"));
 	t.done();
 });
+
+test("no more portions than the slot's most, per dish; a shared choice is left to the server (D-269)", () => {
+	const t = load(() => "ok");
+	const two = { ...RICE, max: 2 };
+	const r = one_dish(two);
+	const over = (a, b) => t.floor.sides_over(r, t.floor.sides_values(r, (f) => ({ s_0_0: a, s_0_1: b })[f], () => ""));
+	assert.equal(over(2, 0), null);
+	assert.equal(over(1, 1), null);
+	assert.equal(over(5, 0), "Rice: at most 2 portions");
+	assert.equal(over(2, 1), "Rice: at most 2 portions");
+	const shared = one_dish({ ...two, shared: true });
+	assert.equal(t.floor.sides_over(shared, [[5, 0]]), null);
+	// One portion: a choice can never be above it.
+	const one = one_dish(RICE);
+	assert.equal(t.floor.sides_over(one, t.floor.sides_values(one, () => 0, () => "1")), null);
+	t.done();
+});

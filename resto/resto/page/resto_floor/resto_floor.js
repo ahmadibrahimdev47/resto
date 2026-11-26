@@ -3635,6 +3635,13 @@ class RestoFloor {
 		});
 	}
 
+	// The first slot whose portions are above its most (D-269), or null: per dish for one dish, in
+	// total for several; a shared choice is limited by its set on the server.
+	sides_over(r, values) {
+		const over = r.slots.find((s, si) => !s.shared && values[si].reduce((a, n) => a + flt(n), 0) > flt(s.max) + 1e-6);
+		return over ? __("{0}: at most {1} portions", [esc(over.label), over.max]) : null;
+	}
+
 	// Only the slots that changed: the others keep their choice (a shared one too).
 	sides_choice(r, values) {
 		const choice = {};
@@ -3693,7 +3700,10 @@ class RestoFloor {
 			fields,
 			primary_action_label: __("Save"),
 			primary_action: async () => {
-				const choice = this.sides_choice(r, values());
+				const now = values();
+				const over = this.sides_over(r, now);
+				if (over) return frappe.msgprint(over);
+				const choice = this.sides_choice(r, now);
 				if (!Object.keys(choice).length) return d.hide();
 				await call("set_sides", { order: o.name, lines: JSON.stringify(lines), sides_choice: JSON.stringify(choice), together: together ? 1 : 0 }, true);
 				d.hide();
@@ -3702,6 +3712,17 @@ class RestoFloor {
 		});
 		d.show();
 		d.$wrapper.find(".rf-radios input").on("change", () => show_extras());
+		r.slots.forEach((s, si) => {
+			if (s.shared) return;
+			s.options.forEach((opt, oi) => {
+				const f = d.fields_dict[`s_${si}_${oi}`];
+				if (!f || f.df.fieldtype === "Check") return;
+				f.$input.attr({ min: 0, max: s.max, inputmode: "numeric" }).on("change", () => {
+					const n = flt(f.get_value());
+					if (n > flt(s.max)) f.set_value(s.max);
+				});
+			});
+		});
 		show_extras();
 		// One tap selects the number, so typing replaces it.
 		d.$wrapper.find("input").on("focus", function () { this.select && this.select(); });
