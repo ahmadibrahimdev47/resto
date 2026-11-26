@@ -1,6 +1,6 @@
 """The demo history generator (D-278) on three days: every order paid or cancelled, the kitchen's
 tickets served, the shift opened and closed each day, the kitchen restocked, the clock and the
-manager's PIN put back, and a second run with the same arguments adding nothing.
+manager's PIN put back; a run carried on to a later end, and run again adding nothing.
 
 bench --site test.resto run-tests --module resto.tests.test_demo
 """
@@ -53,8 +53,8 @@ class TestDemo(IntegrationTestCase):
 		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 		frappe.clear_cache()
 
-	def run_days(self, **kwargs):
-		return demo.generate(start=str(self.start), end=str(self.end), orders_per_day=5, seed=3, opening=0, **kwargs)
+	def run_days(self, end=None, **kwargs):
+		return demo.generate(start=str(self.start), end=str(end or self.end), orders_per_day=5, seed=3, opening=0, **kwargs)
 
 	def orders(self):
 		return frappe.get_all(
@@ -79,6 +79,10 @@ class TestDemo(IntegrationTestCase):
 
 	def test_three_days(self):
 		kept_pin = frappe.db.get_value("Resto Manager PIN", {"user": demo._Site(3).manager}, "pin_hash")
+		# Two days first, then on to the third: the run goes on from the day after the last one done.
+		second = getdate(add_days(self.start, 1))
+		self.assertEqual(self.run_days(end=second), str(second))
+		self.assertFalse([o for o in self.orders() if getdate(o.opened_at) == self.end])
 		self.assertEqual(self.run_days(), str(self.end))
 		# The clock is real again (the days played are ahead of today).
 		self.assertLess(now_datetime().date(), self.start)

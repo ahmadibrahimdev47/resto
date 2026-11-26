@@ -414,8 +414,8 @@ class _Planner:
 	def _make(self, day):
 		site = self.site
 		rng = random.Random(f"{self.seed}|{day}")
-		span = max(date_diff(self.end, self.start), 1)
-		trend = 0.85 + 0.3 * min(max(date_diff(day, self.start), 0), span) / span  # busier as the months go
+		# Busier as the months go (over four months, whatever the end: a longer run keeps the days done).
+		trend = 0.85 + 0.3 * min(max(date_diff(day, self.start), 0), 120) / 120
 		count = max(1, round(self.per_day * WEEKDAY[day.weekday()] * trend * rng.uniform(0.85, 1.15)))
 		hours, weights = list(HOURS), list(HOURS.values())
 		specs = []
@@ -1451,7 +1451,8 @@ def generate(start, end, orders_per_day=30, seed=1, monthly=None, change_float=N
 		monthly = json.loads(monthly)
 	if not frappe.flags.in_test and not cint(force_scheduler) and not is_scheduler_disabled(verbose=False):
 		frappe.throw("Turn the scheduler off first: bench --site <site> disable-scheduler")
-	args = {"start": str(start), "end": str(end), "orders_per_day": cint(orders_per_day), "seed": cint(seed)}
+	# The days' plans hang on these; the end may move (a short run first, then on to a later end).
+	args = {"start": str(start), "orders_per_day": cint(orders_per_day), "seed": cint(seed)}
 	done = frappe.db.get_global(MARK)
 	if done:
 		saved = json.loads(frappe.db.get_global(ARGS) or "{}")
