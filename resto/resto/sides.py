@@ -356,6 +356,14 @@ def set_line_sides(row, old=None):
 	if changed and not enabled():
 		frappe.throw(_("Changing the sides served is off in Restaurant Settings"))
 	choice = clean_choice(row.item_code, choice, row.item_name, strict=changed)
+	if cint(row.get("sides_free")) and old and (changed or abs(flt(old.qty) - flt(row.qty)) > EPS):
+		# The free mark was given for what was on the line then (D-253): give it again if still meant.
+		row.sides_free, row.sides_free_by, row.sides_free_value = 0, None, 0
+		frappe.msgprint(
+			_("{0}: its extra portions are charged again, since its sides or quantity changed").format(frappe.bold(row.item_name)),
+			alert=True,
+			indicator="orange",
+		)
 	_apply(row, choice)
 	if row.sides and (changed or not old or abs(flt(old.qty) - flt(row.qty)) > EPS):
 		per_dish = _loads(row.sides_qty) or {}
@@ -385,7 +393,12 @@ def _apply(row, choice):
 	# Always stored, "{}" too: a line whose sides are all extras packs no side on the dish.
 	row.sides_qty = json.dumps(qty_per_dish(row.item_code, free), sort_keys=True)
 	row.sides_extras = _dumps(extras)
-	row.sides_amount = sum(flt(e["portions"]) * flt(e["price"]) for e in extras.values())
+	row.sides_amount = 0 if cint(row.get("sides_free")) else extras_value(row)
+
+
+def extras_value(row):
+	"""What a line's extra portions come to per dish at their extra price, free or not (D-253)."""
+	return sum(flt(e.get("portions")) * flt(e.get("price")) for e in (_loads(row.get("sides_extras")) or {}).values())
 
 
 def extras_text(row):
@@ -398,6 +411,8 @@ def extras_text(row):
 	if not parts:
 		return None
 	text = _("Extra portions: {0}").format(_sep().join(parts))
+	if cint(row.get("sides_free")):
+		text += " · " + _("Free of charge")
 	return text + (" " + _("(per dish)", context="Resto") if flt(row.get("qty")) > 1 else "")
 
 

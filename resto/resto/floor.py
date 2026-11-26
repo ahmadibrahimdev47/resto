@@ -401,6 +401,7 @@ def _order_view(doc):
 	for d in data.get("items") or []:
 		d["has_sides"] = int(bool(data["sides_enabled"] and d.get("kitchen_status") == "Not Sent" and sides.slots(d.get("item_code"))))
 		d["extras_text"] = sides.extras_text(d)
+		d["can_free_extras"] = int(not cint(d.get("sides_free")) and not _free_extras_problem(doc, d))
 		d["printed"] = int(bool(d.get("ticket")) and d.get("ticket") in printed)
 	return data
 
@@ -909,6 +910,66 @@ def void_line(order, line, reason, cooked=0, approver=None, pin=None):
 	if cint(cooked) and was_sent:
 		_waste_for_void(doc, row, reason.strip())
 	return doc.name
+
+
+def _free_extras_problem(doc, row):
+	"""Why a line's extra portions cannot be given free (D-253), or None."""
+	if cint(doc.get("staff_meal")):
+		return _("A staff meal has no bill")
+	if row.get("kitchen_status") == "Void":
+		return _("This item is void")
+	if flt(row.get("billed_qty")) > 0:
+		return _("This item is already billed")
+	extras = sides._loads(row.get("sides_extras")) or {}
+	if not any(flt(e.get("portions")) > 0 and flt(e.get("price")) for e in extras.values()):
+		return _("This item has no charged extra portions")
+	if any(e.get("set") for e in extras.values()):
+		return _("Extra portions shared by several dishes cannot be given free")
+	return None
+
+
+@frappe.whitelist(methods=["POST"])
+def set_extras_free(order, line, free=1, approver=None, pin=None):
+	"""Give a line's extra portions free, or charge them again (D-253). The bill shows them at no
+	price and the stock is issued as usual. Up to Free Extras Without Approval Up To (per order, at
+	the extra price) the cashier gives them; above it, or with no limit set, a manager or a manager's
+	PIN. Who gave them and their value stay on the line, the invoice line and the approval log."""
+	require_role(CASHIER)
+	doc = _get_order(order)
+	row = _line(doc, line)
+	free = cint(free)
+	if cint(row.sides_free) == free:
+		return _order_view(doc)
+	if free:
+		problem = _free_extras_problem(doc, row)
+		if problem:
+			frappe.throw(problem)
+		value = flt(sides.extras_value(row) * flt(row.qty), 2)
+		given = sum(flt(d.sides_free_value) * flt(d.qty) for d in doc.items if cint(d.sides_free) and d.kitchen_status != "Void")
+		limit = flt(get_settings().free_extras_limit)
+		if limit <= 0 or given + value > limit + 0.005:
+			by = approval.approve(
+				"free_extra", f"{doc.name}: {row.qty:g} × {row.item_name}", value, approver, pin, sides.extras_text(row)
+			)
+		else:
+			by = frappe.session.user
+		row.sides_free, row.sides_free_by, row.sides_free_value = 1, by, sides.extras_value(row)
+		row.sides_amount = 0
+	else:
+		if flt(row.billed_qty) > 0:
+			frappe.throw(_("This item is already billed"))
+		row.sides_free, row.sides_free_by, row.sides_free_value = 0, None, 0
+		row.sides_amount = sides.extras_value(row)
+	row.flags.resto_free_mark = True
+	_reopen_if_billed(doc)
+	_save(doc)
+	doc.add_comment(
+		"Info",
+		(_("Extra portions of {0} given free ({1})") if free else _("Extra portions of {0} charged again")).format(
+			row.item_name, frappe.utils.fmt_money(flt(row.sides_free_value) * flt(row.qty))
+		),
+	)
+	return _order_view(doc)
 
 
 def _deducts_stock(item_code):

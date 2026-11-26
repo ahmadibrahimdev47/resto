@@ -22,6 +22,9 @@
   "sides_qty",
   "sides_extras",
   "sides_amount",
+  "sides_free",
+  "sides_free_by",
+  "sides_free_value",
   "notes",
   "course",
   "hold",
@@ -151,6 +154,33 @@
    "description": "Per dish."
   },
   {
+   "fieldname": "sides_free",
+   "fieldtype": "Check",
+   "label": "Extra Portions Free",
+   "read_only": 1,
+   "default": "0",
+   "no_copy": 1,
+   "description": "Given free by a manager's approval or within the free extras limit; stock is still issued."
+  },
+  {
+   "fieldname": "sides_free_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Extra Portions Free By",
+   "read_only": 1,
+   "no_copy": 1,
+   "depends_on": "sides_free"
+  },
+  {
+   "fieldname": "sides_free_value",
+   "fieldtype": "Currency",
+   "label": "Free Extra Portions Value",
+   "read_only": 1,
+   "no_copy": 1,
+   "depends_on": "sides_free",
+   "description": "Per dish, at the extra price."
+  },
+  {
    "fieldname": "notes",
    "fieldtype": "Small Text",
    "label": "Kitchen Note"
@@ -229,7 +259,7 @@
  "is_submittable": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-24 14:00:00.000000",
+ "modified": "2026-11-26 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order Item",

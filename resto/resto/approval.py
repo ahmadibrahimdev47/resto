@@ -42,6 +42,7 @@ ACTIONS = {
 	"staff_advance": "Staff advance from the drawer above the limit",
 	"drawer_cash_in": "Cash into the drawer",
 	"cash_drop": "Cash drop to the main safe",
+	"free_extra": "Free extra portions above the limit",
 }
 
 

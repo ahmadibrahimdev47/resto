@@ -1,10 +1,10 @@
-"""Control report: voided items, discounts, cancelled orders and cancelled invoices."""
+"""Control report: voided items, discounts, free extras, cancelled orders and cancelled invoices."""
 
 import frappe
 from frappe import _
 from frappe.utils import flt
 
-from resto.resto.report_utils import prepare_filters
+from resto.resto.report_utils import cost_by_invoice_row, prepare_filters
 
 
 def execute(filters=None):
@@ -13,6 +13,7 @@ def execute(filters=None):
 	return {
 		"Voided Items": voided_items,
 		"Discounts": discounts,
+		"Free Extras": free_extras,
 		"Cancelled Orders": cancelled_orders,
 		"Cancelled Invoices": cancelled_invoices,
 	}[kind](filters)
@@ -89,6 +90,46 @@ def discounts(filters):
 	summary = [
 		{"label": _("Discounted Bills"), "value": len(data), "datatype": "Int"},
 		{"label": _("Total Discount"), "value": sum(flt(d.discount) for d in data), "datatype": "Currency", "indicator": "Orange"},
+	]
+	return columns, data, None, None, summary
+
+
+def free_extras(filters):
+	"""Extra portions given free (D-253): billed at no price with the stock issued, so their value
+	at the extra price is income given away and their cost is food given away."""
+	data = frappe.db.sql(
+		"""
+		select si.name as sales_invoice, si.posting_date as date, si.resto_order, si.resto_table,
+			sii.name as row_name, sii.item_code, sii.description, sii.qty, sii.resto_free_value as value,
+			sii.resto_free_by as given_by, si.owner as cashier
+		from `tabSales Invoice Item` sii join `tabSales Invoice` si on si.name = sii.parent
+		where si.docstatus = 1 and si.is_return = 0 and sii.resto_free_extra = 1 and si.company = %(company)s
+			and si.posting_date between %(from_date)s and %(to_date)s
+		order by si.posting_date, si.name, sii.idx
+		""",
+		filters,
+		as_dict=True,
+	)
+	costs = cost_by_invoice_row(filters) if data else {}
+	for d in data:
+		d.cost = flt(costs.get(d.pop("row_name")))
+	columns = [
+		{"fieldname": "date", "label": _("Date"), "fieldtype": "Date", "width": 100},
+		link("sales_invoice", _("Sales Invoice"), "Sales Invoice"),
+		link("resto_order", _("Order"), "Resto Order"),
+		link("resto_table", _("Table", context="Resto"), "Resto Table", 80),
+		link("item_code", _("Item"), "Item"),
+		{"fieldname": "description", "label": _("Description"), "fieldtype": "Data", "width": 200},
+		{"fieldname": "qty", "label": _("Qty"), "fieldtype": "Float", "width": 70},
+		{"fieldname": "value", "label": _("Value at Price"), "fieldtype": "Currency", "width": 110},
+		{"fieldname": "cost", "label": _("Value at Cost"), "fieldtype": "Currency", "width": 110},
+		link("given_by", _("Given By"), "User"),
+		link("cashier", _("Cashier"), "User"),
+	]
+	summary = [
+		{"label": _("Free Extra Lines"), "value": len(data), "datatype": "Int"},
+		{"label": _("Value at Price"), "value": sum(flt(d.value) for d in data), "datatype": "Currency", "indicator": "Orange"},
+		{"label": _("Value at Cost"), "value": sum(flt(d.cost) for d in data), "datatype": "Currency", "indicator": "Red"},
 	]
 	return columns, data, None, None, summary
 

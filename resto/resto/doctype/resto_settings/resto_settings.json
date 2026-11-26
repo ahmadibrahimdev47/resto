@@ -41,6 +41,7 @@
   "salary_account",
   "allow_side_changes",
   "charge_extra_sides",
+  "free_extras_limit",
   "show_sides_in_kitchen",
   "column_break_pos",
   "screen_refresh_seconds",
@@ -311,6 +312,14 @@
    "description": "Portions of a side above what the dish's recipe serves become their own line on the customer's invoice, at the side option's extra price; their stock and cost belong to that line. A swap for another option of the same count is not an extra. Off: extra portions are free and costed on the dish."
   },
   {
+   "fieldname": "free_extras_limit",
+   "fieldtype": "Currency",
+   "label": "Free Extras Without Approval Up To",
+   "default": "0",
+   "depends_on": "charge_extra_sides",
+   "description": "Per order, at the extra price: a cashier may give extra portions free up to this value; above it, or when it is 0, a manager's PIN is needed. Stock is still issued."
+  },
+  {
    "default": "0",
    "fieldname": "show_sides_in_kitchen",
    "fieldtype": "Check",
@@ -528,7 +537,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-27 08:10:00.000000",
+ "modified": "2026-11-26 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

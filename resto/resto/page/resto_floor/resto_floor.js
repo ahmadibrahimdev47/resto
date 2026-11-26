@@ -2981,6 +2981,31 @@ class RestoFloor {
 		if (this.order && this.order.name === name) await this.reload_lines(name);
 	}
 
+	// A line's extra portions free or charged again (D-253). The server checks the limit and the PIN.
+	async free_extras(line, free) {
+		if (!(await this.settled())) return;
+		const name = this.order.name;
+		const send = (ok) =>
+			new Promise((resolve, reject) =>
+				frappe.call({
+					method: "resto.resto.floor.set_extras_free",
+					args: { order: name, line: line.name, free: free ? 1 : 0, ...ok },
+					callback: (r) => resolve(r.message),
+					error: (r) => reject(r || {}),
+				})
+			);
+		let done = null;
+		try {
+			done = await send({});
+		} catch (r) {
+			if (r.exc_type !== "ApprovalRequired" || this.floor.roles.manager) return;
+			const ok = await ask_approval(this.floor, __("Free extra portions: {0} × {1}", [fmt_qty(line.qty), line.item_name]));
+			if (!ok) return;
+			done = await send(ok).catch(() => null);
+		}
+		if (done && this.order && this.order.name === name) await this.reload_lines(name);
+	}
+
 	line_menu(line) {
 		const sent = line.kitchen_status !== "Not Sent";
 		if (line.kitchen_status === "Void") return;
@@ -3003,6 +3028,9 @@ class RestoFloor {
 				}
 			);
 		}
+		// Its extra portions given free, or charged again (D-253): a cashier, within the limit or with a PIN.
+		const can_free = (this.floor.roles.cashier || this.floor.roles.manager) && !flt(line.billed_qty) && (line.can_free_extras || line.sides_free);
+		if (can_free) fields.unshift({ fieldname: "free_btn", fieldtype: "HTML" });
 		const d = new frappe.ui.Dialog({
 			title: esc(line.item_name),
 			fields,
@@ -3025,6 +3053,15 @@ class RestoFloor {
 				d.hide();
 				await call("update_line", { order: this.order.name, line: line.name, notes: v.notes || "", course: v.course || "", hold: v.hold ? 1 : 0 });
 				this.sides_dialog([line.name]);
+			});
+		}
+		if (can_free) {
+			d.fields_dict.free_btn.$wrapper.html(
+				`<button class="btn btn-default btn-sm">${line.sides_free ? __("Charge the Extra Again") : __("Free Extra")}</button>`
+			);
+			d.fields_dict.free_btn.$wrapper.find("button").on("click", () => {
+				d.hide();
+				this.free_extras(line, !line.sides_free);
 			});
 		}
 		if (!sent) d.set_secondary_action_label(__("Remove", null, "Resto"));

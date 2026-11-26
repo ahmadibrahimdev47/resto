@@ -214,6 +214,36 @@ SALES_INVOICE_FIELDS = {
 			"print_hide": 1,
 			"report_hide": 1,
 		},
+		# Extra portions given free (D-253): billed at no price, stock still issued; the value at
+		# the extra price and who gave it, for Resto Voids and Discounts.
+		{
+			"fieldname": "resto_free_extra",
+			"fieldtype": "Check",
+			"label": "Free Extra",
+			"insert_after": "resto_packaging",
+			"read_only": 1,
+			"hidden": 1,
+			"print_hide": 1,
+		},
+		{
+			"fieldname": "resto_free_value",
+			"fieldtype": "Currency",
+			"label": "Free Extra Value",
+			"insert_after": "resto_free_extra",
+			"read_only": 1,
+			"hidden": 1,
+			"print_hide": 1,
+		},
+		{
+			"fieldname": "resto_free_by",
+			"fieldtype": "Link",
+			"options": "User",
+			"label": "Free Extra Given By",
+			"insert_after": "resto_free_value",
+			"read_only": 1,
+			"hidden": 1,
+			"print_hide": 1,
+		},
 	],
 }
 

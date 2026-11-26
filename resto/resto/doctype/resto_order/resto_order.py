@@ -44,7 +44,7 @@ SERVER_HEADER_FIELDS = (
 # Changes that make a printed bill wrong.
 BILL_FIELDS = ("discount_amount", "service_charge_percent", "delivery_fee", "customer", "net_total")
 BILL_LINE_FIELDS = ("qty", "rate", "modifiers_amount", "sides_amount", "kitchen_status", "billed_qty")
-SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides", "sides_text", "sides_qty", "sides_extras", "sides_amount", "void_waste")
+SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides", "sides_text", "sides_qty", "sides_extras", "sides_amount", "void_waste", "sides_free", "sides_free_by", "sides_free_value")
 
 
 class RestoOrder(Document):
@@ -257,6 +257,8 @@ class RestoOrder(Document):
 					row.billed_qty = 0
 			if old and old.kitchen_status != NOT_SENT:
 				for field in LOCKED_LINE_FIELDS:
+					if field == "sides_amount" and self.flags.resto_api and row.flags.resto_free_mark:
+						continue  # marked free or charged again by floor.set_extras_free (D-253)
 					if _norm(old.get(field)) != _norm(row.get(field)):
 						frappe.throw(
 							_("Row {0}: {1} was sent to the kitchen; void it and add it again to change it").format(

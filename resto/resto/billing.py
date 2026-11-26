@@ -117,16 +117,21 @@ def build_invoice(order, lines=None):
 				food_total += qty * flt(mod["price"])
 		# Extra portions above the recipe's sides, as frozen when the line went to the kitchen: their
 		# own line at the option's extra price, deducting their own item (sides.py, D-191). Extras
-		# of a choice shared by several dishes are one line.
+		# of a choice shared by several dishes are one line. Extras given free (D-253) are their own
+		# line at no price: the stock is issued all the same, and the value is kept for the report.
+		free = cint(row.get("sides_free"))
 		for e in json.loads(row.get("sides_extras") or "{}").values():
 			extra_qty = flt(e.get("portions")) * flt(qty)
 			if extra_qty <= EPS or not flt(e.get("price")):
 				continue
-			x = extras.setdefault((e["item"], flt(e["price"]), e.get("set") or row.name), {"qty": 0, "name": e.get("name") or e["item"], "dishes": []})
+			x = extras.setdefault(
+				(e["item"], flt(e["price"]), e.get("set") or row.name, free),
+				{"qty": 0, "name": e.get("name") or e["item"], "dishes": [], "by": row.get("sides_free_by")},
+			)
 			x["qty"] += extra_qty
 			if row.item_name not in x["dishes"]:
 				x["dishes"].append(row.item_name)
-	for (item_code, price, _key), x in extras.items():
+	for (item_code, price, _key, free), x in extras.items():
 		qty = flt(x["qty"], 6)
 		sides.check_extra_item(item_code)
 		if sides._whole(item_code) and abs(qty - round(qty)) > 1e-6:
@@ -135,9 +140,16 @@ def build_invoice(order, lines=None):
 					frappe.bold(sides._sep().join(x["dishes"])), frappe.bold(x["name"])
 				)
 			)
-		_append_item(si, item_code, qty, price, sides._t("{0} extra - {1}", x["name"], sides._sep().join(x["dishes"])))
-		prices.append(price)
-		food_total += qty * price
+		description = sides._t("{0} extra - {1}", x["name"], sides._sep().join(x["dishes"]))
+		if free:
+			description += " - " + sides._t("Free of charge")
+		_append_item(si, item_code, qty, 0 if free else price, description)
+		if free:
+			si.items[-1].resto_free_extra = 1
+			si.items[-1].resto_free_value = flt(qty * price, si.items[-1].precision("amount"))
+			si.items[-1].resto_free_by = x["by"]
+		prices.append(0 if free else price)
+		food_total += 0 if free else qty * price
 
 	# The fee goes on one invoice: the first one that is not cancelled.
 	fee_billed = bool(

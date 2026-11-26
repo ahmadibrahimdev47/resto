@@ -13,9 +13,11 @@ from erpnext.accounts.doctype.sales_invoice.sales_invoice import make_sales_retu
 from frappe.tests import IntegrationTestCase
 from frappe.utils import flt, nowdate
 
-from resto.resto import floor, sides
+from resto.resto import approval, floor, sides
+from resto.resto.report.resto_voids_and_discounts.resto_voids_and_discounts import execute as voids_report
 from resto.resto.report_utils import cost_by_invoice_row
 from resto.tests import fixtures as fx
+from resto.tests.test_floor_customers_shift import MANAGER_USER, _manager
 
 GROUP = "Test Sauces"
 RICE = "item:SIDE-RICE"
@@ -136,8 +138,10 @@ class TestSides(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		frappe.flags.pop("resto_approvals", None)
 		frappe.db.set_single_value("Resto Settings", "allow_side_changes", 0)
 		frappe.db.set_single_value("Resto Settings", "charge_extra_sides", 0)
+		frappe.db.set_single_value("Resto Settings", "free_extras_limit", 0)
 		frappe.clear_document_cache("Resto Settings", "Resto Settings")
 
 	def charge(self):
@@ -772,6 +776,126 @@ class TestSides(IntegrationTestCase):
 		finally:
 			frappe.db.set_value("Resto Side Option", row.name, "extra_price", row.extra_price)
 			frappe.clear_document_cache("Resto Side Group", GROUP)
+
+	# ------------------------------------------------------------------ free extras (D-253)
+
+	def tahini_plates(self, qty, send=True):
+		"""Plates with two tahini instead of the garlic sauce: one extra tahini per dish at 5."""
+		order = self.order_with(("DISH-PLATE", qty))
+		line = lines(order)[-1].name
+		self.change(order, [line], {GROUP: {"SAUCE-TAHINI": 2}})
+		if send:
+			floor.send_to_kitchen(order)
+		return order, line
+
+	def test_free_extras_bill_at_no_price_with_the_stock_issued(self):
+		self.charge()
+		order, line = self.tahini_plates(2)
+		floor.set_extras_free(order, line)
+		row = frappe.get_doc("Resto Order Item", line)
+		self.assertEqual((row.sides_free, row.sides_free_by), (1, "Administrator"))
+		self.assertEqual((flt(row.sides_amount), flt(row.sides_free_value)), (0, 5))
+		self.assertAlmostEqual(flt(row.amount), 240, 2)
+		self.assertIn("Free of charge", sides.extras_text(row))
+		before = bins()
+		si = self.pay(order)
+		extra = [r for r in si.items if r.item_code == "SAUCE-TAHINI"]
+		self.assertEqual(len(extra), 1)
+		self.assertEqual((flt(extra[0].qty), flt(extra[0].rate), flt(extra[0].amount)), (2, 0, 0))
+		self.assertEqual((extra[0].resto_free_extra, flt(extra[0].resto_free_value), extra[0].resto_free_by), (1, 10, "Administrator"))
+		self.assertIn(sides._t("Free of charge"), extra[0].description)
+		# The stock goes out as when it is charged: the dish's free sauce and the two extra.
+		self.assertEqual(moved(before), {"RAW-BUN": 2, "SIDE-RICE": 0.4, "SAUCE-TAHINI": 4})
+		self.assertAlmostEqual(flt(si.net_total), 240, 2)
+		self.assert_accounts_match_stock(si)
+		# No income for the free line: the income accounts hold the dishes only.
+		gl = gl_by_account(si.name)
+		self.assertAlmostEqual(-sum(gl.get(a, 0) for a in {r.income_account for r in si.items}), 240, 2)
+		costs = cost_by_invoice_row({"company": fx.COMPANY, "from_date": si.posting_date, "to_date": si.posting_date})
+		self.assertGreater(costs.get(extra[0].name, 0), 0)
+
+		# Resto Voids and Discounts: its own type, at price and at cost.
+		_c, data, _m, _ch, summary = voids_report(
+			{"company": fx.COMPANY, "from_date": si.posting_date, "to_date": si.posting_date, "type": "Free Extras"}
+		)
+		got = [d for d in data if d.sales_invoice == si.name]
+		self.assertEqual(len(got), 1)
+		self.assertEqual((got[0].item_code, flt(got[0].qty), flt(got[0].value), got[0].given_by), ("SAUCE-TAHINI", 2, 10, "Administrator"))
+		self.assertAlmostEqual(flt(got[0].cost), costs[extra[0].name], 2)
+		self.assertGreaterEqual(flt(summary[1]["value"]), 10)
+
+		# A return takes the line back at no price, with its stock.
+		ret = make_sales_return(si.name)
+		ret.insert(ignore_permissions=True)
+		ret.submit()
+		self.assertEqual(moved(before), {})
+		_c, data, *_rest = voids_report({"company": fx.COMPANY, "from_date": si.posting_date, "to_date": si.posting_date, "type": "Free Extras"})
+		self.assertFalse([d for d in data if d.sales_invoice == ret.name])
+
+	def test_free_extras_need_a_pin_above_the_limit(self):
+		_manager()
+		frappe.set_user(MANAGER_USER)
+		approval.set_my_pin("4321")
+		frappe.set_user("Administrator")
+		self.charge()
+		cashier = "cashier@resto.test"
+
+		# No limit set: always a manager's PIN, checked by the server.
+		order, line = self.tahini_plates(1)
+		frappe.set_user(cashier)
+		self.assertRaises(approval.ApprovalRequired, floor.set_extras_free, order, line)
+		self.assertRaises(approval.ApprovalRequired, floor.set_extras_free, order, line, 1, MANAGER_USER, "1111")
+		self.assertEqual(frappe.db.get_value("Resto Order Item", line, "sides_free"), 0)
+		floor.set_extras_free(order, line, 1, MANAGER_USER, "4321")
+		self.assertEqual(frappe.db.get_value("Resto Order Item", line, "sides_free_by"), MANAGER_USER)
+		# Charged again: back on the bill, no approval needed.
+		floor.set_extras_free(order, line, 0)
+		row = frappe.get_doc("Resto Order Item", line)
+		self.assertEqual((row.sides_free, row.sides_free_by, flt(row.sides_amount), flt(row.amount)), (0, None, 5, 125))
+		frappe.set_user("Administrator")
+		frappe.flags.pop("resto_approvals", None)
+
+		# Within the limit per order the cashier gives them; above it, the PIN again.
+		frappe.db.set_single_value("Resto Settings", "free_extras_limit", 12)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		order, line = self.tahini_plates(2)
+		frappe.set_user(cashier)
+		floor.set_extras_free(order, line)
+		self.assertEqual(frappe.db.get_value("Resto Order Item", line, "sides_free_by"), cashier)
+		frappe.set_user("Administrator")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-PLATE", "qty": 1}]))
+		second = lines(order)[-1].name
+		self.change(order, [second], {GROUP: {"SAUCE-TAHINI": 2}})
+		frappe.set_user(cashier)
+		self.assertRaises(approval.ApprovalRequired, floor.set_extras_free, order, second)  # 10 + 5 > 12
+		frappe.set_user("Administrator")
+
+		# The mark is the server's own: a form or REST save cannot set it.
+		doc = frappe.get_doc("Resto Order", order)
+		doc.items[-1].sides_free = 1
+		doc.items[-1].sides_amount = 0
+		doc.save(ignore_permissions=True)
+		row = frappe.get_doc("Resto Order Item", second)
+		self.assertEqual((row.sides_free, flt(row.sides_amount)), (0, 5))
+
+		# An unsent line given free loses the mark when its quantity changes (the value changes).
+		frappe.db.set_single_value("Resto Settings", "free_extras_limit", 100)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		floor.set_extras_free(order, second)
+		self.assertEqual(frappe.db.get_value("Resto Order Item", second, "sides_free"), 1)
+		floor.update_line(order, second, qty=2)
+		row = frappe.get_doc("Resto Order Item", second)
+		self.assertEqual((row.sides_free, flt(row.sides_amount)), (0, 5))
+
+	def test_free_extras_only_on_a_line_with_charged_extras(self):
+		self.charge()
+		order = self.order_with(("DISH-PLATE", 1))
+		line = lines(order)[0].name
+		self.assertRaises(frappe.ValidationError, floor.set_extras_free, order, line)
+		# Extras shared by several dishes are one bill line: not given free one dish at a time.
+		order, plate, grill = self.shared_pair(3)
+		for shared in (plate, grill):
+			self.assertRaises(frappe.ValidationError, floor.set_extras_free, order, shared)
 
 	def test_recipe_side_in_another_portion_is_not_charged(self):
 		self.charge()
