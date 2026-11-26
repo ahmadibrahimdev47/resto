@@ -40,6 +40,8 @@ STANDARD_PERMISSIONS = {
 	# Cash purchases from the drawer (D-225): the manager picks the cash supplier and opens the invoice.
 	"Supplier": {MANAGER: ["select"]},
 	"Purchase Invoice": {MANAGER: ["read"]},
+	# The restaurant sidebar's Journal Entries (D-259): the manager opens them; posting one needs ERPNext's accounts roles.
+	"Journal Entry": {MANAGER: ["read"]},
 	# The weekly stock count (D-244): the manager counts and posts it (the difference goes to the
 	# company's Stock Adjustment Account), without Stock Manager, which opens items, warehouses and
 	# stock settings. Not the kitchen: a count carries the stock's value (D-242).

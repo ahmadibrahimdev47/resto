@@ -179,6 +179,31 @@ def shown_links(user):
 	return {i.get("link_to") for i in (sidebar.items if sidebar else []) if i.get("type") == "Link"}
 
 
+class TestJournalEntriesForTheManager(IntegrationTestCase):
+	"""Journal Entries in the restaurant sidebar, after Monthly Salaries, for the manager (D-259)."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		cls.users = {role: user_with(role) for role in (*FLOOR_ROLES, "Resto Manager")}
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+
+	def test_the_manager_sees_and_reads_them_the_floor_does_not(self):
+		names = [i.get("link_to") for i in links()]
+		self.assertEqual(names[names.index("Resto Salary Entry") + 1], "Journal Entry")
+		manager = self.users["Resto Manager"]
+		self.assertIn("Journal Entry", shown_links(manager))
+		self.assertTrue(frappe.has_permission("Journal Entry", "read", user=manager))
+		self.assertFalse(frappe.has_permission("Journal Entry", "create", user=manager))
+		for role in FLOOR_ROLES:
+			with self.subTest(role=role):
+				self.assertNotIn("Journal Entry", shown_links(self.users[role]))
+				self.assertFalse(frappe.has_permission("Journal Entry", "read", user=self.users[role]))
+
+
 class TestWorkersForTheManager(IntegrationTestCase):
 	"""The manager keeps the workers' records from the restaurant sidebar (D-238): read, write and
 	create on Employee, without HR User. The floor roles neither see nor read them; the cashier
