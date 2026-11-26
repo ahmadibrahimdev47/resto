@@ -10,7 +10,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import flt, nowdate
 
-from resto.resto import approval, floor, kitchen, shift, staff_meal
+from resto.resto import approval, floor, kitchen, shift, staff_meal, units
 from resto.tests import fixtures as fx
 from resto.tests.test_floor_customers_shift import CASHIER, MANAGER_USER, WAITER_USER, _manager
 from resto.tests.test_sides import GROUP, RICE, setup_sides
@@ -290,3 +290,110 @@ class TestStaffMeal(IntegrationTestCase):
 		self.assertRaises(frappe.PermissionError, floor.add_items, order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1}]))
 		frappe.set_user(CASHIER)
 		self.assertEqual(len(frappe.get_doc("Resto Order", order).items), 1)
+
+
+def small_unit(case, code, stock_uom, small_uom):
+	"""An item by the kilo or litre that converts to grams or millilitres (the site's own conversion,
+	or an item row where the site has none)."""
+	from erpnext.stock.get_item_details import get_conversion_factor
+
+	for unit in (stock_uom, small_uom):
+		if not frappe.db.exists("UOM", unit):
+			fx.doc("UOM", unit, uom_name=unit)
+	code = fx.item(code, stock_uom, group="Resto Raw", valuation=40).name
+	if not flt((get_conversion_factor(code, small_uom) or {}).get("conversion_factor")):
+		item = frappe.get_doc("Item", code)
+		item.append("uoms", {"uom": small_uom, "conversion_factor": 0.001})
+		item.save(ignore_permissions=True)
+	case.assertEqual(flt((get_conversion_factor(code, small_uom) or {}).get("conversion_factor")), 0.001)
+	return code
+
+
+class TestTypedInRecipeUnits(IntegrationTestCase):
+	"""A free ingredient and a waste row are typed in grams and millilitres, kept in the stock unit (D-250)."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		fx.ensure_setup()
+		_manager()
+		frappe.db.commit()
+
+	def setUp(self):
+		frappe.set_user("Administrator")
+		frappe.flags.pop("resto_approvals", None)
+		self.cheese = small_unit(self, "RAW-CHEESE", "Kg", "Gram")
+		self.milk = small_unit(self, "STAFF-MILK", "Litre", "Millilitre")
+		fx.receive(fx.KITCHEN, [(self.milk, 5, 40)])
+		fields = ("require_pos_shift", "blind_shift_count", "staff_meal_account")
+		self._kept = {f: frappe.db.get_single_value("Resto Settings", f) for f in fields}
+		frappe.db.set_single_value("Resto Settings", {"require_pos_shift": 0, "blind_shift_count": 0, "staff_meal_account": staff_account()})
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.db.sql("update `tabResto Shift` set status = 'Closed' where status = 'Open'")
+		frappe.set_user(CASHIER)
+		shift.open_shift(json.dumps({"Cash": 500}))
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_single_value("Resto Settings", self._kept)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		frappe.flags.pop("resto_approvals", None)
+
+	def line(self, order, item_code):
+		return next(r for r in frappe.get_doc("Resto Order", order).staff_items if r.item_code == item_code)
+
+	def test_the_dialog_offers_the_recipe_unit_first(self):
+		got = units.item_units(self.cheese)
+		self.assertEqual((got["stock_uom"], got["default"]), ("Kg", "Gram"))
+		self.assertEqual({u["uom"]: u["factor"] for u in got["units"]}["Gram"], 0.001)
+		self.assertEqual(got["units"][0]["uom"], "Gram")
+		self.assertEqual(units.item_units("RAW-BUN")["default"], "Nos")
+
+	def test_a_free_ingredient_in_grams_millilitres_or_whole_units(self):
+		order = staff_meal.create(staff_for="Typed units")
+		staff_meal.set_item(order, self.cheese, 20, uom="Gram")
+		row = self.line(order, self.cheese)
+		self.assertEqual((flt(row.qty, 6), row.uom), (0.02, "Kg"))
+		# Judged on the stock quantity: 20 g of cheese is usual, 500 g (0.5 Kg, over ten dishes) is not.
+		self.assertRaises(approval.ApprovalRequired, staff_meal.set_item, order, self.cheese, 500, uom="Gram")
+		self.assertRaises(approval.ApprovalRequired, staff_meal.set_item, order, self.milk, 250, uom="Millilitre")
+		frappe.set_user(MANAGER_USER)
+		approval.set_my_pin("4321")
+		frappe.set_user(CASHIER)
+		staff_meal.set_item(order, self.milk, 250, MANAGER_USER, "4321", "Millilitre")
+		row = self.line(order, self.milk)
+		self.assertEqual((flt(row.qty, 6), row.uom), (0.25, "Litre"))
+		staff_meal.set_item(order, "RAW-BUN", 2, uom="Nos")
+		self.assertEqual(flt(self.line(order, "RAW-BUN").qty), 2)
+		# No conversion: refused, nothing changed.
+		self.assertRaises(frappe.ValidationError, staff_meal.set_item, order, "RAW-BUN", 20, uom="Gram")
+		self.assertEqual(flt(self.line(order, "RAW-BUN").qty), 2)
+		# The stock issue stays in the stock unit.
+		result = staff_meal.post(order)
+		issued = {d.item_code: (flt(d.qty, 6), d.uom) for d in frappe.get_doc("Stock Entry", result["stock_entry"]).items}
+		self.assertEqual(issued[self.cheese], (0.02, "Kg"))
+		self.assertEqual(issued[self.milk], (0.25, "Litre"))
+		self.assertEqual(issued["RAW-BUN"], (2, "Nos"))
+
+	def test_a_waste_row_in_grams(self):
+		frappe.set_user("Administrator")
+		doc = frappe.get_doc(
+			{
+				"doctype": "Resto Waste",
+				"company": fx.COMPANY,
+				"items": [
+					{"item_code": self.cheese, "entered_qty": 20, "entered_uom": "Gram", "reason": "Spoiled"},
+					{"item_code": self.milk, "entered_qty": 300, "entered_uom": "Millilitre", "reason": "Spoiled"},
+					{"item_code": "RAW-BUN", "qty": 3, "reason": "Dropped"},
+				],
+			}
+		).insert(ignore_permissions=True)
+		rows = {r.item_code: r for r in doc.items}
+		self.assertEqual((flt(rows[self.cheese].qty, 6), rows[self.cheese].uom), (0.02, "Kg"))
+		self.assertEqual(flt(rows[self.milk].qty, 6), 0.3)
+		# A row made in the stock unit shows it as typed.
+		self.assertEqual((flt(rows["RAW-BUN"].entered_qty), rows["RAW-BUN"].entered_uom), (3, "Nos"))
+		bad = frappe.get_doc(
+			{"doctype": "Resto Waste", "company": fx.COMPANY, "items": [{"item_code": "RAW-BUN", "entered_qty": 5, "entered_uom": "Gram", "reason": "Dropped"}]}
+		)
+		self.assertRaises(frappe.ValidationError, bad.insert, ignore_permissions=True)

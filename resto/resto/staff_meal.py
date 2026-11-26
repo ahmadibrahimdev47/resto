@@ -135,8 +135,9 @@ def _free_item(item_code):
 
 
 @frappe.whitelist(methods=["POST"])
-def set_item(order, item_code, qty, approver=None, pin=None):
-	"""Set a free ingredient of a staff meal to qty (its stock unit); 0 takes it off."""
+def set_item(order, item_code, qty, approver=None, pin=None, uom=None):
+	"""Set a free ingredient of a staff meal to qty, typed in uom (a recipe unit such as Gram, D-250)
+	or else in its stock unit, and kept in the stock unit; 0 takes it off."""
 	require_role(CASHIER)
 	_own_shift()
 	doc = _staff_order(order)
@@ -149,6 +150,10 @@ def set_item(order, item_code, qty, approver=None, pin=None):
 			doc.remove(row)
 		return _view(_save(doc))
 	item = _free_item(item_code)
+	if uom and uom != item.stock_uom:
+		from resto.resto.units import to_stock
+
+		qty = to_stock(item_code, qty, uom)
 	if _whole(item_code):
 		if abs(qty - round(qty)) > 1e-9:
 			frappe.throw(_("{0} is counted in whole units ({1})").format(frappe.bold(item.item_name), _(item.stock_uom)))

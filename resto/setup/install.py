@@ -22,6 +22,8 @@ STANDARD_PERMISSIONS = {
 	"Employee": {CASHIER: ["select"], MANAGER: ["select", "read", "write", "create"]},
 	"Gender": {MANAGER: ["select"]},
 	"Designation": {MANAGER: ["select"]},
+	# A waste row is typed in a unit the item converts to (D-250): the kitchen links the unit.
+	"UOM": {KITCHEN: ["select"]},
 	# The Employee form reads HR Settings on load and on save (hrms): read only, none of its settings
 	# change (D-248).
 	"HR Settings": {MANAGER: ["read"]},

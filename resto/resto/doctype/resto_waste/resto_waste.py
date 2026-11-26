@@ -29,9 +29,20 @@ class RestoWaste(Document):
 
 		total = 0
 		for row in self.items:
+			item = frappe.get_cached_value("Item", row.item_code, ["item_name", "stock_uom", "is_stock_item"], as_dict=True)
+			if not item:
+				frappe.throw(_("Row {0}: Item {1} does not exist").format(row.idx, frappe.bold(row.item_code)))
+			# Typed in a recipe unit (grams for a kilo item, D-250), kept in the stock unit; a row made
+			# by the system in the stock unit shows it as typed.
+			if flt(row.entered_qty) > 0:
+				from resto.resto.units import to_stock
+
+				row.entered_uom = row.entered_uom or item.stock_uom
+				row.qty = to_stock(row.item_code, row.entered_qty, row.entered_uom)
+			elif flt(row.qty) > 0:
+				row.entered_qty, row.entered_uom = row.qty, item.stock_uom
 			if flt(row.qty) <= 0:
 				frappe.throw(_("Row {0}: quantity must be more than zero").format(row.idx))
-			item = frappe.get_cached_value("Item", row.item_code, ["item_name", "stock_uom", "is_stock_item"], as_dict=True)
 			row.item_name = item.item_name
 			row.uom = item.stock_uom
 			if not item.is_stock_item and not _bundle(row.item_code):

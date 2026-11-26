@@ -1359,11 +1359,21 @@ class RestoFloor {
 		d.show();
 	}
 
-	// A free ingredient of a staff meal: any stock item, in its stock unit. An unusual quantity
-	// (grams typed as kilos) needs a manager's PIN.
+	// A free ingredient of a staff meal: any stock item, typed in a recipe unit (grams for an item
+	// stocked by the kilo, millilitres by the litre, D-250) or another unit it converts to; kept in
+	// its stock unit. An unusual quantity needs a manager's PIN.
 	staff_item() {
 		const o = this.order;
-		let uom = "";
+		let info = null;
+		const factor = () => {
+			const u = info && info.units.find((x) => x.uom === d.get_value("uom"));
+			return u ? flt(u.factor) : 0;
+		};
+		const in_stock = () => flt(flt(d.get_value("qty")) * factor(), info ? info.precision : 3);
+		const hint = () => {
+			const same = !info || d.get_value("uom") === info.stock_uom;
+			d.set_df_property("qty", "description", same || !flt(d.get_value("qty")) ? "" : `= ${fmt_stock_qty(in_stock())} ${esc(__(info.stock_uom))}`);
+		};
 		const d = new frappe.ui.Dialog({
 			title: __("Free Ingredient"),
 			fields: [
@@ -1376,24 +1386,31 @@ class RestoFloor {
 					get_query: () => ({ filters: { is_stock_item: 1, disabled: 0, has_variants: 0 } }),
 					onchange: () => {
 						const code = d.get_value("item_code");
-						uom = "";
-						d.set_df_property("qty", "description", "");
+						info = null;
+						d.set_df_property("uom", "options", "");
+						d.set_value("uom", "");
+						hint();
 						if (!code) return;
-						frappe.db.get_value("Item", code, "stock_uom").then((r) => {
-							uom = (r.message || {}).stock_uom || "";
-							if (code === d.get_value("item_code")) d.set_df_property("qty", "description", __("In {0}", [esc(__(uom))]));
+						frappe.xcall("resto.resto.units.item_units", { item_code: code }).then((r) => {
+							if (code !== d.get_value("item_code")) return;
+							info = r;
+							d.set_df_property("uom", "options", r.units.map((u) => ({ value: u.uom, label: __(u.uom) })));
+							d.set_value("uom", r.default);
+							hint();
 						});
 					},
 				},
-				{ fieldname: "qty", fieldtype: "Float", label: __("Qty (stock unit)"), reqd: 1 },
+				{ fieldname: "qty", fieldtype: "Float", label: __("Qty"), reqd: 1, onchange: () => hint() },
+				{ fieldname: "uom", fieldtype: "Select", label: __("Unit"), reqd: 1, options: "", onchange: () => hint() },
 			],
 			primary_action_label: __("Add", null, "Resto"),
 			primary_action: async (v) => {
+				if (!info) return;
 				const send = (ok) =>
 					new Promise((resolve, reject) =>
 						frappe.call({
 							method: "resto.resto.staff_meal.set_item",
-							args: { order: o.name, item_code: v.item_code, qty: v.qty, ...ok },
+							args: { order: o.name, item_code: v.item_code, qty: v.qty, uom: v.uom, ...ok },
 							callback: (r) => resolve(r.message),
 							error: (r) => reject(r || {}),
 						})
@@ -1403,7 +1420,7 @@ class RestoFloor {
 					done = await send({});
 				} catch (r) {
 					if (r.exc_type !== "ApprovalRequired" || this.floor.roles.manager) return;
-					const ok = await ask_approval(this.floor, __("Staff meal: {0} {1} of {2}", [fmt_stock_qty(v.qty), __(uom), v.item_code]));
+					const ok = await ask_approval(this.floor, __("Staff meal: {0} {1} of {2}", [fmt_stock_qty(in_stock()), __(info.stock_uom), v.item_code]));
 					if (!ok) return;
 					done = await send(ok).catch(() => null);
 				}
