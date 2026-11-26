@@ -1523,16 +1523,18 @@ class RestoFloor {
 		]);
 	}
 
-	// The user button's menu (D-214).
+	// The user button's menu (D-214), in two columns (D-266): the drawer's money on one side, the
+	// screens, the shift and the PINs on the other; logging out last, apart.
 	user_menu() {
 		const f = this.floor;
 		const r = f.roles;
 		const s = f.shift || {};
-		const acts = [];
+		const drawer = [];
+		const views = [];
 		if (r.cashier || r.manager) {
-			acts.push([__("Invoices", null, "Resto"), () => this.invoices()]);
+			views.push([__("Invoices", null, "Resto"), () => this.invoices()]);
 			if (s.shift) {
-				acts.push(
+				drawer.push(
 					[__("Staff Meal", null, "Resto"), () => this.new_staff_meal()],
 					[__("Collect Debt"), () => this.collect_debt()],
 					[__("Drawer Expense"), () => this.drawer_expense()],
@@ -1542,37 +1544,45 @@ class RestoFloor {
 				);
 			}
 			// Also right after the close: the counted cash taken to the safe (D-245).
-			acts.push([__("Cash Drop to the Main Safe"), () => this.cash_drop()]);
+			drawer.push([__("Cash Drop to the Main Safe"), () => this.cash_drop()]);
 		}
-		// The lock screen only when Resto Settings turns it on (D-216); a manager's approval PIN always.
-		if (f.screen_lock) acts.push([`${ICON.lock}<span>${__("Lock Screen")}</span>`, () => this.lock()]);
-		if (r.manager) acts.push([__("My Approval PIN"), () => this.set_my_pin("approve")]);
-		if (f.screen_lock) acts.push([r.manager ? __("My Lock PIN") : __("My PIN"), () => this.set_my_pin("lock")]);
-		acts.push([__("Kitchen Display"), () => frappe.set_route("resto-kitchen")]);
+		views.push([__("Kitchen Display"), () => frappe.set_route("resto-kitchen")]);
 		if (r.cashier || r.manager) {
 			// What the drawer and each method should hold now, without closing (D-262).
-			if (s.shift) acts.push([__("Shift Summary Now"), () => this.shift_summary()]);
-			acts.push(s.shift ? [__("Close Shift"), () => this.close_shift()] : [__("Open Shift"), () => this.open_shift()]);
+			if (s.shift) views.push([__("Shift Summary Now"), () => this.shift_summary()]);
+			views.push(s.shift ? [__("Close Shift"), () => this.close_shift()] : [__("Open Shift"), () => this.open_shift()]);
 		}
-		acts.push([
+		// The lock screen only when Resto Settings turns it on (D-216); a manager's approval PIN always.
+		if (f.screen_lock) views.push([`${ICON.lock}<span>${__("Lock Screen")}</span>`, () => this.lock()]);
+		if (r.manager) views.push([__("My Approval PIN"), () => this.set_my_pin("approve")]);
+		if (f.screen_lock) views.push([r.manager ? __("My Lock PIN") : __("My PIN"), () => this.set_my_pin("lock")]);
+		const out = [
 			__("Log out"),
 			() =>
 				frappe.confirm(__("Log out of this device?"), async () => {
 					if (this.order && !(await this.settled())) return;
 					this.sign_out((msg) => frappe.msgprint(msg));
 				}),
-		]);
-		this.menu_dialog(`${esc(f.user_name)}${this.role_label() ? ` · ${esc(this.role_label())}` : ""}`, acts);
+			"rf-menu-out",
+		];
+		this.menu_dialog(`${esc(f.user_name)}${this.role_label() ? ` · ${esc(this.role_label())}` : ""}`, { cols: [drawer, views], foot: [out] });
 	}
 
+	// acts: a list of [label, action, class], or {cols: [list, list], foot: list} for a menu in two
+	// columns (one on a phone) with its last buttons under both (D-266).
 	menu_dialog(title, acts) {
-		const d = new frappe.ui.Dialog({ title, fields: [{ fieldname: "html", fieldtype: "HTML" }] });
+		const grouped = !Array.isArray(acts);
+		const cols = grouped ? acts.cols.filter((c) => c.length) : [acts];
+		const all = [...cols.flat(), ...(grouped ? acts.foot || [] : [])];
+		const two = cols.length > 1;
+		const d = new frappe.ui.Dialog({ title, size: two ? "large" : undefined, fields: [{ fieldname: "html", fieldtype: "HTML" }] });
 		d.$wrapper.on("hidden.bs.modal", () => setTimeout(() => d.$wrapper.remove(), 0));
-		d.fields_dict.html.$wrapper.html(
-			`<div class="rf-root rf-mdlg"><div class="rf-menu-list">${acts
-				.map((a, i) => `<button class="rf-btn rf-menu-btn ${a[2] || ""}" data-i="${i}">${a[0]}</button>`)
-				.join("")}</div></div>`
-		);
+		let n = 0;
+		const btns = (list) => list.map((a) => `<button class="rf-btn rf-menu-btn ${a[2] || ""}" data-i="${n++}">${a[0]}</button>`).join("");
+		const body = cols.map((c) => `<div class="rf-menu-list">${btns(c)}</div>`).join("");
+		const foot = grouped && (acts.foot || []).length ? `<div class="rf-menu-foot">${btns(acts.foot)}</div>` : "";
+		d.fields_dict.html.$wrapper.html(`<div class="rf-root rf-mdlg">${two ? `<div class="rf-menu-cols">${body}</div>` : body}${foot}</div>`);
+		acts = all;
 		d.fields_dict.html.$wrapper.find("button").on("click", (e) => {
 			d.hide();
 			acts[$(e.currentTarget).attr("data-i")][1]();
@@ -4252,6 +4262,10 @@ class RestoFloor {
 		.rf-menu-list { display:flex; flex-direction:column; gap:8px; }
 		.rf-menu-btn { width:100%; justify-content:flex-start; min-height:48px; }
 		.rf-menu-btn.rf-danger { color:var(--rf-red-ink); border-color:var(--rf-red-soft); margin-top:8px; }
+		.rf-menu-cols { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; align-items:start; }
+		.rf-menu-foot { margin-top:12px; padding-top:12px; border-top:1px solid var(--rf-line, #e5e7eb); }
+		.rf-menu-out { color:var(--rf-red-ink); }
+		@media (max-width: 575px) { .rf-menu-cols { grid-template-columns:1fr; } }
 		.rf-acting [data-act] { opacity:.6; pointer-events:none; }
 		.rf-unsent { display:inline-flex; align-self:flex-start; height:22px; align-items:center; padding:0 8px; border-radius:999px; font-size:12px; font-weight:700;
 			background:var(--rf-acc-soft); color:var(--rf-acc-ink); }
