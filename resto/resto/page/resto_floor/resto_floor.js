@@ -235,6 +235,7 @@ const ICON = {
 	tag: svg('<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>'),
 	gift: svg('<rect x="3" y="8" width="18" height="5" rx="1"/><path d="M5 13v8h14v-8M12 8v13"/><path d="M12 8c-2-4-6-4-6-1.5S9 8 12 8c3 0 6 .5 6-1.5S14 4 12 8z"/>'),
 	swap: svg('<path d="M7 4L3 8l4 4"/><path d="M3 8h14"/><path d="M17 20l4-4-4-4"/><path d="M21 16H7"/>'),
+	served: svg('<path d="M4 12l5 5L20 6"/>'),
 };
 // Minutes as "38 min" or "1 h 05 min".
 const dur = (minutes) => {
@@ -1217,9 +1218,18 @@ class RestoFloor {
 						t.paid.eating
 							? __("Order {0} is paid and its dishes are served: the guests are eating. Free the table when they leave.", [esc(t.paid.name)])
 							: __("Order {0} is paid, and {1} dish(es) are not served yet. Free the table when the guests leave.", [esc(t.paid.name), t.paid.waiting])
-					}</p>`,
+					}</p>${
+						t.paid.ready && (r.waiter || r.cashier || r.manager)
+							? `<div class="rf-root rf-mdlg"><button type="button" class="rf-btn rf-pt-serve" data-serve>${ICON.served}<span>${__("Mark Served")} · ${__("{0} ready at the pass", [t.paid.ready])}</span></button></div>`
+							: ""
+					}`,
 				},
 			],
+		});
+		d.fields_dict.html.$wrapper.find("[data-serve]").on("click", async () => {
+			d.hide();
+			await call("mark_served", { order: t.paid.name }, true);
+			this.refresh();
 		});
 		if (r.cashier || r.host || r.waiter || r.manager) {
 			d.set_primary_action(__("Free the Table"), async () => {
@@ -3210,10 +3220,13 @@ class RestoFloor {
 		const can_discount =
 			(this.floor.roles.cashier || this.floor.roles.manager) && !flt(line.billed_qty) && !this.order.staff_meal && flt(line.rate) + flt(line.modifiers_amount) > 0;
 		const can_sides = !sent && this.order.sides_enabled && line.has_sides;
+		// A ready dish the waiter took to the table (D-277): its ticket is served from here.
+		const can_serve = line.kitchen_status === "Ready" && line.ticket && (this.floor.roles.waiter || this.floor.roles.cashier || this.floor.roles.manager);
 		// The line's actions (D-275): real buttons, together at the top, each with its icon and colour;
 		// filled when it is in force (a discount given, extras given free).
 		const pct = flt(line.line_discount_percentage);
 		const acts = [
+			can_serve && ["served", "rf-la-served", 0, ICON.served, __("Mark Served")],
 			can_discount && ["disc", "rf-la-disc", pct, ICON.tag, pct >= 100 ? __("Free of charge") : pct ? __("Item Discount {0}%", [flt(pct, 2)]) : __("Item Discount")],
 			can_free && ["free", "rf-la-free", line.sides_free, ICON.gift, line.sides_free ? __("Charge the Extra Again") : __("Free Extra")],
 			can_sides && ["sides", "rf-la-sides", 0, ICON.swap, __("Change Sides")],
@@ -3234,6 +3247,11 @@ class RestoFloor {
 		});
 		if (acts.length) {
 			const run = {
+				served: async () => {
+					d.hide();
+					await call("mark_served", { order: this.order.name, ticket: line.ticket }, true);
+					if (this.order) await this.reload_lines(this.order.name);
+				},
 				disc: () => {
 					d.hide();
 					this.line_discount(line);
@@ -4428,6 +4446,9 @@ class RestoFloor {
 		.rf-la-free { border-color:var(--rf-green); color:var(--rf-green-ink); }
 		.rf-la-free.rf-la-on { background:var(--rf-green); border-color:var(--rf-green); color:#fff; }
 		.rf-la-sides { border-color:var(--rf-blue); color:var(--rf-blue-ink); }
+		.rf-la-served { border-color:var(--rf-green); background:var(--rf-green); color:#fff; }
+		.rf-pt-serve { width:100%; min-height:48px; margin-top:4px; border-width:2px; border-color:var(--rf-green); color:var(--rf-green-ink); }
+		.rf-pt-serve svg { width:20px; height:20px; }
 		@media (max-width: 575px) { .rf-menu-cols { grid-template-columns:1fr; } }
 		.rf-acting [data-act] { opacity:.6; pointer-events:none; }
 		.rf-unsent { display:inline-flex; align-self:flex-start; height:22px; align-items:center; padding:0 8px; border-radius:999px; font-size:12px; font-weight:700;

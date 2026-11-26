@@ -278,6 +278,7 @@ class RestoKitchen {
 								<div class="rk-sub">${t.ticket_type === "Void" ? `<b>${__("VOID")}</b> · ` : ""}${esc(t.station || "")} · ${__(t.status, null, "Resto")} · ${esc(frappe.datetime.str_to_user(t.sent_at).split(" ").pop() || "")}</div>
 								<div class="rk-daydish">${esc((t.dishes || []).join("، "))}</div></div>
 							<div class="rk-dayact"><button class="btn btn-default btn-sm" data-dprint>${__("Print", null, "Resto")}</button>
+								${t.ticket_type === "Order" && t.status === "Ready" ? `<button class="btn btn-success btn-sm" data-dserve>${__("Served")}</button>` : ""}
 								${back ? `<button class="btn btn-default btn-sm" data-dback>${__("Recall")}</button>` : ""}</div>
 						</div>`;
 					})
@@ -294,6 +295,18 @@ class RestoKitchen {
 					.xcall("resto.resto.kitchen.kds_recall", { ticket: btn.closest(".rk-dayrow").attr("data-name") })
 					.then(() => {
 						frappe.show_alert({ message: __("Back on the board"), indicator: "green" });
+						this.refresh();
+						load(true);
+					})
+					.catch(() => btn.prop("disabled", false));
+			});
+			// A ready ticket nobody marked served leaves the board after two hours; it is served here (D-277).
+			$list.find("[data-dserve]").on("click", (e) => {
+				const btn = $(e.currentTarget).prop("disabled", true);
+				frappe
+					.xcall("resto.resto.kitchen.kds_set_status", { ticket: btn.closest(".rk-dayrow").attr("data-name"), status: "Served" })
+					.then(() => {
+						frappe.show_alert({ message: __("Served"), indicator: "green" });
 						this.refresh();
 						load(true);
 					})

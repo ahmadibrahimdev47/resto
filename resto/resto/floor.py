@@ -240,7 +240,8 @@ def _paid_waiting(now):
 	PAID_WAIT_HOURS. Paid after every dish was served, the table frees at once."""
 	rows = frappe.db.sql(
 		"""select o.name, o.resto_table, o.guests, o.closed_at,
-			sum(case when i.kitchen_status in ('Served', 'Void') then 0 else 1 end) as waiting
+			sum(case when i.kitchen_status in ('Served', 'Void') then 0 else 1 end) as waiting,
+			sum(case when i.kitchen_status = 'Ready' then 1 else 0 end) as ready
 		from `tabResto Order` o join `tabResto Order Item` i on i.parent = o.name and i.parenttype = 'Resto Order'
 		where o.status = 'Paid' and o.order_type = 'Dine In' and ifnull(o.resto_table, '') != ''
 			and ifnull(o.table_freed, 0) = 0 and o.opened_at >= %s
@@ -250,7 +251,9 @@ def _paid_waiting(now):
 		as_dict=True,
 	)
 	return {
-		r.resto_table: frappe._dict(name=r.name, guests=r.guests, waiting=cint(r.waiting), eating=int(not cint(r.waiting)))
+		r.resto_table: frappe._dict(
+			name=r.name, guests=r.guests, waiting=cint(r.waiting), ready=cint(r.ready), eating=int(not cint(r.waiting))
+		)
 		for r in rows
 	}
 
@@ -1175,14 +1178,15 @@ def _cooked_qty(value, rows):
 
 
 @frappe.whitelist(methods=["POST"])
-def mark_served(order):
-	"""Waiter served everything that is ready on this order."""
+def mark_served(order, ticket=None):
+	"""The waiter served what is ready on this order: all of it, or one ticket (a line's, from its
+	dialog). Also on a paid order (D-277): a dish left ready at the pass, off the kitchen board after
+	two hours, is served from the floor, and its table shows the guests eating."""
 	require_role(WAITER, CASHIER)
-	for name in frappe.get_all(
-		"Resto Kitchen Ticket",
-		filters={"resto_order": order, "status": "Ready", "ticket_type": "Order"},
-		pluck="name",
-	):
+	filters = {"resto_order": order, "status": "Ready", "ticket_type": "Order"}
+	if ticket:
+		filters["name"] = ticket
+	for name in frappe.get_all("Resto Kitchen Ticket", filters=filters, pluck="name"):
 		kitchen.set_ticket_status(name, "Served")
 	return order
 

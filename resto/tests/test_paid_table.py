@@ -90,6 +90,28 @@ class TestPaidTable(IntegrationTestCase):
 		self.assertFalse(frappe.db.get_value("Resto Order", order, "paid_before_served"))
 		self.assertEqual(self.table().status, "free")
 
+	def test_a_dish_left_ready_after_payment_is_served_from_the_floor_or_the_kitchen(self):
+		"""D-277: a ticket ready after payment leaves the kitchen board after two hours; the waiter
+		serves it from the floor (one line's ticket or all), or the kitchen from Today's Tickets."""
+		order = self.paid_order()
+		tickets = sorted(self.tickets(order))
+		for ticket in tickets:
+			kitchen.set_ticket_status(ticket, "Ready")
+		t = self.table()
+		self.assertEqual((t.paid.waiting, t.paid.ready, t.paid.eating), (2, 2, 0))
+		frappe.set_user("waiter@resto.test")
+		floor.mark_served(order, tickets[0])
+		frappe.set_user("Administrator")
+		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", tickets[0], "status"), "Served")
+		# Ready again, Today's Tickets lists it so, and the kitchen serves it there.
+		kitchen.set_ticket_status(tickets[0], "Ready")
+		listed = {r.name: r.status for r in kitchen.kds_day_tickets()["tickets"]}
+		self.assertEqual(listed.get(tickets[0]), "Ready")
+		kitchen.kds_set_status(tickets[0], "Served")
+		floor.mark_served(order)  # the rest, if the dishes were on more than one ticket
+		t = self.table()
+		self.assertEqual((t.status, t.paid.waiting, t.paid.ready, t.paid.eating), ("paid", 0, 0, 1))
+
 	def test_the_waiter_frees_it_by_hand(self):
 		order = self.paid_order()
 		frappe.set_user("waiter@resto.test")
