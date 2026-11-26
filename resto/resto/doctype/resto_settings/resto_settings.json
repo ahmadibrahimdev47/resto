@@ -41,6 +41,7 @@
   "salary_account",
   "allow_side_changes",
   "charge_extra_sides",
+  "show_sides_in_kitchen",
   "column_break_pos",
   "screen_refresh_seconds",
   "enable_screen_lock",
@@ -310,6 +311,13 @@
    "description": "Portions of a side above what the dish's recipe serves become their own line on the customer's invoice, at the side option's extra price; their stock and cost belong to that line. A swap for another option of the same count is not an extra. Off: extra portions are free and costed on the dish."
   },
   {
+   "default": "0",
+   "fieldname": "show_sides_in_kitchen",
+   "fieldtype": "Check",
+   "label": "Show the Sides on Every Dish in the Kitchen",
+   "description": "The kitchen screen and ticket show every dish's sides, also when they are the recipe's own (for new cooks). Off: only sides that differ from the recipe. The bill and the receipt are not changed."
+  },
+  {
    "fieldname": "column_break_pos",
    "fieldtype": "Column Break"
   },
@@ -520,7 +528,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-27 06:00:00.000000",
+ "modified": "2026-11-27 08:10:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

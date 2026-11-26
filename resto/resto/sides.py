@@ -783,13 +783,33 @@ def set_order_texts(order):
 				without.append(slot.label)
 				continue
 			served.extend(f"{slot.names.get(i, i)}" + (f" ×{_num(p)}" if abs(flt(p) - 1) > 1e-6 else "") for i, p in items.items())
-		parts = []
-		if served:
-			parts.append(sep.join(served) + (" " + _t("(per dish)") if flt(d.qty) > 1 else ""))
-		if without:
-			parts.append(_t("without: {0}", sep.join(without)))
-		parts.extend(shared)
-		d.sides_text = _t("Sides: {0}", " | ".join(parts)) if parts else None
+		d.sides_text = _text(d, served, without, shared)
+
+
+def _text(d, served, without, shared):
+	sep = _sep()
+	parts = []
+	if served:
+		parts.append(sep.join(served) + (" " + _t("(per dish)") if flt(d.qty) > 1 else ""))
+	if without:
+		parts.append(_t("without: {0}", sep.join(without)))
+	parts.extend(shared)
+	return _t("Sides: {0}", " | ".join(parts)) if parts else None
+
+
+def kitchen_text(d):
+	"""The sides text a line goes to the kitchen with: its own when its sides differ from the recipe;
+	else, when Resto Settings shows the sides on every dish (D-252), the recipe's sides, for new cooks.
+	Only the kitchen ticket gets it: the line, the bill and the receipt keep their own text."""
+	if d.get("sides_text") or not cint(get_settings().get("show_sides_in_kitchen")):
+		return d.get("sides_text")
+	served = []
+	for _key, slot in slots(d.item_code).items():
+		items = {i: p for i, p in dict(slot.default).items() if flt(p) > EPS}
+		if not items:
+			continue  # a slot the recipe leaves empty: nothing is left out
+		served.extend(f"{slot.names.get(i, i)}" + (f" ×{_num(p)}" if abs(flt(p) - 1) > 1e-6 else "") for i, p in items.items())
+	return _text(d, served, [], [])
 
 
 def combined(order, lines):

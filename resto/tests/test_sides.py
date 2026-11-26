@@ -204,6 +204,30 @@ class TestSides(IntegrationTestCase):
 
 	# ------------------------------------------------------------------ one line
 
+	def test_the_kitchen_can_show_every_dishs_sides(self):
+		# D-252: on, the kitchen ticket carries the recipe's sides of an unchanged dish; the line, the
+		# bill and the receipt do not. Off (the default): only changed sides.
+		def ticket_text(order):
+			tickets = floor.send_to_kitchen(order)
+			return frappe.get_all("Resto Kitchen Ticket Item", filters={"parent": ("in", tickets)}, pluck="sides_text")
+
+		self.assertEqual(ticket_text(self.order_with(("DISH-PLATE", 1))), [None])
+		frappe.db.set_single_value("Resto Settings", "show_sides_in_kitchen", 1)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		self.addCleanup(frappe.db.set_single_value, "Resto Settings", "show_sides_in_kitchen", 0)
+		order = self.order_with(("DISH-PLATE", 2))
+		[text] = ticket_text(order)
+		self.assertIn("Sauce Garlic", text)
+		self.assertIn("Side Rice", text)
+		self.assertFalse(lines(order)[0].sides_text)
+		si = self.pay(order)
+		self.assertFalse(si.items[0].resto_sides_text)
+		self.assertNotIn("Side Rice", si.items[0].description or "")
+		# A changed dish keeps its own text.
+		swapped, _line = self.swapped_plate(1)
+		own = lines(swapped)[0].sides_text
+		self.assertEqual(ticket_text(swapped), [own])
+
 	def test_the_without_part_stands_out_in_the_kitchen(self):
 		# D-251: on the kitchen screen and paper the «without» part is red, bold and larger.
 		from resto.resto import kitchen
