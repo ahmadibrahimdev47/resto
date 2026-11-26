@@ -122,14 +122,17 @@ def get_floor():
 		],
 		order_by="opened_at asc",
 	)
-	# Per order: dishes ready, dishes on it (voided ones left out) and lines not sent to the kitchen
-	# yet, for the table cards and the lists.
+	# Per order: dishes ready, dishes on it (voided ones left out), lines not sent to the kitchen yet,
+	# and the dishes at the kitchen, being made and ready (D-267), for the table cards and the lists.
 	counts = (
 		{
 			r[0]: r[1:]
 			for r in frappe.db.sql(
 				"""select parent, sum(kitchen_status = 'Ready'), sum(case when kitchen_status != 'Void' then qty else 0 end),
-					sum(kitchen_status = 'Not Sent')
+					sum(kitchen_status = 'Not Sent'),
+					sum(case when kitchen_status = 'Sent' then qty else 0 end),
+					sum(case when kitchen_status = 'In Progress' then qty else 0 end),
+					sum(case when kitchen_status = 'Ready' then qty else 0 end)
 				from `tabResto Order Item` where parenttype = 'Resto Order' and parent in %s group by parent""",
 				[[o.name for o in orders]],
 			)
@@ -138,8 +141,9 @@ def get_floor():
 		else {}
 	)
 	for o in orders:
-		ready, dishes, unsent = counts.get(o.name) or (0, 0, 0)
+		ready, dishes, unsent, sent_qty, progress_qty, ready_qty = counts.get(o.name) or (0, 0, 0, 0, 0, 0)
 		o.ready_count = cint(ready)
+		o.sent_qty, o.progress_qty, o.ready_qty = flt(sent_qty), flt(progress_qty), flt(ready_qty)
 		o.dishes = flt(dishes)
 		o.unsent_count = cint(unsent)
 		o.waiter_name = frappe.utils.get_fullname(o.waiter) if o.waiter else ""

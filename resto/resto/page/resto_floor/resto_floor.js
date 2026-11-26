@@ -1121,7 +1121,7 @@ class RestoFloor {
 				${o.unsent_count ? `<span class="rf-unsent">${__("Not sent: {0}", [o.unsent_count])}</span>` : ""}
 				<div class="rf-tfoot"><b class="rf-tamt">${money(o.bill_grand_total || o.net_total)}</b><span class="rf-spacer"></span>
 					<span class="rf-tago">${__("for {0}", [dur(o.minutes)])}</span></div>
-				${o.ready_count ? `<span class="rf-ready">${__("Ready")} ${o.ready_count}</span>` : ""}`;
+				${this.kitchen_progress(o)}`;
 		} else if (t.paid) {
 			body = `<span class="rf-tsub">${esc(t.paid.name)}</span>
 				<span class="rf-tfoot rf-unsent">${__("{0} dish(es) not out of the kitchen yet", [t.paid.waiting])}</span>`;
@@ -1135,6 +1135,19 @@ class RestoFloor {
 			<div class="rf-ttop"><b class="rf-tname">${esc(t.name)}</b><span class="rf-spacer"></span><span class="rf-st">${label}</span></div>${body}</button>`;
 	}
 
+	// Where an order's sent dishes are (D-267), by dish count, in the colors of the order's own line
+	// tags: at the kitchen, being made, ready. Served and voided dishes are not counted.
+	kitchen_progress(o) {
+		const parts = [
+			["Sent", o.sent_qty, __("In the Kitchen", null, "Resto")],
+			["InProgress", o.progress_qty, __("In Progress", null, "Resto")],
+			["Ready", o.ready_qty, __("Ready")],
+		].filter((p) => flt(p[1]) > 0);
+		return parts.length
+			? `<div class="rf-kprog">${parts.map(([slug, n, label]) => `<span class="rf-tag t-${slug}">${label} ${fmt_qty(n)}</span>`).join("")}</div>`
+			: "";
+	}
+
 	// A takeaway or delivery order (and a dine-in order to bill again) in the lists.
 	order_row(o) {
 		const kind = o.rebill ? "rebill" : o.staff_meal ? "staff" : o.order_type === "Delivery" ? "delivery" : "takeaway";
@@ -1144,10 +1157,10 @@ class RestoFloor {
 				<span class="rf-spacer"></span>${o.staff_meal ? "" : `<b>${money(o.bill_grand_total || o.net_total)}</b>`}</div>
 			<div class="rf-orow2"><span>${who}</span>
 				${o.delivery_status ? `<span>· ${__(o.delivery_status, null, "Resto")}</span>` : ""}
-				${o.ready_count ? `<span class="rf-ok">· ${__("Ready")} ${o.ready_count}</span>` : ""}
 				${o.status === "Bill Requested" ? `<span class="rf-warn">· ${__("Bill Requested")}</span>` : ""}
 				${o.unsent_count ? `<span class="rf-unsent">${__("Not sent: {0}", [o.unsent_count])}</span>` : ""}
 				<span class="rf-spacer"></span><span>${__("for {0}", [dur(o.minutes)])}</span></div>
+			${this.kitchen_progress(o)}
 			${o.rebill ? `<div class="rf-warn">${__("To Bill Again")} · ${__("Table {0}", [esc(o.resto_table)], "Resto")}</div>` : ""}
 		</button>`;
 	}
@@ -4225,7 +4238,6 @@ class RestoFloor {
 		.rf-tbl.bill .rf-st { background:var(--rf-amber); color:#fff; } .rf-tbl.bill .rf-tago { color:var(--rf-amber-ink); }
 		.rf-tbl.reserved { background:var(--rf-purple-soft); border-color:var(--rf-purple); }
 		.rf-tbl.reserved .rf-st { background:var(--rf-purple); color:#fff; } .rf-tres { color:var(--rf-purple-ink); font-weight:700; font-size:14px; }
-		.rf-ready { position:absolute; bottom:-10px; inset-inline-start:12px; background:var(--rf-green); color:#fff; border-radius:999px; padding:2px 10px; font-size:12px; font-weight:700; }
 		.rf-legend { display:flex; gap:20px; align-items:center; font-size:14px; color:var(--rf-ink2); flex-wrap:wrap; }
 		.rf-legend span { display:inline-flex; align-items:center; gap:6px; }
 		.rf-legend i { width:12px; height:12px; border-radius:4px; display:inline-block; }
@@ -4328,6 +4340,7 @@ class RestoFloor {
 		.rf-tag.t-saving { background:var(--rf-soft); color:var(--rf-ink2); } .rf-tag.t-saving svg { animation:rf-spin 1s linear infinite; }
 		.rf-tag.t-Ready, .rf-tag.t-Served { background:var(--rf-green-soft); color:var(--rf-green-ink); }
 		.rf-tag.t-Void { background:var(--rf-red-soft); color:var(--rf-red-ink); }
+		.rf-kprog { display:flex; flex-wrap:wrap; gap:4px; } .rf-kprog .rf-tag { height:22px; }
 		.rf-tag.t-bill { background:var(--rf-amber-soft); color:var(--rf-amber-ink); vertical-align:middle; }
 		@keyframes rf-spin { to { transform:rotate(360deg); } }
 		.rf-busy svg { animation:rf-spin 1s linear infinite; } .rf-btn.rf-busy:disabled { opacity:.85; cursor:progress; }
