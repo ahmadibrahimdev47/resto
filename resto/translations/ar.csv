@@ -2778,3 +2778,5 @@
 "Accepted Warehouse","مخزن الاستلام","Purchase Invoice Item"
 "Rejected Warehouse","مخزن المرفوضات","Purchase Invoice Item"
 "Accepted Qty","الكمية المستلمة","Purchase Invoice Item"
+"Accounts Payable Summary","ملخص الحسابات الدائنة",""
+"Accounts Receivable Summary","ملخص الحسابات المدينة",""

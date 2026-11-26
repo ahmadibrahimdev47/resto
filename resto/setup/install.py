@@ -205,6 +205,7 @@ def setup():
 	create_custom_fields(item_fields(), update=True)
 	set_new_setting_defaults()
 	grant_standard_permissions()
+	add_accounting_summary_links()
 	sync_translations()
 
 
@@ -315,3 +316,51 @@ def make_roles():
 			frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(
 				ignore_permissions=True
 			)
+
+
+# The Accounting sidebar's Reports: each summary right after its detailed report (D-228). Added to
+# ERPNext's own sidebar record on every migrate, and only where it is missing: ERPNext's files are
+# never edited, a sidebar ERPNext rewrites gets them again, and the report's roles decide who sees it.
+SUMMARY_LINKS = (("Accounts Payable", "Accounts Payable Summary"), ("Accounts Receivable", "Accounts Receivable Summary"))
+
+
+def _sidebar_doctype():
+	"""The v16 sidebar doctype, as Resto's own sidebar file names it."""
+	import json
+	import os
+
+	path = os.path.join(os.path.dirname(__file__), "..", "resto", "sidebar", "resto", "resto.json")
+	with open(path) as f:
+		return json.load(f)["doctype"]
+
+
+def add_accounting_summary_links():
+	try:
+		doctype = _sidebar_doctype()
+		if not frappe.db.exists("DocType", doctype):
+			return
+		child = frappe.get_meta(doctype).get_field("items").options
+	except Exception:
+		return  # no sidebar of this kind on this version: nothing to add to
+	added = False
+	for after, report in SUMMARY_LINKS:
+		if not frappe.db.exists("Report", report):
+			continue
+		for anchor in frappe.get_all(
+			child,
+			filters={"parenttype": doctype, "parentfield": "items", "link_type": "Report", "link_to": after},
+			fields=["*"],
+		):
+			if frappe.db.exists(child, {"parent": anchor.parent, "parenttype": doctype, "link_to": report}):
+				continue
+			# Rows below make room; the new row copies its neighbour's place in the section.
+			frappe.db.sql(
+				f"update `tab{child}` set idx = idx + 1 where parent = %s and parenttype = %s and parentfield = 'items' and idx > %s",
+				(anchor.parent, doctype, anchor.idx),
+			)
+			row = {k: v for k, v in anchor.items() if k not in ("name", "creation", "modified", "owner", "modified_by")}
+			row.update({"doctype": child, "label": report, "link_to": report, "idx": anchor.idx + 1})
+			frappe.get_doc(row).db_insert()
+			added = True
+	if added:
+		frappe.clear_cache()

@@ -139,3 +139,23 @@ def user_with_email(email, role):
 		u.insert(ignore_permissions=True)
 		u.add_roles(role)
 	return email
+
+
+class TestAccountingSummaryLinks(IntegrationTestCase):
+	"""Each summary report follows its detailed report in ERPNext's sidebars, once (D-228)."""
+
+	def test_each_summary_follows_its_report_once(self):
+		from resto.setup import install
+
+		install.add_accounting_summary_links()
+		install.add_accounting_summary_links()  # again: nothing more
+		doctype = install._sidebar_doctype()
+		child = frappe.get_meta(doctype).get_field("items").options
+		for after, report in install.SUMMARY_LINKS:
+			if not frappe.db.exists("Report", report):
+				continue
+			for anchor in frappe.get_all(child, filters={"parenttype": doctype, "link_type": "Report", "link_to": after}, fields=["parent", "idx"]):
+				with self.subTest(sidebar=anchor.parent, report=report):
+					rows = frappe.get_all(child, filters={"parent": anchor.parent, "parenttype": doctype, "link_to": report}, fields=["idx"])
+					self.assertEqual([r.idx for r in rows], [anchor.idx + 1])
+
