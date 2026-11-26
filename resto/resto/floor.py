@@ -622,6 +622,7 @@ def _plain_unsent_line(doc, it):
 			and not d.sides
 			and not d.get("sides_extras")
 			and not flt(d.billed_qty)
+			and not flt(d.get("line_discount_percentage"))  # given for its dishes, not for more (D-271)
 		):
 			return d
 	return None
@@ -685,6 +686,12 @@ def update_line(order, line, qty=None, notes=None, course=None, hold=None, view=
 			return _order_view(doc) if cint(view) else doc.name
 	if qty is not None:
 		row.qty = flt(qty)
+	if flt(row.qty) > old_qty and flt(row.get("line_discount_percentage")):
+		# An item discount was given for those dishes (D-271): more of them take it off, so it is
+		# given again (and approved again above the limit) for the new count. Fewer keep it.
+		row.line_discount_percentage = 0
+		row.line_discount_reason = row.line_discount_by = None
+		doc.add_comment("Info", _("Item discount on {0} taken off").format(row.item_name))
 	if notes is not None:
 		row.notes = notes
 	if course is not None:
@@ -1254,6 +1261,53 @@ def apply_discount(order, percentage=0, amount=0, reason=None, approver=None, pi
 	doc.discount_reason = reason
 	_reopen_if_billed(doc)
 	return _save(doc).name
+
+
+@frappe.whitelist(methods=["POST"])
+def set_line_discount(order, line, percentage=0, amount=0, reason=None, approver=None, pin=None):
+	"""A discount on one line (D-271): a % of the dish's price and its priced options, or an amount
+	for the whole line, turned into its %. 100% makes the dish free; its stock is issued all the same.
+	Up to the user's discount limit (the same limit as the order's discount) the cashier gives it;
+	above it a manager or a manager's PIN. 0 takes it off. The order discount comes on top."""
+	require_role(CASHIER)
+	doc = _get_order(order)
+	if cint(doc.get("staff_meal")):
+		frappe.throw(_("A staff meal has no bill"))
+	row = _line(doc, line)
+	if row.kitchen_status == "Void":
+		frappe.throw(_("This item is void"))
+	if flt(row.billed_qty) > 0:
+		frappe.throw(_("This item is already billed"))
+	full = flt(row.qty) * (flt(row.rate) + flt(row.modifiers_amount))
+	if full <= 0:
+		frappe.throw(_("This item has no price to discount"))
+	percent = flt(percentage) or (flt(amount) / full * 100 if flt(amount) else 0)
+	if percent < 0 or percent > 100 + 1e-9:
+		frappe.throw(_("Discount % must be between 0 and 100"))
+	percent = min(flt(percent, 6), 100)
+	reason = (reason or "").strip()
+	by = None
+	if percent:
+		if not reason:
+			frappe.throw(_("Enter a reason for the discount"))
+		value = flt(full * percent / 100, 2)
+		allowed = flt(full * discount_limit() / 100, 2)
+		if percent > flt(row.get("line_discount_percentage")) + 1e-9 and value > allowed + 0.005:
+			by = approval.approve("item_discount", f"{doc.name}: {sides._num(row.qty)} × {row.item_name}", value, approver, pin, reason)
+		elif percent > flt(row.get("line_discount_percentage")) + 1e-9:
+			by = frappe.session.user
+		else:
+			by = row.get("line_discount_by") or frappe.session.user  # smaller than before: no new approval
+	row.line_discount_percentage = percent
+	row.line_discount_reason = reason if percent else None
+	row.line_discount_by = by
+	_reopen_if_billed(doc)
+	_save(doc)
+	doc.add_comment(
+		"Info",
+		(_("Item discount on {0}: {1}% ({2})").format(row.item_name, flt(percent, 2), reason) if percent else _("Item discount on {0} taken off").format(row.item_name)),
+	)
+	return _order_view(doc)
 
 
 @frappe.whitelist(methods=["POST"])

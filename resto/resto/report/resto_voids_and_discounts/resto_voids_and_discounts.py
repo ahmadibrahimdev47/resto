@@ -1,4 +1,4 @@
-"""Control report: voided items, discounts, free extras, cancelled orders and cancelled invoices."""
+"""Control report: voided items, discounts, item discounts, free extras, cancelled orders and cancelled invoices."""
 
 import frappe
 from frappe import _
@@ -13,6 +13,7 @@ def execute(filters=None):
 	return {
 		"Voided Items": voided_items,
 		"Discounts": discounts,
+		"Item Discounts": item_discounts,
 		"Free Extras": free_extras,
 		"Cancelled Orders": cancelled_orders,
 		"Cancelled Invoices": cancelled_invoices,
@@ -90,6 +91,51 @@ def discounts(filters):
 	summary = [
 		{"label": _("Discounted Bills"), "value": len(data), "datatype": "Int"},
 		{"label": _("Total Discount"), "value": sum(flt(d.discount) for d in data), "datatype": "Currency", "indicator": "Orange"},
+	]
+	return columns, data, None, None, summary
+
+
+def item_discounts(filters):
+	"""Discounts given on one line (D-271): the row's price, what came off it, its cost, why and who
+	gave or approved it. A 100% discount is a dish given free; its stock was issued all the same."""
+	data = frappe.db.sql(
+		"""
+		select si.name as sales_invoice, si.posting_date as date, si.resto_order, si.resto_table,
+			sii.name as row_name, sii.item_code, sii.description, sii.qty, sii.discount_percentage,
+			sii.qty * sii.price_list_rate as value, sii.qty * sii.price_list_rate - sii.amount as discount,
+			sii.resto_discount_reason as reason, sii.resto_discount_by as approved_by, si.owner as cashier
+		from `tabSales Invoice Item` sii join `tabSales Invoice` si on si.name = sii.parent
+		where si.docstatus = 1 and si.is_return = 0 and ifnull(sii.resto_discount_by, '') != ''
+			and sii.discount_percentage > 0 and si.company = %(company)s
+			and si.posting_date between %(from_date)s and %(to_date)s
+		order by si.posting_date, si.name, sii.idx
+		""",
+		filters,
+		as_dict=True,
+	)
+	costs = cost_by_invoice_row(filters) if data else {}
+	for d in data:
+		d.cost = flt(costs.get(d.pop("row_name")))
+	columns = [
+		{"fieldname": "date", "label": _("Date"), "fieldtype": "Date", "width": 100},
+		link("sales_invoice", _("Sales Invoice"), "Sales Invoice"),
+		link("resto_order", _("Order"), "Resto Order"),
+		link("resto_table", _("Table", context="Resto"), "Resto Table", 80),
+		link("item_code", _("Item"), "Item"),
+		{"fieldname": "description", "label": _("Description"), "fieldtype": "Data", "width": 200},
+		{"fieldname": "qty", "label": _("Qty"), "fieldtype": "Float", "width": 70},
+		{"fieldname": "value", "label": _("Value at Price"), "fieldtype": "Currency", "width": 110},
+		{"fieldname": "discount_percentage", "label": _("Discount %"), "fieldtype": "Percent", "width": 90},
+		{"fieldname": "discount", "label": _("Discount"), "fieldtype": "Currency", "width": 110},
+		{"fieldname": "cost", "label": _("Value at Cost"), "fieldtype": "Currency", "width": 110},
+		{"fieldname": "reason", "label": _("Discount Reason"), "fieldtype": "Data", "width": 180},
+		link("approved_by", _("Given or Approved By"), "User"),
+		link("cashier", _("Cashier"), "User"),
+	]
+	summary = [
+		{"label": _("Discounted Lines"), "value": len(data), "datatype": "Int"},
+		{"label": _("Total Discount"), "value": sum(flt(d.discount) for d in data), "datatype": "Currency", "indicator": "Orange"},
+		{"label": _("Given Free (Value at Cost)"), "value": sum(flt(d.cost) for d in data if flt(d.discount_percentage) >= 100), "datatype": "Currency", "indicator": "Red"},
 	]
 	return columns, data, None, None, summary
 

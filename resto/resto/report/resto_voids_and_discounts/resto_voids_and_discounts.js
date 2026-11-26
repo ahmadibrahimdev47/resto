@@ -26,7 +26,7 @@ frappe.query_reports["Resto Voids and Discounts"] = {
 			fieldname: "type",
 			label: __("Show", null, "Resto"),
 			fieldtype: "Select",
-			options: [{ value: "Voided Items", label: __("Voided Items") }, { value: "Discounts", label: __("Discounts") }, { value: "Free Extras", label: __("Free Extras") }, { value: "Cancelled Orders", label: __("Cancelled Orders") }, { value: "Cancelled Invoices", label: __("Cancelled Invoices") }],
+			options: [{ value: "Voided Items", label: __("Voided Items") }, { value: "Discounts", label: __("Discounts") }, { value: "Item Discounts", label: __("Item Discounts") }, { value: "Free Extras", label: __("Free Extras") }, { value: "Cancelled Orders", label: __("Cancelled Orders") }, { value: "Cancelled Invoices", label: __("Cancelled Invoices") }],
 			default: "Voided Items",
 		},
 	],

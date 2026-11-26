@@ -43,8 +43,8 @@ SERVER_HEADER_FIELDS = (
 )
 # Changes that make a printed bill wrong.
 BILL_FIELDS = ("discount_amount", "service_charge_percent", "delivery_fee", "customer", "net_total")
-BILL_LINE_FIELDS = ("qty", "rate", "modifiers_amount", "sides_amount", "kitchen_status", "billed_qty")
-SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides", "sides_text", "sides_qty", "sides_extras", "sides_amount", "void_waste", "sides_free", "sides_free_by", "sides_free_value")
+BILL_LINE_FIELDS = ("qty", "rate", "modifiers_amount", "sides_amount", "kitchen_status", "billed_qty", "line_discount_percentage")
+SERVER_LINE_FIELDS = ("kitchen_status", "station", "ticket", "sent_at", "billed_qty", "void_reason", "voided_by", "sides", "sides_text", "sides_qty", "sides_extras", "sides_amount", "void_waste", "sides_free", "sides_free_by", "sides_free_value", "line_discount_percentage", "line_discount_amount", "line_discount_reason", "line_discount_by")
 
 
 class RestoOrder(Document):
@@ -297,7 +297,13 @@ class RestoOrder(Document):
 	def calculate_totals(self):
 		total_qty = net_total = 0
 		for row in self.items:
-			row.amount = flt(flt(row.qty) * (flt(row.rate) + flt(row.modifiers_amount) + flt(row.sides_amount)), row.precision("amount"))
+			row.amount = flt(flt(row.qty) * unit_amount(row), row.precision("amount"))
+			# What the item discount takes off the whole line (D-271), for the screen and the report.
+			row.line_discount_amount = (
+				flt(flt(row.qty) * (flt(row.rate) + flt(row.modifiers_amount) + flt(row.sides_amount)) - row.amount, row.precision("amount"))
+				if flt(row.get("line_discount_percentage"))
+				else 0
+			)
 			if row.kitchen_status == VOID:
 				continue
 			total_qty += flt(row.qty)
@@ -417,9 +423,30 @@ def discount_base(doc):
 		frappe.db.sql("select sum(discount_amount) from `tabSales Invoice` where name in %s and docstatus = 1", (active,))[0][0]
 	)
 	unbilled = sum(
-		(flt(d.qty) - flt(d.billed_qty)) * (flt(d.rate) + flt(d.modifiers_amount) + flt(d.sides_amount)) for d in doc.unbilled_lines()
+		(flt(d.qty) - flt(d.billed_qty)) * unit_amount(d) for d in doc.unbilled_lines()
 	)
 	return unbilled, max(flt(doc.discount_amount) - given, 0)
+
+
+def discounted(price, percent):
+	"""A price less an item discount, rounded as the invoice row rounds its rate (D-271)."""
+	if not flt(percent):
+		return flt(price)
+	return flt(flt(price) * (1 - flt(percent) / 100), frappe.get_precision("Sales Invoice Item", "rate") or 2)
+
+
+def option_prices(row):
+	"""The priced options of a line, one price each per dish (each is its own invoice row)."""
+	return [flt(m.get("price")) for m in json.loads(row.get("modifiers") or "[]") if flt(m.get("price"))]
+
+
+def unit_amount(row):
+	"""What one dish of the line comes to: its price and priced options less the item discount
+	(D-271), and its extra portions at their own price."""
+	percent = flt(row.get("line_discount_percentage"))
+	if not percent:
+		return flt(row.rate) + flt(row.modifiers_amount) + flt(row.sides_amount)
+	return discounted(row.rate, percent) + sum(discounted(p, percent) for p in option_prices(row)) + flt(row.sides_amount)
 
 
 def discount_limit():

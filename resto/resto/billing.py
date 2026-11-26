@@ -12,6 +12,7 @@ from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
 from resto.resto import packaging, sides
+from resto.resto.doctype.resto_order.resto_order import discounted
 from resto.resto.utils import CASHIER, get_settings, has_role, publish, require_role
 
 EPS = 0.0000001
@@ -88,7 +89,7 @@ def build_invoice(order, lines=None):
 	si.posting_date = frappe.utils.nowdate()
 	si.posting_time = frappe.utils.nowtime()
 
-	prices = []  # (rate) per appended invoice row, to re-apply after ERPNext fills defaults
+	prices = []  # (price, discount %) per appended invoice row, to re-apply after ERPNext fills defaults
 	food_total = 0
 	extras = {}  # (item, price, set or line) -> extra portions billed apart (sides.py)
 	for row, qty in to_bill:
@@ -108,13 +109,21 @@ def build_invoice(order, lines=None):
 			# hook packs them instead of the recipe's (sides.py).
 			served = row.get("sides_qty") or json.dumps(sides.qty_per_dish(row.item_code, json.loads(row.sides)), sort_keys=True)
 			si.items[-1].resto_sides = served
-		prices.append(flt(row.rate))
-		food_total += qty * flt(row.rate)
+		# An item discount (D-271) is the row's own discount: the bill shows the price and what came off.
+		off = flt(row.get("line_discount_percentage"))
+		if off:
+			si.items[-1].resto_discount_reason = row.get("line_discount_reason")
+			si.items[-1].resto_discount_by = row.get("line_discount_by")
+		prices.append((flt(row.rate), off))
+		food_total += qty * discounted(row.rate, off)
 		for mod in json.loads(row.modifiers or "[]"):
 			if flt(mod.get("price")) and mod.get("item"):
 				_append_item(si, mod["item"], qty, flt(mod["price"]), f"{mod['option']} - {row.item_name}")
-				prices.append(flt(mod["price"]))
-				food_total += qty * flt(mod["price"])
+				if off:
+					si.items[-1].resto_discount_reason = row.get("line_discount_reason")
+					si.items[-1].resto_discount_by = row.get("line_discount_by")
+				prices.append((flt(mod["price"]), off))
+				food_total += qty * discounted(mod["price"], off)
 		# Extra portions above the recipe's sides, as frozen when the line went to the kitchen: their
 		# own line at the option's extra price, deducting their own item (sides.py, D-191). Extras
 		# of a choice shared by several dishes are one line. Extras given free (D-253) are their own
@@ -148,7 +157,7 @@ def build_invoice(order, lines=None):
 			si.items[-1].resto_free_extra = 1
 			si.items[-1].resto_free_value = flt(qty * price, si.items[-1].precision("amount"))
 			si.items[-1].resto_free_by = x["by"]
-		prices.append(0 if free else price)
+		prices.append((0 if free else price, 0))
 		food_total += 0 if free else qty * price
 
 	# The fee goes on one invoice: the first one that is not cancelled.
@@ -162,14 +171,14 @@ def build_invoice(order, lines=None):
 		if not settings.delivery_fee_item:
 			frappe.throw(_("Set the Delivery Fee Item in Resto Settings first"))
 		_append_item(si, settings.delivery_fee_item, 1, delivery_fee, _("Delivery Fee"))
-		prices.append(delivery_fee)
+		prices.append((delivery_fee, 0))
 
 	# Packaging and automatic consumables (D-217, D-224): stock lines at no price, so the bill's
 	# cost of goods sold includes them; each on the order types ticked for it.
 	for item_code, qty, kind in packaging.lines(order, to_bill, active_invoices):
 		_append_item(si, item_code, qty, 0, sides._t("Packaging" if kind == packaging.DISH else "Consumables"))
 		si.items[-1].resto_packaging = kind
-		prices.append(0)
+		prices.append((0, 0))
 
 	# ERPNext fills accounts, warehouse, cost center, payments and the tax template from the
 	# POS Profile.
@@ -181,11 +190,11 @@ def build_invoice(order, lines=None):
 		si.set("items", [d for d in si.items if not d.get("is_free_item")])
 		for i, d in enumerate(si.items, 1):
 			d.idx = i
-	for item, rate in zip(si.items, prices, strict=True):
-		item.price_list_rate = rate
-		item.rate = rate
-		item.discount_percentage = 0
-		item.discount_amount = 0
+	for item, (price, off) in zip(si.items, prices, strict=True):
+		item.price_list_rate = price
+		item.rate = discounted(price, off)
+		item.discount_percentage = off
+		item.discount_amount = flt(price - item.rate, item.precision("discount_amount")) if off else 0
 		item.margin_type = ""
 		item.margin_rate_or_amount = 0
 		item.pricing_rules = ""
@@ -396,6 +405,8 @@ def bill_preview(order, lines=None):
 				"sides_text": d.get("resto_sides_text") or "",
 				"qty": flt(d.qty),
 				"rate": flt(d.rate),
+				"price_list_rate": flt(d.price_list_rate),
+				"discount_percentage": flt(d.discount_percentage),  # an item discount (D-271)
 				"amount": flt(d.qty) * flt(d.rate),
 			}
 			for d in si.items

@@ -2924,6 +2924,7 @@ class RestoFloor {
 				d.course ? esc(__(d.course)) : "",
 				d.hold && !sent ? __("Held") : "",
 				flt(d.billed_qty) ? __("Billed {0}", [fmt_qty(d.billed_qty)]) : "",
+				flt(d.line_discount_percentage) >= 100 ? `<span class="rf-ok">${__("Free of charge")}</span>` : flt(d.line_discount_percentage) ? `<span class="rf-ok">${__("Discount {0}%", [flt(d.line_discount_percentage, 2)])}</span>` : "",
 				d.notes ? `✎ ${esc(d.notes)}` : "",
 			].filter(Boolean);
 			const slug = (d.kitchen_status || "").replace(/ /g, "");
@@ -3132,6 +3133,49 @@ class RestoFloor {
 		if (done && this.order && this.order.name === name) await this.reload_lines(name);
 	}
 
+	// A discount on one line (D-271): % or an amount for the whole line, with a reason; 100% makes
+	// the dish free (its stock is issued all the same). Above the user's discount limit a manager's PIN.
+	async line_discount(line) {
+		if (!(await this.settled())) return;
+		const name = this.order.name;
+		const full = flt(line.qty) * (flt(line.rate) + flt(line.modifiers_amount));
+		const v = await new Promise((resolve) => {
+			let picked = null;
+			const d = new frappe.ui.Dialog({
+				title: `${__("Item Discount")}: ${esc(line.item_name)}`,
+				fields: [
+					{ fieldtype: "HTML", options: `<p class="text-muted">${__("Price of the line: {0}", [money(full)])}</p>` },
+					{ fieldname: "percentage", fieldtype: "Percent", label: __("Discount %"), default: flt(line.line_discount_percentage) },
+					{ fieldname: "amount", fieldtype: "Currency", label: __("Or Discount Amount (whole line)") },
+					{ fieldname: "reason", fieldtype: "Data", label: __("Discount Reason"), default: line.line_discount_reason || "" },
+				],
+				primary_action_label: __("Save"),
+				primary_action: (vals) => {
+					picked = vals;
+					d.hide();
+				},
+				secondary_action_label: __("Free (100%)"),
+				secondary_action: () => {
+					picked = { ...d.get_values(true), percentage: 100, amount: 0 };
+					d.hide();
+				},
+			});
+			d.onhide = () => resolve(picked);
+			d.show();
+		});
+		if (!v) return;
+		// An amount typed wins over the % already shown (the line's current discount).
+		const percent = full && flt(v.amount) ? (flt(v.amount) / full) * 100 : flt(v.percentage);
+		if (percent && !(v.reason || "").trim()) return frappe.msgprint(__("Enter a reason for the discount"));
+		let ok = {};
+		if (percent > flt(line.line_discount_percentage) + 1e-6 && percent > flt(this.floor.discount_limit) + 1e-6) {
+			ok = await ask_approval(this.floor, __("Item discount of {0}% on {1}", [flt(percent, 2), line.item_name]));
+			if (!ok) return;
+		}
+		await call("set_line_discount", { order: name, line: line.name, percentage: flt(percent, 6), reason: v.reason || "", ...ok }, true);
+		if (this.order && this.order.name === name) await this.reload_lines(name);
+	}
+
 	line_menu(line) {
 		const sent = line.kitchen_status !== "Not Sent";
 		if (line.kitchen_status === "Void") return;
@@ -3157,6 +3201,9 @@ class RestoFloor {
 		// Its extra portions given free, or charged again (D-253): a cashier, within the limit or with a PIN.
 		const can_free = (this.floor.roles.cashier || this.floor.roles.manager) && !flt(line.billed_qty) && (line.can_free_extras || line.sides_free);
 		if (can_free) fields.unshift({ fieldname: "free_btn", fieldtype: "HTML" });
+		const can_discount =
+			(this.floor.roles.cashier || this.floor.roles.manager) && !flt(line.billed_qty) && !this.order.staff_meal && flt(line.rate) + flt(line.modifiers_amount) > 0;
+		if (can_discount) fields.unshift({ fieldname: "disc_btn", fieldtype: "HTML" });
 		const d = new frappe.ui.Dialog({
 			title: esc(line.item_name),
 			fields,
@@ -3188,6 +3235,16 @@ class RestoFloor {
 			d.fields_dict.free_btn.$wrapper.find("button").on("click", () => {
 				d.hide();
 				this.free_extras(line, !line.sides_free);
+			});
+		}
+		if (can_discount) {
+			const pct = flt(line.line_discount_percentage);
+			d.fields_dict.disc_btn.$wrapper.html(
+				`<button class="btn btn-default btn-sm">${pct ? __("Item Discount {0}%", [flt(pct, 2)]) : __("Item Discount")}</button>`
+			);
+			d.fields_dict.disc_btn.$wrapper.find("button").on("click", () => {
+				d.hide();
+				this.line_discount(line);
 			});
 		}
 		if (!sent) d.set_secondary_action_label(__("Remove", null, "Resto"));
@@ -4170,7 +4227,7 @@ class RestoFloor {
 		const fields = open.map((d, i) => ({
 			fieldname: `l_${i}`,
 			fieldtype: "Float",
-			label: `${esc(d.item_name)}${d.modifiers_text ? " (" + esc(d.modifiers_text) + ")" : ""} · ${money(d.rate + (d.modifiers_amount || 0) + (d.sides_amount || 0))} · ${__("left")} ${d.qty - (d.billed_qty || 0)}`,
+			label: `${esc(d.item_name)}${d.modifiers_text ? " (" + esc(d.modifiers_text) + ")" : ""} · ${money(flt(d.qty) ? flt(d.amount) / flt(d.qty) : d.rate + (d.modifiers_amount || 0) + (d.sides_amount || 0))} · ${__("left")} ${d.qty - (d.billed_qty || 0)}`,
 			default: 0,
 		}));
 		const d = new frappe.ui.Dialog({

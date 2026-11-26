@@ -247,6 +247,24 @@ SALES_INVOICE_FIELDS = {
 			"hidden": 1,
 			"print_hide": 1,
 		},
+		# An item discount given on the floor (D-271): why, and who gave or approved it.
+		{
+			"fieldname": "resto_discount_reason",
+			"fieldtype": "Data",
+			"label": "Item Discount Reason",
+			"insert_after": "resto_free_by",
+			"read_only": 1,
+			"print_hide": 1,
+		},
+		{
+			"fieldname": "resto_discount_by",
+			"fieldtype": "Link",
+			"options": "User",
+			"label": "Item Discount Approved By",
+			"insert_after": "resto_discount_reason",
+			"read_only": 1,
+			"print_hide": 1,
+		},
 	],
 }
 
