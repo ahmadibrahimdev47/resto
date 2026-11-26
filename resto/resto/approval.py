@@ -39,6 +39,7 @@ ACTIONS = {
 	"on_account": "Bill on the account of a customer without a credit limit",
 	"cash_purchase": "Cash purchase from the drawer above the limit",
 	"staff_meal": "Staff meal ingredient in an unusual quantity",
+	"staff_advance": "Staff advance from the drawer above the limit",
 }
 
 

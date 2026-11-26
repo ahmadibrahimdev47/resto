@@ -153,6 +153,7 @@ function expected_parts(p) {
 		[__("Debts collected"), flt(p.debts_amount), 1],
 		[__("Drawer Running Expenses"), flt(p.expenses_amount), -1],
 		[__("Drawer Stock Purchases"), flt(p.purchases_amount), -1],
+		[__("Staff Advances"), flt(p.advances_amount), -1],
 		[__("Paid back to customers"), flt(p.refunds_amount), -1],
 	].filter(([, v], i) => i < 2 || Math.abs(v) >= 0.005);
 	const line = (label, value, cls = "") =>
@@ -1470,6 +1471,7 @@ class RestoFloor {
 			[__("Collect Debt"), () => this.collect_debt()],
 			[__("Drawer Expense"), () => this.drawer_expense()],
 			[__("Cash Purchase"), () => this.cash_purchase()],
+			[__("Staff Advance from the Drawer"), () => this.staff_advance()],
 			[__("Close Shift"), () => this.close_shift()],
 		]);
 	}
@@ -1487,7 +1489,8 @@ class RestoFloor {
 					[__("Staff Meal", null, "Resto"), () => this.new_staff_meal()],
 					[__("Collect Debt"), () => this.collect_debt()],
 					[__("Drawer Expense"), () => this.drawer_expense()],
-					[__("Cash Purchase"), () => this.cash_purchase()]
+					[__("Cash Purchase"), () => this.cash_purchase()],
+					[__("Staff Advance from the Drawer"), () => this.staff_advance()]
 				);
 			}
 		}
@@ -1613,7 +1616,8 @@ class RestoFloor {
 				${s.debts_count ? metric(__("Debts Collected"), money(s.debts_total), __("{0} payments", [s.debts_count])) : ""}
 				${s.expenses_count ? metric(__("Drawer Running Expenses"), "-" + money(s.expenses_total), __("{0} expenses · transport, cleaning and the like, not into stock", [s.expenses_count])) : ""}
 				${s.purchases_count ? metric(__("Drawer Stock Purchases"), "-" + money(s.purchases_total), __("{0} purchase invoices · into the kitchen's stock", [s.purchases_count])) : ""}
-				${s.expenses_count || s.purchases_count ? metric(__("Net In for the Shift"), money(s.net_cash), s.purchases_count ? __("Collected − Expenses − Purchases") : __("Collected − Expenses")) : ""}
+				${s.advances_count ? metric(__("Staff Advances"), "-" + money(s.advances_total), __("{0} advances · taken off salaries, not an expense", [s.advances_count])) : ""}
+				${s.expenses_count || s.purchases_count || s.advances_count ? metric(__("Net In for the Shift"), money(s.net_cash), s.advances_count ? __("Collected − Expenses − Purchases − Advances") : s.purchases_count ? __("Collected − Expenses − Purchases") : __("Collected − Expenses")) : ""}
 				${s.staff_meals_count ? metric(__("Staff Meals"), money(s.staff_meals_cost), __("{0} meals · at stock cost, not cash", [s.staff_meals_count])) : ""}
 			</div>`);
 			const inv = (r.invoices || [])
@@ -1637,6 +1641,12 @@ class RestoFloor {
 				parts.push(`<details><summary><b>${__("Drawer Stock Purchases")}</b></summary><table class="table table-condensed">
 					${r.purchases
 						.map((e) => `<tr><td>${esc(e.supplier_name || e.supplier || "")}</td><td>${esc(e.items_text || "")}</td><td class="rf-amt">${money(e.amount)}</td></tr>`)
+						.join("")}</table></details>`);
+			}
+			if ((r.advances || []).length) {
+				parts.push(`<details><summary><b>${__("Staff Advances")}</b></summary><table class="table table-condensed">
+					${r.advances
+						.map((a) => `<tr><td>${esc(a.employee_name || a.employee)}</td><td>${esc(a.remarks || "")}</td><td class="rf-amt">${money(a.amount)}</td></tr>`)
 						.join("")}</table></details>`);
 			}
 			if ((r.taxes || []).length) {
@@ -1837,6 +1847,59 @@ class RestoFloor {
 				if (!pi) return;
 				d.hide();
 				frappe.show_alert({ message: __("Cash purchase recorded: {0}", [pi]), indicator: "green" });
+			},
+		});
+		d.show();
+	}
+
+	// A salary advance paid to a worker out of the drawer (D-237): owed by them until it is taken
+	// off their salary, so not an expense; the shift's expected cash goes down by it.
+	async staff_advance() {
+		const data = await frappe.xcall("resto.resto.staff_advance.advance_data");
+		if (!data.modes.length) return frappe.msgprint(__("This shift has no cash payment method"));
+		// One id per dialog: a retried click after a lost answer gives the same entry.
+		const request_id = frappe.utils.get_random(20);
+		if (!data.employees.length) return frappe.msgprint(__("No active worker is recorded as an Employee yet: a manager adds them first"));
+		const name_of = (e) => (data.employees.find((x) => x.name === e) || {}).employee_name || e;
+		const d = new frappe.ui.Dialog({
+			title: __("Staff Advance from the Drawer"),
+			fields: [
+				{
+					fieldname: "employee",
+					fieldtype: "Select",
+					label: __("Worker"),
+					reqd: 1,
+					options: [{ value: "", label: "" }, ...data.employees.map((e) => ({ value: e.name, label: e.employee_name || e.name }))],
+				},
+				{ fieldname: "mode_of_payment", fieldtype: "Select", label: __("Paid From"), options: data.modes.join("\n"), default: data.modes[0], reqd: 1 },
+				{
+					fieldname: "amount",
+					fieldtype: "Currency",
+					label: __("Amount"),
+					reqd: 1,
+					description: data.approval_above == null ? "" : __("Above {0} a manager approves", [money(data.approval_above)]),
+				},
+				{ fieldname: "remarks", fieldtype: "Data", label: __("Note") },
+			],
+			primary_action_label: __("Save and Post"),
+			primary_action: async (v) => {
+				const sure = await confirm_post([
+					`<p>${__("{0} will be paid from the drawer «{1}» as an advance to {2}.", [`<b>${money(v.amount)}</b>`, esc(v.mode_of_payment), `<b>${esc(name_of(v.employee))}</b>`])}</p>`,
+					`<p class="text-muted">${__("It is taken off their salary at the month's end; it is not an expense.")}</p>`,
+					v.remarks ? `<p>${esc(v.remarks)}</p>` : "",
+				]);
+				if (!sure) return;
+				// The manager's PIN is asked before the screen waits for the server.
+				let ok = {};
+				if (data.approval_above != null && flt(v.amount) > flt(data.approval_above) + 0.005) {
+					ok = await ask_approval(this.floor, __("Staff advance of {0} to {1} (above {2})", [money(v.amount), name_of(v.employee), money(data.approval_above)]));
+					if (!ok) return;
+				}
+				return this.shift_busy(d, async () => {
+					const je = await frappe.xcall("resto.resto.staff_advance.add_advance", { ...v, request_id, ...ok });
+					d.hide();
+					frappe.show_alert({ message: __("Advance recorded: {0}", [je]), indicator: "green" });
+				});
 			},
 		});
 		d.show();

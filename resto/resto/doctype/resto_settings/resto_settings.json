@@ -33,6 +33,8 @@
   "drawer_expense_accounts",
   "drawer_purchase_cap",
   "cash_supplier",
+  "staff_advance_account",
+  "staff_advance_cap",
   "allow_side_changes",
   "charge_extra_sides",
   "column_break_pos",
@@ -246,6 +248,19 @@
    "options": "Supplier",
    "label": "Cash Supplier",
    "description": "The supplier of a cash purchase from the drawer when the cashier names none. Empty: a supplier called Cash Supplier is made on the first one."
+  },
+  {
+   "fieldname": "staff_advance_account",
+   "fieldtype": "Link",
+   "label": "Staff Advances Account",
+   "options": "Account",
+   "description": "A receivable (asset) account: an advance paid to a worker from the drawer is owed by them, by name, until it is taken off their salary."
+  },
+  {
+   "fieldname": "staff_advance_cap",
+   "fieldtype": "Currency",
+   "label": "Staff Advance Needs a Manager Above",
+   "description": "A staff advance from the drawer above this amount needs a manager's PIN. 0: never."
   },
   {
    "default": "0",
@@ -473,7 +488,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-26 20:30:00.000000",
+ "modified": "2026-11-26 22:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

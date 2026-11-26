@@ -49,6 +49,7 @@ class SetupCheck:
 			self.check_packaging,
 			self.check_cash_purchase,
 			self.check_staff_meal,
+			self.check_staff_advance,
 			self.check_recipe_precision,
 			self.check_modifiers,
 			self.check_sides,
@@ -565,6 +566,21 @@ class SetupCheck:
 			self.error(area, _("The Staff Meals Account {0} must be an expense account of company {1}, not a group").format(name, self.s.company))
 		else:
 			self.ok(area, _("Staff meals are posted to {0} at the stock's cost").format(name))
+
+	def check_staff_advance(self):
+		"""Staff advances from the drawer (D-237) go to the Staff Advances Account."""
+		from resto.resto.staff_advance import account_problem
+
+		area = _("Staff Advances")
+		name = self.s.get("staff_advance_account")
+		if not name:
+			self.warn(area, _("Set the Staff Advances Account in Resto Settings: staff advances cannot be paid from the drawer without it"))
+			return
+		problem = account_problem(name, self.s.company)
+		if problem:
+			self.error(area, problem)
+		else:
+			self.ok(area, _("Staff advances are owed on {0}, by worker, until taken off their salary").format(name))
 
 
 def short(names, limit=15):

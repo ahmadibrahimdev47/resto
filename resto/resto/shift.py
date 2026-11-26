@@ -198,9 +198,23 @@ def compute(shift):
 			modes.append(p.mode_of_payment)
 			opening[p.mode_of_payment] = received[p.mode_of_payment] = change[p.mode_of_payment] = spent[p.mode_of_payment] = 0
 
+	# Salary advances paid to workers from the drawer (D-237): owed by them, not spent.
+	from resto.resto import staff_advance
+
+	advances = staff_advance.live(shift)
+	advanced = {m: 0.0 for m in modes}
+	for a in advances:
+		advanced.setdefault(a.mode_of_payment, 0.0)
+		advanced[a.mode_of_payment] += flt(a.amount)
+		if a.mode_of_payment not in opening:
+			modes.append(a.mode_of_payment)
+			opening[a.mode_of_payment] = received[a.mode_of_payment] = change[a.mode_of_payment] = 0
+
 	rows = []
 	for m in modes:
-		expected = flt(opening[m] + received[m] - change[m] - spent.get(m, 0) - bought.get(m, 0), ACCOUNTS_PRECISION)
+		expected = flt(
+			opening[m] + received[m] - change[m] - spent.get(m, 0) - bought.get(m, 0) - advanced.get(m, 0), ACCOUNTS_PRECISION
+		)
 		rows.append(
 			{
 				"mode_of_payment": m,
@@ -209,9 +223,10 @@ def compute(shift):
 				"change_amount": flt(change[m], ACCOUNTS_PRECISION),
 				"expenses_amount": flt(spent.get(m, 0), ACCOUNTS_PRECISION),
 				"purchases_amount": flt(bought.get(m, 0), ACCOUNTS_PRECISION),
+				"advances_amount": flt(advanced.get(m, 0), ACCOUNTS_PRECISION),
 				"expected_amount": expected,
 				# How the expected amount is made (D-236): opening + sales (net of the change given)
-				# + debts collected − expenses − purchases − refunds.
+				# + debts collected − expenses − purchases − staff advances − refunds.
 				"sales_amount": flt(sold.get(m, 0) - change[m], ACCOUNTS_PRECISION),
 				"debts_amount": flt(debts_in.get(m, 0), ACCOUNTS_PRECISION),
 				"refunds_amount": flt(refunded.get(m, 0), ACCOUNTS_PRECISION),
@@ -256,6 +271,7 @@ def compute(shift):
 	collected = sum(r["paid_amount"] for r in inv_rows) + debts_total
 	expenses_total = sum(flt(e.amount) for e in expenses)
 	purchases_total = sum(flt(p.amount) for p in purchases)
+	advances_total = sum(flt(a.amount) for a in advances)
 	# Staff meals (D-231): taken from stock at cost, no money in or out of the drawer.
 	from resto.resto import staff_meal
 
@@ -280,6 +296,17 @@ def compute(shift):
 			}
 			for p in purchases
 		],
+		"advances": [
+			{
+				"mode_of_payment": a.mode_of_payment,
+				"employee": a.employee,
+				"employee_name": a.employee_name,
+				"amount": flt(a.amount),
+				"remarks": a.remarks,
+				"journal_entry": a.journal_entry,
+			}
+			for a in advances
+		],
 		"debts": [
 			{"payment_entry": p.name, "customer": p.party_name or p.party, "mode_of_payment": p.mode_of_payment, "amount": flt(p.received_amount)}
 			for p in debts
@@ -299,7 +326,9 @@ def compute(shift):
 			"expenses_total": flt(expenses_total, ACCOUNTS_PRECISION),
 			"purchases_count": len(purchases),
 			"purchases_total": flt(purchases_total, ACCOUNTS_PRECISION),
-			"net_cash": flt(collected - expenses_total - purchases_total, ACCOUNTS_PRECISION),
+			"advances_count": len(advances),
+			"advances_total": flt(advances_total, ACCOUNTS_PRECISION),
+			"net_cash": flt(collected - expenses_total - purchases_total - advances_total, ACCOUNTS_PRECISION),
 			"tax_total": flt(sum(flt(t.amount) for t in taxes), ACCOUNTS_PRECISION),
 			"total_quantity": flt(sum(flt(i.total_qty) for i in invoices)),
 			"staff_meals_count": len(meals),
@@ -331,6 +360,7 @@ def _report(shift, figures):
 		],
 		"expenses": figures["expenses"],
 		"purchases": figures["purchases"],
+		"advances": figures["advances"],
 		"debts": figures["debts"],
 		"staff_meals": figures["staff_meals"],
 		"rows": figures["rows"],
@@ -495,6 +525,7 @@ def close_shift(amounts):
 			"tax_total": s["tax_total"],
 			"expenses_total": s["expenses_total"],
 			"purchases_total": s["purchases_total"],
+			"advances_total": s["advances_total"],
 			"net_cash": s["net_cash"],
 			"total_difference": flt(sum(r["difference"] for r in figures["rows"]), ACCOUNTS_PRECISION),
 		}
@@ -540,7 +571,7 @@ def _over_short_entry(shift, rows):
 			"voucher_type": "Cash Entry",
 			"company": shift.company,
 			"posting_date": frappe.utils.nowdate(),
-			}
+		}
 	)
 	_set_remark(je, _("Cash over/short, shift {0}").format(shift.name))
 	for r in rows:
@@ -724,7 +755,7 @@ def add_expense(mode_of_payment, expense_account, amount, remarks=None, request_
 			"voucher_type": "Cash Entry",
 			"company": shift.company,
 			"posting_date": frappe.utils.nowdate(),
-			}
+		}
 	)
 	_set_remark(je, _("Drawer expense, shift {0}: {1}").format(shift.name, remarks.strip()))
 	je.append("accounts", {"account": expense_account, "debit_in_account_currency": amount, "cost_center": cost_center})
@@ -1061,8 +1092,10 @@ def check_cancel(doc, method=None):
 	if not name and doc.doctype == "Purchase Invoice":
 		name = frappe.db.get_value("Resto Shift Purchase", {"purchase_invoice": doc.name}, "parent")
 	if not name and doc.doctype == "Journal Entry":
-		name = frappe.db.get_value("Resto Shift Expense", {"journal_entry": doc.name}, "parent") or frappe.db.get_value(
-			"Resto Shift", {"over_short_entry": doc.name}, "name"
+		name = (
+			frappe.db.get_value("Resto Shift Expense", {"journal_entry": doc.name}, "parent")
+			or frappe.db.get_value("Resto Shift Advance", {"journal_entry": doc.name}, "parent")
+			or frappe.db.get_value("Resto Shift", {"over_short_entry": doc.name}, "name")
 		)
 	if name and shift_status(name, lock=True) == "Closed":
 		frappe.throw(

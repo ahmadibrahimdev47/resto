@@ -61,3 +61,17 @@ test("counting blind: no breakdown before the shift is closed, as no expected am
 	assert.ok(closed.includes("rf-xparts"));
 	t.done();
 });
+
+test("staff advances: a line of their own in the breakdown and a box of their own (D-237)", () => {
+	const t = load(() => "ok");
+	const row = { ...CASH, advances_amount: 100, expected_amount: 725 };
+	const html = t.floor.shift_report(
+		{ summary: { advances_count: 2, advances_total: 100, collected: 405, net_cash: 305 }, rows: [row], advances: [{ employee: "E1", employee_name: "Ali", amount: 100 }] },
+		true
+	);
+	assert.deepEqual(lines(html, "Cash")[4], ["Staff Advances", "−100"]);
+	assert.ok(html.includes("2 advances · taken off salaries, not an expense"));
+	assert.ok(html.includes("Collected − Expenses − Purchases − Advances"));
+	assert.ok(html.includes("Ali"));
+	t.done();
+});

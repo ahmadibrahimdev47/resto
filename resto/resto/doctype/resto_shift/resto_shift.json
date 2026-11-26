@@ -30,6 +30,7 @@
   "tax_total",
   "expenses_total",
   "purchases_total",
+  "advances_total",
   "net_cash",
   "total_difference",
   "over_short_entry",
@@ -38,7 +39,8 @@
   "taxes_section",
   "taxes",
   "expenses",
-  "purchases"
+  "purchases",
+  "advances"
  ],
  "fields": [
   {
@@ -207,6 +209,13 @@
    "read_only": 1
   },
   {
+   "fieldname": "advances_total",
+   "fieldtype": "Currency",
+   "label": "Staff Advances",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
    "fieldname": "net_cash",
    "fieldtype": "Currency",
    "label": "Net In for the Shift",
@@ -266,13 +275,20 @@
    "label": "Drawer Stock Purchases",
    "options": "Resto Shift Purchase",
    "read_only": 1
+  },
+  {
+   "fieldname": "advances",
+   "fieldtype": "Table",
+   "label": "Staff Advances",
+   "options": "Resto Shift Advance",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-26 21:00:00.000000",
+ "modified": "2026-11-26 22:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Shift",

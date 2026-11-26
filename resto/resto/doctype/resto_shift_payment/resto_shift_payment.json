@@ -13,6 +13,7 @@
   "change_amount",
   "expenses_amount",
   "purchases_amount",
+  "advances_amount",
   "expected_amount",
   "closing_amount",
   "difference",
@@ -64,6 +65,13 @@
    "read_only": 1
   },
   {
+   "fieldname": "advances_amount",
+   "fieldtype": "Currency",
+   "label": "Staff Advances",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
    "fieldname": "expected_amount",
    "fieldtype": "Currency",
    "label": "Expected Amount",
@@ -100,7 +108,7 @@
  "is_submittable": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-26 21:00:00.000000",
+ "modified": "2026-11-26 22:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Shift Payment",

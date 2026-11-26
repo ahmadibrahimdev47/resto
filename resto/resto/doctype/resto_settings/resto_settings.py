@@ -39,6 +39,15 @@ class RestoSettings(Document):
 					)
 				)
 
+		if self.get("staff_advance_account"):
+			from resto.resto.staff_advance import account_problem
+
+			problem = account_problem(self.staff_advance_account, self.company)
+			if problem:
+				frappe.throw(problem)
+		if flt(self.get("staff_advance_cap")) < 0:
+			frappe.throw(_("Staff Advance Needs a Manager Above cannot be negative"))
+
 		for field in ("cash_over_short_account",):
 			account = self.get(field)
 			if not account:
