@@ -201,7 +201,12 @@ class TestStaffMeal(IntegrationTestCase):
 		staff_meal.set_item(order, "STAFF-TEA", 0.05, approver=MANAGER_USER, pin="4321")
 		row = frappe.get_doc("Resto Order", order).staff_items[0]
 		self.assertEqual((row.item_code, flt(row.qty), row.approved_by), ("STAFF-TEA", 0.05, MANAGER_USER))
-		# Whole units stay whole; a menu dish is added from the menu, not as an ingredient.
+		# Whole units stay whole (the fixtures leave Nos fractional: made whole here, as in test_sides);
+		# a menu dish is added from the menu, not as an ingredient.
+		frappe.db.set_value("UOM", "Nos", "must_be_whole_number", 1)
+		frappe.clear_document_cache("UOM", "Nos")
+		self.addCleanup(frappe.clear_document_cache, "UOM", "Nos")
+		self.addCleanup(frappe.db.set_value, "UOM", "Nos", "must_be_whole_number", 0)
 		self.assertRaises(frappe.ValidationError, staff_meal.set_item, order, "RAW-BUN", 1.5)
 		self.assertRaises(frappe.ValidationError, staff_meal.set_item, order, "DISH-FRIES", 1)
 		# 0 takes it off.
