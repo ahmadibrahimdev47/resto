@@ -283,12 +283,13 @@ def _slot_label(item_code, key):
 	return key
 
 
-def clean_choice(item_code, choice, label=None, strict=True):
+def clean_choice(item_code, choice, label=None, strict=True, sent=False):
 	"""A choice checked against the dish's slots, with every slot.
 
 	strict (a change being made): unknown, negative or too many portions are refused. Not strict
 	(an order being saved): a choice the recipe or side group no longer allows goes back to the
-	recipe's sides, with a message, so the order can still be saved."""
+	recipe's sides, with a message, so the order can still be saved. sent: the line went to the
+	kitchen; what it was served with stays, above a most lowered since too."""
 	label = label or item_code
 	all_slots = slots(item_code)
 	choice = choice or {}
@@ -323,11 +324,11 @@ def clean_choice(item_code, choice, label=None, strict=True):
 				ok = False
 			elif portions > EPS:
 				items[item] = portions
-		# A shared choice is limited by its total (set_for_lines), not dish by dish.
-		if strict and not entry.get("set") and sum(items.values()) > slot.max + 1e-6:
-			frappe.throw(
-				_("{0}: the most portions of {1} for one dish is {2}").format(frappe.bold(label), frappe.bold(slot.label), slot.max)
-			)
+		# A shared choice is limited by its total (set_for_lines), not dish by dish. A choice kept from
+		# before that is now above the most (the group's most lowered) goes back to the recipe (D-270).
+		if ok and not entry.get("set") and not (sent and not strict) and sum(items.values()) > slot.max + 1e-6:
+			refuse(_("{0}: the most portions of {1} for one dish is {2}").format(frappe.bold(label), frappe.bold(slot.label), slot.max))
+			ok = False
 		if not ok:
 			result[key] = {"items": dict(slot.default)}
 			reset.append(slot.label)
@@ -386,7 +387,8 @@ def set_line_sides(row, old=None):
 	changed = bool(choice) and (not old or _loads(old.sides, row.item_name) != choice)
 	if changed and not enabled():
 		frappe.throw(_("Changing the sides served is off in Restaurant Settings"))
-	choice = clean_choice(row.item_code, choice, row.item_name, strict=changed)
+	sent = bool(row.get("kitchen_status")) and row.kitchen_status != NOT_SENT
+	choice = clean_choice(row.item_code, choice, row.item_name, strict=changed, sent=sent)
 	if cint(row.get("sides_free")) and old and (changed or abs(flt(old.qty) - flt(row.qty)) > EPS):
 		# The free mark was given for what was on the line then (D-253): give it again if still meant.
 		row.sides_free, row.sides_free_by, row.sides_free_value = 0, None, 0
