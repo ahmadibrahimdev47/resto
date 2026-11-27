@@ -335,7 +335,7 @@
    "open_in_new_tab": 0,
    "show_arrow": 0,
    "type": "Link",
-   "label": "Itemwise Recommended Reorder Level",
+   "label": "Suggested Reorder Level",
    "link_type": "Report",
    "link_to": "Itemwise Recommended Reorder Level",
    "icon": ""
@@ -946,7 +946,7 @@
    "icon": ""
   }
  ],
- "modified": "2026-11-27 19:00:00.000000",
+ "modified": "2026-11-28 09:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto",
