@@ -40,6 +40,7 @@
   "negative_cash",
   "drawer_cash_in_accounts",
   "salary_account",
+  "fixed_expense_accounts",
   "allow_side_changes",
   "charge_extra_sides",
   "free_extras_limit",
@@ -310,6 +311,13 @@
    "label": "Salaries Account",
    "options": "Account",
    "description": "The expense account the month's salary entry posts the workers' salaries to."
+  },
+  {
+   "fieldname": "fixed_expense_accounts",
+   "fieldtype": "Table MultiSelect",
+   "label": "Fixed Monthly Expenses",
+   "options": "Resto Expense Account",
+   "description": "Expenses paid once a month (rent, salaries...): the daily profit and loss report can spread each over the days of its month. Empty: the salaries account and the accounts named rent."
   },
   {
    "default": "0",
@@ -589,7 +597,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-27 13:00:00.000000",
+ "modified": "2026-11-27 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",
