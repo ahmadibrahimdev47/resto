@@ -213,9 +213,14 @@ def set_reorder(item_code, warehouse, level=0, qty=0, material_request_type="Pur
 		frappe.get_doc({"doctype": "Item Reorder", **where, "idx": idx + 1, **values}).db_insert()
 	_touched(
 		item_code,
-		_("Reorder level for {0} set to {1} {2}, order {3}").format(warehouse, level, _(item.stock_uom or ""), qty),
+		_("Reorder level for {0} set to {1} {2}, order {3}").format(warehouse, _num(level), _(item.stock_uom or ""), _num(qty)),
 	)
 	return frappe._dict(warehouse=warehouse, level=level, qty=qty, type=material_request_type)
+
+
+def _num(v):
+	"""10 not 10.0, 2.5 not 2.500."""
+	return ("%.3f" % flt(v)).rstrip("0").rstrip(".")
 
 
 def _touched(item_code, note):

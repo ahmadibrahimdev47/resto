@@ -162,8 +162,8 @@ class RestoItems {
 		let rows = [];
 		const fill = () => {
 			const r = rows.find((x) => x.warehouse === d.get_value("warehouse"));
-			d.set_value("level", r ? r.level : 0);
-			d.set_value("qty", r ? r.qty : 0);
+			d.set_value("level", RestoItems.num(r ? r.level : 0));
+			d.set_value("qty", r ? RestoItems.num(r.qty) : "");
 			d.set_value("material_request_type", r ? r.type : "Purchase");
 		};
 		const d = new frappe.ui.Dialog({
@@ -181,11 +181,12 @@ class RestoItems {
 				},
 				{
 					fieldname: "level",
-					fieldtype: "Float",
+					fieldtype: "Data", // a Float field shows every decimal of the site's precision: 10.00000
+					input_type: "number",
 					label: `${__("Reorder Level", null, "Resto Items")} (${unit})`,
 					description: __("When the stock falls to this quantity, the item is due to be ordered.", null, "Resto Items"),
 				},
-				{ fieldname: "qty", fieldtype: "Float", label: `${__("Quantity to Order", null, "Resto Items")} (${unit})`, reqd: 1 },
+				{ fieldname: "qty", fieldtype: "Data", input_type: "number", label: `${__("Quantity to Order", null, "Resto Items")} (${unit})`, reqd: 1 },
 				{
 					fieldname: "material_request_type",
 					fieldtype: "Select",
@@ -217,6 +218,10 @@ class RestoItems {
 
 	save_reorder(it, d, values) {
 		if (!values.warehouse) return;
+		if (!values.remove && [values.level || 0, values.qty].some((v) => v === "" || isNaN(Number(v)))) {
+			frappe.msgprint(__("Enter the level and the quantity as numbers", null, "Resto Items"));
+			return;
+		}
 		frappe
 			.call({ method: "resto.resto.items.set_reorder", args: { item_code: it.name, ...values }, freeze: true })
 			.then(() => frappe.call("resto.resto.items.get_reorder", { item_code: it.name }))
