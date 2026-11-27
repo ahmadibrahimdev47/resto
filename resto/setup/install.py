@@ -32,7 +32,9 @@ STANDARD_PERMISSIONS = {
 	# Not the kitchen: a Bin holds the stock value (D-242).
 	"Bin": {MANAGER: ["read", "report"]},
 	# ERPNext checks the customer's receivable account (select) while it builds any bill.
-	"Account": {WAITER: ["select"], CASHIER: ["select"], MANAGER: ["select"]},
+	# The manager also reads the chart of accounts: the consolidated statement and the financial
+	# ratios report on Account (D-286).
+	"Account": {WAITER: ["select"], CASHIER: ["select"], MANAGER: ["select", "read", "report"]},
 	# ... and reads the POS Profile (item details) while it builds the bill and its preview.
 	"POS Profile": {WAITER: ["read"], CASHIER: ["read"], MANAGER: ["read"]},
 	"Purchase Receipt": {MANAGER: ["read", "report"]},
