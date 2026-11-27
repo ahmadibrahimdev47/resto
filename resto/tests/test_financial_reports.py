@@ -49,6 +49,7 @@ class TestFinancialReports(IntegrationTestCase):
 			"Profit and Loss Statement": statement,
 			"Balance Sheet": statement,
 			"Cash Flow": statement,
+			"Consolidated Financial Statement": {**statement, "report": "Balance Sheet"},
 			"Trial Balance": {**dates, "fiscal_year": fy},
 			"General Ledger": {**dates, "group_by": "Group by Voucher (Consolidated)"},
 			"Sales Register": dates,

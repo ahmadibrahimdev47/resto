@@ -62,6 +62,7 @@ FINANCIAL_REPORTS = (
 	"Profit and Loss Statement",
 	"Balance Sheet",
 	"Cash Flow",
+	"Consolidated Financial Statement",
 	"Trial Balance",
 	"General Ledger",
 	"Sales Register",
