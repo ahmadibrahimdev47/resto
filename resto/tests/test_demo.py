@@ -149,6 +149,16 @@ class TestDemo(IntegrationTestCase):
 		self.assertTrue(frappe.db.exists("Purchase Invoice Item", {"parent": ("in", bought), "warehouse": fx.KITCHEN}))
 		# The day's prep was made (the par level of the prepared items).
 		self.assertTrue(frappe.db.exists("Resto Prep", {"posting_date": self.start, "docstatus": 1}))
+		# No prepared item the menu uses is left below zero (made for the evening too, a part of another made with it).
+		site = demo._Site(3)
+		used = {}
+		for dish in site.menu:
+			site.parts(dish["item_code"], 1, {}, used)
+		for code in list(used):
+			used.update(dict.fromkeys(k for k in site.prepared[code].per if k in site.prepared))
+		self.assertTrue(used)
+		for code in used:
+			self.assertGreaterEqual(fx.bin_qty(code), -1e-6, code)
 
 		# Again with the same arguments: nothing more.
 		count = len(orders)

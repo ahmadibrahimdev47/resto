@@ -328,6 +328,17 @@ class _Site:
 			elif cint(frappe.get_cached_value("Item", part, "is_stock_item")):
 				raw[part] = raw.get(part, 0) + qty * per
 
+	def level(self, item_code, depth=0):
+		"""0 for a prepared item made of stock items only; one more than its deepest prepared part."""
+		cache = self.__dict__.setdefault("_levels", {})
+		if item_code not in cache:
+			parts = [k for k in self.prepared[item_code].per if k in self.prepared and k != item_code]
+			cache[item_code] = 1 + max(self.level(k, depth + 1) for k in parts) if parts and depth < 8 else 0
+		return cache[item_code]
+
+	def by_level(self, items, deepest_first=False):
+		return sorted(items, key=lambda i: (self.level(i) * (-1 if deepest_first else 1), i))
+
 	def order_parts(self, spec, raw, prep):
 		for line in spec.lines:
 			self.parts(line.item_code, line.qty, raw, prep)
@@ -644,7 +655,7 @@ class _Run:
 			use = self.daily_use().get(item_code, 0)
 			need = max(qty * 1.2, qty + 2 * use, qty + 0.001)
 			if item_code in self.site.prepared:
-				self.attempt(lambda: self.prep({item_code: need + self.site.stock(item_code)}, urgent=True), depth + 1)
+				self.attempt(lambda: self.prep({item_code: need + max(self.site.stock(item_code), 0)}, urgent=True), depth + 1)
 			else:
 				self.attempt(lambda: self.buy({item_code: need}, urgent=True), depth + 1)
 			self.count("top_ups")
@@ -679,6 +690,15 @@ class _Run:
 			add(_at(day, "10:30"), site.manager, self.pay_suppliers, "supplier payments")
 		add(_at(day, "11:30"), cashier, self.open_shift, "open shift", critical=True)
 		add(_at(day, "11:45"), site.manager, lambda: self.prep(self.prep_need(plan)), "prep")
+		# Before the evening: what the rest of the day's orders take, less what is left (more was used
+		# than planned, a recipe changed), and any balance below zero.
+		evening = _at(day, "17:15")
+		add(
+			evening,
+			site.manager,
+			lambda: self.prep(self.prep_need(plan, after=evening), suggest=0, extra=1.05, remark=_("Prepared for the evening")),
+			"evening prep",
+		)
 		for spec in plan.orders:
 			self.order_steps(spec, cashier, add)
 		if plan.staff and site.settings.get("staff_meal_account"):
@@ -872,39 +892,55 @@ class _Run:
 
 	# ---- the kitchen's stock
 
-	def prep_need(self, plan):
+	def prep_need(self, plan, after=None):
+		"""The prepared items the day's orders (those after a time, if given) and staff meal take."""
 		raw, prep = {}, {}
 		for spec in plan.orders:
-			self.site.order_parts(spec, raw, prep)
+			if not after or spec.at >= after:
+				self.site.order_parts(spec, raw, prep)
+		if plan.staff and (not after or plan.staff.at >= after):
+			for i in plan.staff["items"]:
+				self.site.parts(i["item_code"], flt(i["qty"]), raw, prep)
 		return prep
 
-	def prep(self, need, urgent=False):
-		"""The day's prep: the par levels (Resto Prep's own suggestions), and enough for the day's orders."""
+	def prep(self, need, urgent=False, suggest=None, extra=1.1, remark=None):
+		"""A prep: the par levels (Resto Prep's own suggestions, unless suggest=0), and what is still
+		short of need (times extra) in the kitchen. A prepared item made of another (a sauce made
+		with a stock, a mix used in a dish's filling) needs that one made too: worked out from the
+		top level down. A balance below zero (prepared items may go below it) is made up as well."""
 		site = self.site
 		if not site.prepared:
 			return
+		if urgent:
+			extra = 1
 		doc = frappe.new_doc("Resto Prep")
 		doc.company = site.company
 		doc.posting_date = frappe.utils.nowdate()
 		doc.warehouse = site.kitchen
 		doc.flags.ignore_permissions = True
-		if not urgent:
+		if (not urgent) if suggest is None else cint(suggest):
 			doc.get_suggestions()
 		rows = {r.item_code: r for r in doc.items}
-		for item_code, qty in need.items():
-			if item_code not in site.prepared:
-				continue
+		want = {i: flt(q) * extra for i, q in need.items() if i in site.prepared}
+		# Every prepared item, the top level first: a part is reached after all that use it.
+		for item_code in site.by_level(site.prepared, deepest_first=True):
 			row = rows.get(item_code)
+			short = want.get(item_code, 0) - site.stock(item_code)
+			qty = site.round_up(item_code, max(flt(row.qty) if row else 0, short))
+			if qty <= 0:
+				if row:
+					row.qty = 0
+				continue
 			if not row:
 				row = rows[item_code] = doc.append("items", {"recipe": site.prepared[item_code].recipe, "item_code": item_code, "qty": 0})
-			short = qty * (1 if urgent else 1.1) - max(site.stock(item_code), 0)
-			row.qty = max(flt(row.qty), short)
-		for row in doc.items:
-			row.qty = site.round_up(row.item_code, flt(row.qty))
+			row.qty = qty
+			for part, per in site.prepared[item_code].per.items():
+				if part in site.prepared and part != item_code:
+					want[part] = want.get(part, 0) + qty * per
 		if not any(flt(r.qty) > 0 for r in doc.items):
 			return
-		if urgent:
-			doc.remarks = _("Prepared again during the service")
+		if remark or urgent:
+			doc.remarks = remark or _("Prepared again during the service")
 		doc.flags.ignore_permissions = True
 		doc.insert()
 		doc.submit()
@@ -934,7 +970,8 @@ class _Run:
 			for spec in self.planner.plan(d).orders:
 				site.order_parts(spec, raw, prep)
 		for item_code, p in site.prepared.items():
-			site.prep_raw(item_code, prep.get(item_code, 0) + p.par, raw)
+			# prep_raw goes down into the prepared parts: what a sauce takes of its stock is bought too.
+			site.prep_raw(item_code, prep.get(item_code, 0) + p.par + max(-site.stock(item_code), 0), raw)
 		use = self.daily_use()
 		needs = {}
 		for item_code in set(raw) | set(use):

@@ -49,3 +49,27 @@ class TestPrepRights(IntegrationTestCase):
 		se = doc.items[0].stock_entry
 		self.assertTrue(se)
 		self.assertEqual(frappe.db.get_value("Stock Entry", se, ["purpose", "docstatus"]), ("Manufacture", 1))
+
+	def test_a_part_is_made_before_the_item_made_of_it(self):
+		"""Listed the other way round, the rows are made ingredient first (D-281)."""
+		fx.item("PREP-MIX-T", "Kg", group="Resto Prepared")
+		mix = fx.recipe("Prepared Ingredient", "PREP-MIX-T", [("PREP-PATTY", 2)])
+		patty = frappe.db.get_value("Resto Recipe", {"item": "PREP-PATTY", "recipe_type": "Prepared Ingredient"}, "name")
+		fx.receive(fx.KITCHEN, [("RAW-BEEF", 1, 300)])
+		before = fx.bin_qty("PREP-PATTY")
+		doc = frappe.get_doc(
+			{
+				"doctype": "Resto Prep",
+				"company": fx.COMPANY,
+				"posting_date": nowdate(),
+				"warehouse": fx.KITCHEN,
+				"items": [{"recipe": mix.name, "item_code": "PREP-MIX-T", "qty": 1}, {"recipe": patty, "item_code": "PREP-PATTY", "qty": 2}],
+			}
+		)
+		doc.insert(ignore_permissions=True)
+		doc.submit()
+		self.assertEqual([(r.idx, r.item_code) for r in doc.items], [(1, "PREP-PATTY"), (2, "PREP-MIX-T")])
+		first, second = (frappe.db.get_value("Stock Entry", r.stock_entry, "creation") for r in doc.items)
+		self.assertLess(first, second)
+		self.assertAlmostEqual(fx.bin_qty("PREP-PATTY"), before)
+		self.assertAlmostEqual(fx.bin_qty("PREP-MIX-T"), 1)

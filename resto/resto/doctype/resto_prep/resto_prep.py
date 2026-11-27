@@ -43,7 +43,7 @@ class RestoPrep(Document):
 
 	def before_submit(self):
 		# Rows with nothing to prepare are dropped so the document shows what was made.
-		self.items = [d for d in self.items if flt(d.qty) > 0]
+		self.items = _made_first([d for d in self.items if flt(d.qty) > 0])
 		for i, d in enumerate(self.items, 1):
 			d.idx = i
 
@@ -161,3 +161,24 @@ def _get_bom(recipe, item_code):
 	if not bom:
 		frappe.throw(_("Recipe {0} has no submitted BOM yet").format(frappe.bold(recipe)))
 	return bom
+
+
+def _made_first(rows):
+	"""The rows in the order they can be made: a prepared item whose recipe uses another one on the
+	list comes after it, so its Manufacture entry takes what was just made (prepared items may go
+	below zero, and made the other way round they would, valued at the old rate). Else as listed."""
+	listed = {r.item_code for r in rows}
+	parts = {}
+	for r in rows:
+		bom = _get_bom(r.recipe, r.item_code)
+		used = frappe.get_all("BOM Item", filters={"parent": bom, "parenttype": "BOM"}, pluck="item_code")
+		parts[r.item_code] = {i for i in used if i in listed and i != r.item_code}
+	levels = {}
+
+	def level(item_code, depth=0):
+		if item_code not in levels:
+			below = parts.get(item_code) or ()
+			levels[item_code] = 1 + max(level(i, depth + 1) for i in below) if below and depth < 10 else 0
+		return levels[item_code]
+
+	return sorted(rows, key=lambda r: level(r.item_code))
