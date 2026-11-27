@@ -151,7 +151,10 @@ class RestoAnalytics {
 				axisOptions: { xIsSeries: type === "line" ? 1 : 0 },
 				tooltipOptions: { formatTooltipY: (v) => format_currency(v) },
 			});
-			if (round) $(el).after(RestoAnalytics.legend(labels, values));
+			if (round) {
+				$(el).after(RestoAnalytics.legend(labels, values, __("Other", null, "Resto")));
+				setTimeout(() => RestoAnalytics.trim(el), 900); // after the pie's opening animation
+			}
 		});
 	}
 
@@ -181,18 +184,34 @@ class RestoAnalytics {
 		);
 	}
 
-	static legend(labels, values) {
-		// Each slice: its colour, name, amount and share; as many lines as it takes.
+	static legend(labels, values, other) {
+		// Each slice: its colour, name, amount and share; as many lines as it takes. The chart colours
+		// its slices largest first (the order they are given in): «Other» is listed last with its own.
 		const total = values.reduce((sum, v) => sum + v, 0) || 1;
 		const esc = frappe.utils.escape_html;
-		return `<div class="ra-legend">${labels
+		const order = labels.map((_l, i) => i);
+		if (other) order.sort((a, b) => (labels[a] === other) - (labels[b] === other));
+		return `<div class="ra-legend">${order
 			.map(
-				(label, i) => `<div class="ra-legend-item">
+				(i) => `<div class="ra-legend-item">
 				<span class="ra-dot" style="background:${RestoAnalytics.COLORS[i % RestoAnalytics.COLORS.length]}"></span>
-				<span class="ra-legend-name">${esc(String(label))}</span>
-				<span class="ra-legend-value">${format_currency(values[i])} · ${((values[i] * 100) / total).toFixed(1)}%</span></div>`
+				<span class="ra-legend-name">${esc(String(labels[i]))}</span>
+				<span class="ra-legend-value"><span>${format_currency(values[i])}</span> · <bdi dir="ltr">${((values[i] * 100) / total).toFixed(1)}%</bdi></span></div>`
 			)
 			.join("")}</div>`;
+	}
+
+	static trim(el) {
+		// The chart keeps room under the pie for its own legend (hidden): the picture is cut to the pie.
+		const svg = el.querySelector("svg");
+		if (!svg) return;
+		const box = svg.getBoundingClientRect();
+		let bottom = 0;
+		svg.querySelectorAll("path").forEach((path) => {
+			const r = path.getBoundingClientRect();
+			if (r.height) bottom = Math.max(bottom, r.bottom - box.top);
+		});
+		if (bottom && bottom + 12 < box.height) svg.setAttribute("height", Math.ceil(bottom + 12));
 	}
 
 	static top_slices(data, keep) {
@@ -227,7 +246,7 @@ class RestoAnalytics {
 		.ra-legend-item { display:flex; align-items:center; gap:6px; min-width:0; font-size:12px; }
 		.ra-dot { width:10px; height:10px; border-radius:50%; flex:none; }
 		.ra-legend-name { font-weight:600; }
-		.ra-legend-value { color:var(--text-muted); white-space:nowrap; unicode-bidi:isolate; }
+		.ra-legend-value { color:var(--text-muted); white-space:nowrap; }
 		.ra-reports { margin-top:18px; }
 		.ra-links { display:flex; flex-wrap:wrap; gap:6px; }`;
 	}
