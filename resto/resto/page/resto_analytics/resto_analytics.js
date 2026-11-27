@@ -6,6 +6,8 @@ frappe.pages["resto-analytics"].on_page_load = function (wrapper) {
 };
 
 class RestoAnalytics {
+	static COLORS = ["#E8590C", "#2490EF", "#29CD42", "#7575FF", "#FFA00A", "#ECAD4B", "#00BAE5", "#FF5858"];
+
 	constructor(page) {
 		this.page = page;
 		this.company = page.add_field({
@@ -135,21 +137,21 @@ class RestoAnalytics {
 				return;
 			}
 			const round = type === "pie";
-			// A round chart's legend is drawn under it, inside the same height: room for it, and the
-			// smaller slices joined here into one named in the user's language (the chart's own
-			// joining names it "Rest", untranslated).
+			// A round chart: the smaller slices joined here into one named in the user's language (the
+			// chart's own joining names it "Rest", untranslated), and the legend drawn by the page
+			// under it (the chart's own is one fixed-height line, cut off in Arabic).
 			const { labels, values } = round ? RestoAnalytics.top_slices(data, 6) : data;
 			new frappe.Chart(el, {
 				data: { labels, datasets: [{ name: title, values }] },
 				type,
-				height: round ? 320 : 240,
+				height: round ? 250 : 240,
 				maxSlices: round ? 7 : undefined,
-				maxLegendPoints: round ? 7 : undefined,
-				truncateLegends: round ? 1 : undefined,
-				colors: ["#E8590C", "#2490EF", "#29CD42", "#7575FF", "#FFA00A", "#ECAD4B", "#00BAE5", "#FF5858"],
+				showLegend: round ? 0 : undefined,
+				colors: RestoAnalytics.COLORS,
 				axisOptions: { xIsSeries: type === "line" ? 1 : 0 },
 				tooltipOptions: { formatTooltipY: (v) => format_currency(v) },
 			});
+			if (round) $(el).after(RestoAnalytics.legend(labels, values));
 		});
 	}
 
@@ -179,13 +181,29 @@ class RestoAnalytics {
 		);
 	}
 
+	static legend(labels, values) {
+		// Each slice: its colour, name, amount and share; as many lines as it takes.
+		const total = values.reduce((sum, v) => sum + v, 0) || 1;
+		const esc = frappe.utils.escape_html;
+		return `<div class="ra-legend">${labels
+			.map(
+				(label, i) => `<div class="ra-legend-item">
+				<span class="ra-dot" style="background:${RestoAnalytics.COLORS[i % RestoAnalytics.COLORS.length]}"></span>
+				<span class="ra-legend-name">${esc(String(label))}</span>
+				<span class="ra-legend-value">${format_currency(values[i])} · ${((values[i] * 100) / total).toFixed(1)}%</span></div>`
+			)
+			.join("")}</div>`;
+	}
+
 	static top_slices(data, keep) {
 		// The largest keep - 1 slices, and the rest as one «Other».
 		const rows = data.labels.map((label, i) => [label, data.values[i] || 0]).sort((a, b) => b[1] - a[1]);
 		if (rows.length <= keep) return { labels: rows.map((r) => r[0]), values: rows.map((r) => r[1]) };
 		const top = rows.slice(0, keep - 1);
 		const rest = rows.slice(keep - 1).reduce((sum, r) => sum + r[1], 0);
-		return { labels: [...top.map((r) => r[0]), __("Other", null, "Resto")], values: [...top.map((r) => r[1]), rest] };
+		// Largest first with «Other» in its place too: the chart colours its slices in that order.
+		const all = [...top, [__("Other", null, "Resto"), rest]].sort((a, b) => b[1] - a[1]);
+		return { labels: all.map((r) => r[0]), values: all.map((r) => r[1]) };
 	}
 
 	static css() {
@@ -204,6 +222,12 @@ class RestoAnalytics {
 		@media (max-width: 600px) { .ra-charts { grid-template-columns:1fr; } }
 		.ra-chart { border:1px solid var(--border-color); border-radius:10px; padding:10px; background:var(--card-bg); }
 		.ra-empty { padding:40px; text-align:center; }
+		.ra-chart .chart-legend { display:none; }
+		.ra-legend { display:flex; flex-wrap:wrap; gap:6px 16px; padding:4px 6px 2px; }
+		.ra-legend-item { display:flex; align-items:center; gap:6px; min-width:0; font-size:12px; }
+		.ra-dot { width:10px; height:10px; border-radius:50%; flex:none; }
+		.ra-legend-name { font-weight:600; }
+		.ra-legend-value { color:var(--text-muted); white-space:nowrap; unicode-bidi:isolate; }
 		.ra-reports { margin-top:18px; }
 		.ra-links { display:flex; flex-wrap:wrap; gap:6px; }`;
 	}
