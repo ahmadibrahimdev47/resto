@@ -455,7 +455,22 @@ class TestRestaurantFlow(IntegrationTestCase):
 		held = frappe.db.get_value("Bin", {"warehouse": fx.KITCHEN, "actual_qty": (">", 0)}, "item_code")
 		self.assertTrue(held)
 		self.assertAlmostEqual(flt(rows[held]["bal_qty"]), fx.bin_qty(held), 3)
-		self.assertEqual([c["fieldname"] for c in stock["columns"]][-3:], ["bal_qty", "val_rate", "bal_val"])
+		self.assertEqual(
+			[c["fieldname"] for c in stock["columns"]][-5:], ["bal_qty", "reorder_level", "to_order", "val_rate", "bal_val"]
+		)
+		# A reorder level above what the kitchen holds: short, first, with the quantity to buy; an
+		# item with a level and nothing in the kitchen is listed at zero (D-287).
+		item = frappe.get_doc("Item", held)
+		item.append("reorder_levels", {"warehouse": fx.KITCHEN, "warehouse_reorder_level": fx.bin_qty(held) + 5, "warehouse_reorder_qty": 2, "material_request_type": "Purchase"})
+		item.save(ignore_permissions=True)
+		empty = fx.item("RESTO-REORDER-T", "Nos")
+		empty.append("reorder_levels", {"warehouse": fx.KITCHEN, "warehouse_reorder_level": 3, "warehouse_reorder_qty": 10, "material_request_type": "Purchase"})
+		empty.save(ignore_permissions=True)
+		short = run("Resto Current Stock", filters={**base, "warehouse": fx.KITCHEN, "short_only": 1}, ignore_prepared_report=True)
+		got = {r["item_code"]: r for r in short["result"] if isinstance(r, dict) and r.get("item_code")}
+		self.assertTrue(all(r["short"] for r in got.values()))
+		self.assertAlmostEqual(flt(got[held]["to_order"]), 5, 3)  # back to the level: more than the reorder qty of 2
+		self.assertEqual((flt(got["RESTO-REORDER-T"]["bal_qty"]), flt(got["RESTO-REORDER-T"]["to_order"])), (0, 10))
 
 		from resto.resto.analytics import get_dashboard
 

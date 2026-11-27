@@ -310,6 +310,38 @@
   },
   {
    "added": 0,
+   "child": 1,
+   "collapsible": 1,
+   "hidden": 0,
+   "indent": 0,
+   "is_default_module": 0,
+   "keep_closed": 0,
+   "open_in_new_tab": 0,
+   "show_arrow": 0,
+   "type": "Link",
+   "label": "Stock Projected Qty",
+   "link_type": "Report",
+   "link_to": "Stock Projected Qty",
+   "icon": ""
+  },
+  {
+   "added": 0,
+   "child": 1,
+   "collapsible": 1,
+   "hidden": 0,
+   "indent": 0,
+   "is_default_module": 0,
+   "keep_closed": 0,
+   "open_in_new_tab": 0,
+   "show_arrow": 0,
+   "type": "Link",
+   "label": "Itemwise Recommended Reorder Level",
+   "link_type": "Report",
+   "link_to": "Itemwise Recommended Reorder Level",
+   "icon": ""
+  },
+  {
+   "added": 0,
    "child": 0,
    "collapsible": 1,
    "hidden": 0,
@@ -898,7 +930,7 @@
    "icon": ""
   }
  ],
- "modified": "2026-11-27 16:00:00.000000",
+ "modified": "2026-11-27 17:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto",

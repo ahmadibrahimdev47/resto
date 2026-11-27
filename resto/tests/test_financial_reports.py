@@ -1,5 +1,5 @@
 """A Resto Manager with no accounts role opens the financial reports of the restaurant sidebar
-(D-286): each one is allowed to the role (a Custom Role) and its doctype's report right is given,
+(D-286) and its stock reorder reports (D-287): each one is allowed to the role (a Custom Role) and its doctype's report right is given,
 read only.
 
 bench --site test.resto run-tests --module resto.tests.test_financial_reports
@@ -22,6 +22,7 @@ class TestFinancialReports(IntegrationTestCase):
 		_manager()
 		install.grant_standard_permissions()  # as a migrate does
 		install.grant_report_roles(install.FINANCIAL_REPORTS, "Resto Manager")
+		install.grant_report_roles(install.STOCK_REPORTS, "Resto Manager")
 		frappe.db.commit()
 
 	def tearDown(self):
@@ -59,6 +60,9 @@ class TestFinancialReports(IntegrationTestCase):
 			"Sales Invoice Trends": trends,
 			"Purchase Invoice Trends": trends,
 			"Sales Payment Summary": dates,
+			# The stock reports next to the current stock (D-287).
+			"Stock Projected Qty": {"company": fx.COMPANY},
+			"Itemwise Recommended Reorder Level": {"from_date": dates["from_date"], "to_date": today},
 		}
 
 	def test_a_plain_manager_opens_them(self):
@@ -67,10 +71,11 @@ class TestFinancialReports(IntegrationTestCase):
 		accounts = {"Accounts User", "Accounts Manager", "Auditor", "System Manager"}
 		self.assertEqual(set(frappe.get_roles(MANAGER_USER)) & accounts, set())
 		filters = self.filters()
-		self.assertEqual(set(filters), set(install.FINANCIAL_REPORTS))
+		reports = install.FINANCIAL_REPORTS + install.STOCK_REPORTS
+		self.assertEqual(set(filters), set(reports))
 		frappe.set_user(MANAGER_USER)
 		refused, other = [], []
-		for name in install.FINANCIAL_REPORTS:
+		for name in reports:
 			if not frappe.db.exists("Report", name):
 				continue
 			try:
@@ -89,7 +94,7 @@ class TestFinancialReports(IntegrationTestCase):
 		self.assertFalse(frappe.has_permission("GL Entry", "write"))
 
 	def test_their_own_roles_are_kept(self):
-		for name in install.FINANCIAL_REPORTS:
+		for name in install.FINANCIAL_REPORTS + install.STOCK_REPORTS:
 			if not frappe.db.exists("Report", name):
 				continue
 			own = set(frappe.get_all("Has Role", filters={"parent": name, "parenttype": "Report"}, pluck="role"))

@@ -1,5 +1,5 @@
 // What each store holds now, and what came in and went out over the dates: ERPNext's Stock Balance
-// in the columns a storekeeper reads (D-285).
+// in the columns a storekeeper reads (D-285), and what is short of its reorder level (D-287).
 frappe.query_reports["Resto Current Stock"] = {
 	filters: [
 		{
@@ -43,5 +43,18 @@ frappe.query_reports["Resto Current Stock"] = {
 			fieldtype: "Link",
 			options: "Item",
 		},
+		{
+			fieldname: "short_only",
+			label: __("Short Items Only"),
+			fieldtype: "Check",
+		},
 	],
+	// At or below its reorder level (D-287): the item and its balance in red, the short rows first.
+	formatter(value, row, column, data, default_formatter) {
+		value = default_formatter(value, row, column, data);
+		if (data && data.short && ["item_code", "bal_qty", "to_order"].includes(column.fieldname)) {
+			value = `<span style="color:var(--red-600, #e03131);font-weight:600">${value}</span>`;
+		}
+		return value;
+	},
 };

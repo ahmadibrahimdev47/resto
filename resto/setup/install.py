@@ -10,7 +10,8 @@ from resto.resto.utils import ALL_ROLES, CASHIER, HOST, KITCHEN, MANAGER, WAITER
 # a bill, the cashier prints the receipt, the manager runs the reports on invoices and stock.
 # The floor gets "select" only on Employee (the delivery driver link), so no HR data is readable.
 STANDARD_PERMISSIONS = {
-	"Item": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"], KITCHEN: ["read"]},
+	# The manager runs the stock reports on Item (D-287): projected qty, recommended reorder level.
+	"Item": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read", "report"], KITCHEN: ["read"]},
 	# The kitchen's waste and prep forms link a Company; its item lists filter by Item Group and
 	# show the UOM. It runs no report (D-242).
 	"Item Group": {KITCHEN: ["read"], MANAGER: ["read"]},
@@ -73,6 +74,10 @@ FINANCIAL_REPORTS = (
 	"Purchase Invoice Trends",
 	"Sales Payment Summary",
 )
+
+# ERPNext stock reports the restaurant sidebar links next to the current stock (D-287): what is
+# short of its reorder level, and the level the use suggests. The stock roles keep them.
+STOCK_REPORTS = ("Stock Projected Qty", "Itemwise Recommended Reorder Level")
 
 # A customer's debt paid to the cashier during a shift is counted by that shift's drawer (D-203).
 # Each worker's fixed monthly salary, for the month's salary entry (D-249): money, so at permlevel 1
@@ -315,6 +320,7 @@ def setup():
 	set_new_setting_defaults()
 	grant_standard_permissions()
 	grant_report_roles(FINANCIAL_REPORTS, MANAGER)
+	grant_report_roles(STOCK_REPORTS, MANAGER)
 	keep_money_from_the_kitchen()
 	show_stock_row_expense_account()
 	add_accounting_summary_links()
