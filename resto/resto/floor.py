@@ -119,6 +119,7 @@ def get_floor():
 			"order_no",
 			"staff_meal",
 			"staff_for",
+			"served_marked_at",
 		],
 		order_by="opened_at asc",
 	)
@@ -132,7 +133,8 @@ def get_floor():
 					sum(kitchen_status = 'Not Sent'),
 					sum(case when kitchen_status = 'Sent' then qty else 0 end),
 					sum(case when kitchen_status = 'In Progress' then qty else 0 end),
-					sum(case when kitchen_status = 'Ready' then qty else 0 end)
+					sum(case when kitchen_status = 'Ready' then qty else 0 end),
+					sum(kitchen_status != 'Void'), sum(kitchen_status = 'Served')
 				from `tabResto Order Item` where parenttype = 'Resto Order' and parent in %s group by parent""",
 				[[o.name for o in orders]],
 			)
@@ -140,14 +142,16 @@ def get_floor():
 		if orders
 		else {}
 	)
+	last_served = _last_served([o.name for o in orders if o.order_type == "Dine In"])
 	for o in orders:
-		ready, dishes, unsent, sent_qty, progress_qty, ready_qty = counts.get(o.name) or (0, 0, 0, 0, 0, 0)
+		ready, dishes, unsent, sent_qty, progress_qty, ready_qty, lines, served = counts.get(o.name) or (0,) * 8
 		o.ready_count = cint(ready)
 		o.sent_qty, o.progress_qty, o.ready_qty = flt(sent_qty), flt(progress_qty), flt(ready_qty)
 		o.dishes = flt(dishes)
 		o.unsent_count = cint(unsent)
 		o.waiter_name = frappe.utils.get_fullname(o.waiter) if o.waiter else ""
 		o.minutes = int((now - get_datetime(o.opened_at)).total_seconds() // 60) if o.opened_at else 0
+		_set_served_state(o, cint(lines), cint(served), last_served.get(o.name), now)
 
 	# An order whose invoice was cancelled after the guests left is listed apart, not on the table.
 	by_table = {o.resto_table: o for o in orders if o.resto_table and not o.rebill}
@@ -180,7 +184,8 @@ def get_floor():
 			t.reservation = reserved.get(t.name)
 			t.paid = None if order else paid_waiting.get(t.name)
 			if order:
-				t.status = "bill" if order.status == "Bill Requested" else "occupied"
+				# A bill asked for comes first; then a table served and waiting to pay (D-291).
+				t.status = "bill" if order.status == "Bill Requested" else "served" if order.waiting_payment else "occupied"
 			elif t.paid:
 				t.status = "paid"
 			elif t.reservation:
@@ -231,6 +236,34 @@ def get_floor():
 
 
 PAID_WAIT_HOURS = 12
+
+
+def _last_served(order_names):
+	"""{order: when its last dish was served}: from its kitchen tickets."""
+	if not order_names:
+		return {}
+	return dict(
+		frappe.db.sql(
+			"""select resto_order, max(served_at) from `tabResto Kitchen Ticket`
+			where resto_order in %s and ticket_type = 'Order' and status = 'Served' group by resto_order""",
+			[order_names],
+		)
+	)
+
+
+def _set_served_state(o, lines, served, last_served, now):
+	"""Served, waiting for payment (D-291): a dine-in order whose every dish (voids left out) was
+	served, or one the floor marked so by hand. served_minutes: since then, so the cashier sees
+	who has been waiting to pay longest. Worked out on each read, so a dish recalled to the kitchen
+	or added takes the table back to occupied by itself."""
+	since = None
+	if o.order_type == "Dine In":
+		if o.served_marked_at:
+			since = get_datetime(o.served_marked_at)
+		elif lines and served == lines:
+			since = get_datetime(last_served) if last_served else now
+	o.waiting_payment = int(since is not None)
+	o.served_minutes = max(int((now - since).total_seconds() // 60), 0) if since else 0
 
 
 def _paid_waiting(now):
@@ -668,6 +701,8 @@ def add_items(order, items, view=0, op=None, kitchen_printed=0):
 				"billed_qty": 0,
 			},
 		)
+	# More dishes: the table is no longer served and waiting to pay (D-291).
+	doc.served_marked_at = None
 	_reopen_if_billed(doc)
 	_save(doc)
 	return _order_view(doc) if cint(view) else doc.name
@@ -1192,6 +1227,30 @@ def mark_served(order, ticket=None):
 
 
 @frappe.whitelist(methods=["POST"])
+def mark_waiting_payment(order, confirm=0):
+	"""«Served, waiting for payment» from the floor (D-291): what is ready at the pass is served, and
+	the table shows the guests done with their food until they pay. Dishes still in the kitchen (or
+	not sent) are counted back first; confirm marks the table anyway. Nothing in the accounts or the
+	stock changes: the mark is cleared when dishes are added, and paying closes the order as ever."""
+	require_role(WAITER, CASHIER)
+	doc = _get_order(order)
+	if doc.order_type != "Dine In":
+		frappe.throw(_("Only dine-in orders have a table"))
+	lines = doc.active_lines()
+	if not lines:
+		frappe.throw(_("Nothing has been ordered on this table yet"))
+	not_ready = sum(flt(d.qty) for d in lines if d.kitchen_status in ("Not Sent", "Sent", "In Progress"))
+	if not_ready and not cint(confirm):
+		return {"done": 0, "not_ready": not_ready}
+	mark_served(doc.name)
+	frappe.db.set_value("Resto Order", doc.name, "served_marked_at", now_datetime(), update_modified=False)
+	if not_ready:
+		doc.add_comment("Info", _("Marked served, waiting for payment, with {0} dish(es) not ready").format("{0:g}".format(not_ready)))
+	publish("order", order=doc.name, table=doc.resto_table)
+	return {"done": 1, "not_ready": not_ready}
+
+
+@frappe.whitelist(methods=["POST"])
 def move_table(order, table):
 	require_role(WAITER, CASHIER, HOST)
 	doc = _get_order(order)
@@ -1252,6 +1311,8 @@ def merge_orders(target, source):
 	tgt.guests = cint(tgt.guests) + cint(src.guests)
 	if cint(src.print_sides):
 		tgt.print_sides = 1
+	if not src.served_marked_at:
+		tgt.served_marked_at = None  # dishes joined that were not marked served (D-291)
 	_reopen_if_billed(tgt)
 	_save(tgt)
 	tgt.add_comment("Info", _("Merged order {0} into this order").format(src.name))

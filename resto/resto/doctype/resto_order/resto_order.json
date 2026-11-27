@@ -57,6 +57,7 @@
   "bill_tax_amount",
   "bill_grand_total",
   "column_break_6",
+  "served_marked_at",
   "bill_requested_at",
   "bill_details",
   "invoices",
@@ -343,6 +344,14 @@
    "fieldtype": "Column Break"
   },
   {
+   "fieldname": "served_marked_at",
+   "fieldtype": "Datetime",
+   "read_only": 1,
+   "no_copy": 1,
+   "label": "Marked Served At",
+   "description": "Set from the floor's «Served, Waiting for Payment» while some dishes were not ready yet; cleared when dishes are added."
+  },
+  {
    "fieldname": "bill_requested_at",
    "fieldtype": "Datetime",
    "read_only": 1,
@@ -529,7 +538,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-27 15:00:00.000000",
+ "modified": "2026-11-28 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",

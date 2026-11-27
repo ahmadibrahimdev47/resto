@@ -1106,6 +1106,7 @@ class RestoFloor {
 			<div class="rf-legend">
 				<span><i class="free"></i>${__("Free", null, "Resto")}</span>
 				<span><i class="occupied"></i>${__("Occupied")}</span>
+				<span><i class="served"></i>${__("Served, Waiting for Payment")}${this.waiting_count(halls)}</span>
 				<span><i class="bill"></i>${__("Bill Requested")}</span>
 				<span><i class="paid"></i>${__("Paid, Guests Seated")}</span>
 				<span><i class="reserved"></i>${__("Reserved")}</span>
@@ -1118,10 +1119,16 @@ class RestoFloor {
 		);
 	}
 
+	// How many tables in all halls are served and waiting to pay (D-291), on the legend.
+	waiting_count(halls) {
+		const n = halls.flatMap((h) => h.tables).filter((t) => t.status === "served").length;
+		return n ? ` <b class="rf-wcount">${n}</b>` : "";
+	}
+
 	table_card(t) {
 		const o = t.order;
 		const pos = t.grid_row && t.grid_col ? `grid-row:${t.grid_row};grid-column:${t.grid_col};` : "";
-		const label = { free: __("Free", null, "Resto"), occupied: __("Occupied"), bill: __("Bill Requested"), reserved: __("Reserved"), paid: t.paid && t.paid.eating ? __("Paid, Eating") : __("Paid, Waiting for the Food") }[t.status];
+		const label = { free: __("Free", null, "Resto"), occupied: __("Occupied"), bill: __("Bill Requested"), served: __("Served, Waiting for Payment"), reserved: __("Reserved"), paid: t.paid && t.paid.eating ? __("Paid, Eating") : __("Paid, Waiting for the Food") }[t.status];
 		const seats = __("{0} seats", [t.seats || 0]);
 		let body;
 		if (o) {
@@ -1129,7 +1136,7 @@ class RestoFloor {
 				${o.unsent_count ? `<span class="rf-unsent">${__("Not sent: {0}", [o.unsent_count])}</span>` : ""}
 				<div class="rf-tfoot"><b class="rf-tamt">${money(o.bill_grand_total || o.net_total)}</b><span class="rf-spacer"></span>
 					<span class="rf-tago">${__("for {0}", [dur(o.minutes)])}</span></div>
-				${this.kitchen_progress(o)}`;
+				${o.waiting_payment && t.status === "served" ? `<span class="rf-tserved">${__("Served {0} ago", [dur(o.served_minutes)])}</span>` : this.kitchen_progress(o)}`;
 		} else if (t.paid) {
 			body = `<span class="rf-tsub">${esc(t.paid.name)}${t.paid.guests ? ` · ${__("{0} guests", [t.paid.guests])}` : ""}</span>
 				<span class="rf-tfoot ${t.paid.eating ? "rf-thint" : "rf-unsent"}">${
@@ -3624,12 +3631,34 @@ class RestoFloor {
 			]);
 		}
 		if (o.order_type === "Dine In") {
+			if (this.floor.roles.waiter || this.floor.roles.cashier || this.floor.roles.manager) {
+				acts.push([__("Served, Waiting for Payment"), () => this.waiting_payment()]);
+			}
 			acts.push([__("Move to Table"), () => this.move()], [__("Merge Table Into This"), () => this.merge()]);
 		}
 		if (o.order_type === "Delivery") acts.push([__("Delivery Status"), () => this.delivery()]);
 		if (this.floor.roles.manager) acts.push([__("Service Charge"), () => this.service()]);
 		acts.push([__("Open Full Form"), () => frappe.set_route("Form", "Resto Order", o.name)], [__("Cancel Order"), () => this.cancel(), "rf-danger"]);
 		this.menu_dialog(__("Order Actions"), acts);
+	}
+
+	// The guests are done with their food and have not paid yet (D-291): what is ready is served, and
+	// the table shows it in its own colour with the time since. Dishes not ready yet are asked about.
+	async waiting_payment() {
+		const o = this.order;
+		const done = () => {
+			frappe.show_alert({ message: __("Table marked served, waiting for payment"), indicator: "green" });
+			this.refresh();
+			this.load_order(o.name);
+		};
+		const r = await call("mark_waiting_payment", { order: o.name }, true);
+		if (r && r.done) return done();
+		if (r && r.not_ready) {
+			frappe.confirm(__("{0} dish(es) not ready yet. Mark the table served, waiting for payment, anyway?", [fmt_qty(r.not_ready)]), async () => {
+				await call("mark_waiting_payment", { order: o.name, confirm: 1 }, true);
+				done();
+			});
+		}
 	}
 
 	pick_side_lines(lines) {
@@ -4310,6 +4339,7 @@ class RestoFloor {
 			--rf-amber:#B45309; --rf-amber-soft:#FFF5E0; --rf-amber-ink:#78350F;
 			--rf-red:#B91C1C; --rf-red-soft:#FDECEC; --rf-red-ink:#7F1D1D;
 			--rf-purple:#7E22CE; --rf-purple-soft:#F5EDFF; --rf-purple-ink:#581C87;
+			--rf-teal:#0F766E; --rf-teal-soft:#E6F6F4; --rf-teal-ink:#134E4A;
 			background:var(--rf-bg); color:var(--rf-ink); min-height:calc(100vh - var(--navbar-height, 48px));
 			font-family:var(--font-stack, inherit);
 		}
@@ -4321,6 +4351,7 @@ class RestoFloor {
 			--rf-blue-soft:#172554; --rf-blue-ink:#93c5fd; --rf-amber-soft:#3a2a0c; --rf-amber-ink:#fcd34d;
 			--rf-red-soft:#3b1414; --rf-red-ink:#fca5a5; --rf-purple-soft:#2e1446; --rf-purple-ink:#d8b4fe;
 			--rf-red:#ef4444; --rf-green:#22c55e; --rf-blue:#3b82f6; --rf-amber:#f59e0b; --rf-purple:#a855f7;
+			--rf-teal:#14b8a6; --rf-teal-soft:#0f2f2c; --rf-teal-ink:#5eead4;
 		}
 		.rf-root svg { width:18px; height:18px; flex-shrink:0; }
 		.rf-root button { font-family:inherit; }
@@ -4412,6 +4443,11 @@ class RestoFloor {
 		.rf-tbl.paid { background:var(--rf-card); border:2px dashed var(--rf-green); } .rf-tbl.paid .rf-st { background:var(--rf-green); color:#fff; }
 		.rf-ono { color:var(--rf-acc); } .rf-paidfull { color:var(--rf-green); font-weight:700; margin-top:6px; } .rf-legend i.paid { border:2px dashed var(--rf-green); } .rf-pwarn { padding:6px 0; font-weight:700; }
 		.rf-legend i.bill { background:var(--rf-amber); } .rf-legend i.reserved { background:var(--rf-purple); }
+		.rf-tbl.served { background:var(--rf-teal-soft); border-color:var(--rf-teal); }
+		.rf-tbl.served .rf-st { background:var(--rf-teal); color:#fff; } .rf-tbl.served .rf-tago { color:var(--rf-teal-ink); }
+		.rf-tserved { color:var(--rf-teal-ink); font-weight:700; font-size:14px; }
+		.rf-legend i.served { background:var(--rf-teal); }
+		.rf-wcount { background:var(--rf-teal); color:#fff; border-radius:999px; padding:0 8px; font-size:12px; }
 		.rf-orow { all:unset; box-sizing:border-box; cursor:pointer; display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-bottom:1px solid var(--rf-line2); }
 		.rf-orow1, .rf-orow2 { display:flex; align-items:center; gap:8px; }
 		.rf-orow1 { font-size:15px; } .rf-orow2 { font-size:13px; color:var(--rf-muted); flex-wrap:wrap; }
