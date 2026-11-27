@@ -163,3 +163,25 @@ class TestDailyProfitAndLoss(IntegrationTestCase):
 		for r in items:
 			if flt(r["qty"]):
 				self.assertAlmostEqual(flt(r["unit_cost"]) * flt(r["qty"]), flt(r["cost"]), 2)
+
+	def test_direct_is_the_cost_of_goods_sold_top_group(self):
+		"""Any account in the top group holding the cost of goods sold account is direct, whatever the
+		chart calls that group; rent under Indirect Expenses is not. Depreciation is fixed by default."""
+		from resto.resto.report.resto_daily_profit_and_loss import resto_daily_profit_and_loss as pnl
+
+		accs = pnl.accounts(fx.COMPANY)
+		top = pnl.direct_top_group(accs, fx.COMPANY)
+		self.assertTrue(top)
+		leaf = fx.account("Kitchen Loss Under Direct", top.name, account_type="Expense Account")
+		indirect = frappe.db.get_value("Account", {"company": fx.COMPANY, "account_name": "Indirect Expenses", "is_group": 1})
+		rent = fx.account("Shop Rent", indirect, account_type="Expense Account")
+		accs = pnl.accounts(fx.COMPANY)
+		direct = pnl.direct_accounts(accs, fx.COMPANY)
+		self.assertIn(frappe.get_cached_value("Company", fx.COMPANY, "default_expense_account"), direct)
+		self.assertIn(leaf, direct)
+		self.assertNotIn(rent, direct)
+
+		dep = fx.account("Depreciation Test", indirect, account_type="Depreciation")
+		frappe.db.delete("Resto Expense Account", {"parent": "Resto Settings", "parentfield": "fixed_expense_accounts"})
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+		self.assertTrue({dep, rent} <= pnl.fixed_accounts(fx.COMPANY))

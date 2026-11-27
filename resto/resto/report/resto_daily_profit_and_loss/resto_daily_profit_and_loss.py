@@ -6,8 +6,10 @@ Each income and expense entry of the range lands in exactly one line:
 - on a sales invoice: income is the sales (a return's, the returns); an expense on an item's cost
   account is the cost of what was sold (packaging apart, from the stock ledger); any other expense
   (round off, write off, a discount account) is a deduction from the sales;
-- elsewhere: income is other income; an expense is direct (counted before gross profit: the account
-  or a group above it is "Include in Gross", or it is a stock cost account) or indirect.
+- elsewhere: income is other income; an expense is direct (counted before gross profit) when it sits
+  in the same top group of the chart as the company's cost of goods sold account (Direct Expenses,
+  whatever the chart calls it), is "Include in Gross" or under a group that is, or is a stock cost
+  account; any other expense is indirect.
 
 Gross sales add back the discounts and the taxes billed, so the statement reads from what was
 charged down to net sales; those additions are taken from the invoices themselves.
@@ -30,7 +32,6 @@ CTX = "Resto Daily Profit and Loss"
 COGS_VIEW = "Cost of Goods Sold"
 # Expense accounts that are a cost of the food by their type, wherever they sit in the chart.
 DIRECT_TYPES = ("Cost of Goods Sold", "Stock Adjustment", "Expenses Included In Valuation")
-DIRECT_GROUPS = ("Direct Expenses", "المصروفات المباشرة")
 
 
 def execute(filters=None):
@@ -71,13 +72,28 @@ def accounts(company):
 			"Account",
 			filters={"company": company},
 			fields=["name", "account_name", "account_type", "root_type", "lft", "rgt", "is_group", "include_in_gross"],
+			order_by="lft asc",
 		)
 	}
 
 
-def direct_accounts(accs):
+def direct_top_group(accs, company):
+	"""The group right under the expense root that holds the company's cost of goods sold account
+	(Direct Expenses in the standard chart): everything in it is a direct cost, whatever its name."""
+	cogs = accs.get(frappe.get_cached_value("Company", company, "default_expense_account"))
+	if not cogs:
+		return None
+	chain = [a for a in accs.values() if a.is_group and a.lft < cogs.lft and cogs.rgt < a.rgt]  # root first
+	chain.append(cogs)
+	return chain[1] if len(chain) > 1 else None
+
+
+def direct_accounts(accs, company):
 	"""Expense accounts counted before gross profit."""
-	groups = [(a.lft, a.rgt) for a in accs.values() if a.is_group and (a.include_in_gross or a.account_name in DIRECT_GROUPS)]
+	groups = [(a.lft, a.rgt) for a in accs.values() if a.is_group and a.include_in_gross]
+	top = direct_top_group(accs, company)
+	if top:
+		groups.append((top.lft, top.rgt))
 	return {
 		a.name
 		for a in accs.values()
@@ -137,7 +153,8 @@ def invoice_additions(filters):
 
 
 def fixed_accounts(company):
-	"""Accounts marked fixed in Resto Settings; none marked: the salaries account and rent."""
+	"""Accounts marked fixed in Resto Settings; none marked: the salaries account, rent and
+	depreciation."""
 	settings = get_settings()
 	marked = [r.account for r in settings.get("fixed_expense_accounts") or [] if r.account]
 	if marked:
@@ -145,7 +162,8 @@ def fixed_accounts(company):
 	found = set(
 		frappe.db.sql_list(
 			"""select name from `tabAccount` where company = %(company)s and root_type = 'Expense' and is_group = 0
-			and (lower(account_name) like 'rent%%' or lower(account_name) like '%% rent%%' or account_name like '%%إيجار%%')""",
+			and (lower(account_name) like 'rent%%' or lower(account_name) like '%% rent%%' or account_name like '%%إيجار%%'
+				or account_type = 'Depreciation')""",
 			{"company": company},
 		)
 	)
@@ -182,7 +200,7 @@ def spread(filters, fixed):
 
 def statement(filters, spread_fixed=False):
 	accs = accounts(filters.company)
-	direct = direct_accounts(accs)
+	direct = direct_accounts(accs, filters.company)
 	costs = cost_accounts(filters)
 	company = frappe.get_cached_doc("Company", filters.company)
 
@@ -236,7 +254,7 @@ def statement(filters, spread_fixed=False):
 
 	def line(key, label, amount, indent=0, bold=0, account=None):
 		rows.append(
-			{"key": key, "label": label, "amount": amount, "pct": pct(amount, net_sales), "indent": indent, "bold": bold,
+			{"key": key, "label": label, "amount": amount, "pct": flt(pct(amount, net_sales), 1), "indent": indent, "bold": bold,
 			 "account": account}
 		)
 
@@ -285,7 +303,7 @@ def statement_columns():
 	return [
 		{"fieldname": "label", "label": _("Statement", context=CTX), "fieldtype": "Data", "width": 340},
 		{"fieldname": "amount", "label": _("Amount", context=CTX), "fieldtype": "Currency", "width": 150},
-		{"fieldname": "pct", "label": _("% of Net Sales", context=CTX), "fieldtype": "Percent", "width": 130},
+		{"fieldname": "pct", "label": _("% of Net Sales", context=CTX), "fieldtype": "Percent", "width": 150},
 		{"fieldname": "account", "label": _("Account"), "fieldtype": "Link", "options": "Account", "width": 200},
 	]
 
@@ -351,7 +369,7 @@ def cogs_rows(filters):
 	rows = sorted(items.values(), key=lambda i: -i.cost)
 	for i in rows:
 		i.unit_cost = i.cost / i.qty if i.qty else 0
-		i.margin = pct(i.sales - i.cost, i.sales) if i.sales else None
+		i.margin = flt(pct(i.sales - i.cost, i.sales), 1) if i.sales else None
 	return rows
 
 
@@ -372,17 +390,18 @@ def cogs_view(filters):
 	data = [*rows]
 	if rows:
 		data.append(
-			{"item_code": None, "item_name": _("Total"), "cost": cost, "sales": sales, "margin": pct(sales - cost, sales) if sales else None,
+			{"item_code": None, "item_name": _("Total"), "cost": cost, "sales": sales, "margin": flt(pct(sales - cost, sales), 1) if sales else None,
 			 "bold": 1}
 		)
 	report_summary = [
 		{"label": _("Total Cost", context=CTX), "value": cost, "datatype": "Currency", "indicator": "Orange"},
 		{"label": _("Net Sales", context=CTX), "value": sales, "datatype": "Currency", "indicator": "Blue"},
-		{"label": _("Margin %", context=CTX), "value": pct(sales - cost, sales), "datatype": "Percent",
+		{"label": _("Margin %", context=CTX), "value": flt(pct(sales - cost, sales), 1), "datatype": "Percent",
 		 "indicator": "Green" if sales >= cost else "Red"},
 	]
 	return columns, data, _(
 		"The cost of each item is what the stock ledger posted when it was sold; a dish's cost is its ingredients'. "
-		"Packaging billed with takeaway and delivery orders is listed with its cost and no sales.",
+		"Packaging billed with takeaway and delivery orders is listed with its cost and no sales. "
+		"Sales here are the items' amounts; the statement's net sales also take in the bills' rounding and write-offs.",
 		context=CTX,
 	), None, report_summary

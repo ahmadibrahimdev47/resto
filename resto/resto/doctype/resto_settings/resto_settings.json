@@ -317,7 +317,7 @@
    "fieldtype": "Table MultiSelect",
    "label": "Fixed Monthly Expenses",
    "options": "Resto Expense Account",
-   "description": "Expenses paid once a month (rent, salaries...): the daily profit and loss report can spread each over the days of its month. Empty: the salaries account and the accounts named rent."
+   "description": "Expenses paid once a month (rent, salaries, depreciation...): the daily profit and loss report can spread each over the days of its month. Empty: the salaries account, the accounts named rent and the depreciation accounts. A bill paid once a month, such as electricity, is spread only when listed here."
   },
   {
    "default": "0",
@@ -597,7 +597,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-27 19:00:00.000000",
+ "modified": "2026-11-28 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",
