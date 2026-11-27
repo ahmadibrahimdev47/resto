@@ -844,9 +844,13 @@ class _Run:
 			floor.apply_discount(st["order"], percentage=spec.discount, approver=site.manager, pin=PIN)
 
 		def pay():
-			for item_code, qty in site.packaging(spec).items():
+			# The bill takes its stock now: what the kitchen lacks of it is bought first (the error
+			# of a short item reads differently by item and version; this does not depend on it).
+			raw = {}
+			site.order_parts(spec, raw, {})
+			for item_code, qty in raw.items():
 				short = qty - site.stock(item_code)
-				if short > 0:
+				if short > 1e-6:
 					self.top_up(item_code, short)
 			payable = flt(floor.get_bill(st["order"])["payable"], 2)
 			if spec.split and payable > 1:
@@ -1203,19 +1207,29 @@ class _Run:
 
 
 def _short_of(e):
-	"""(item, qty short) from ERPNext's negative stock error, read from its item link (any language)."""
+	"""(item, qty short) from ERPNext's negative stock error, read from its item link or name (any language)."""
 	if type(e).__name__ != "NegativeStockError":
 		return None
-	text = str(e) or ""
-	if "/app/item/" not in text:
-		text = " ".join(str(m) for m in (frappe.local.message_log or [])) + " " + text
-	found = re.search(r"/app/item/([^\"'<>\s?#]+)", text)
-	if not found:
-		return None
-	item_code = unquote(found.group(1))
-	if not frappe.db.exists("Item", item_code):
-		return None
-	head = re.sub(r"<[^>]+>", " ", text[: found.start()])
+	text = " ".join([str(e) or "", *(str(m) for m in (frappe.local.message_log or []))])
+	# The item's link (its desk path differs between versions), else its name in the text.
+	item_code, head = None, ""
+	for found in re.finditer(r"/item/([^\"'<>\s?#]+)", text):
+		code = unquote(found.group(1))
+		if frappe.db.exists("Item", code):
+			item_code, head = code, re.sub(r"<[^>]+>", " ", text[: found.start()])
+			break
+	if not item_code:
+		plain = re.sub(r"<[^>]+>", " ", text)
+		named = [
+			(len(shown), code, plain.find(shown))
+			for code, item_name in frappe.db.sql("select name, item_name from `tabItem` where is_stock_item = 1 and disabled = 0")
+			for shown in {item_name, code}
+			if shown and len(shown) > 2 and shown in plain
+		]
+		if not named:
+			return None
+		_n, item_code, at = max(named)
+		head = plain[:at]
 	number = re.search(r"(\d[\d,]*(?:\.\d+)?)", head)
 	return item_code, flt(number.group(1).replace(",", "")) if number else 0
 
