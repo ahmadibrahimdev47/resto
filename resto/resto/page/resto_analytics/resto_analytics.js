@@ -153,7 +153,6 @@ class RestoAnalytics {
 			});
 			if (round) {
 				$(el).after(RestoAnalytics.legend(labels, values, __("Other", null, "Resto")));
-				setTimeout(() => RestoAnalytics.trim(el), 900); // after the pie's opening animation
 			}
 		});
 	}
@@ -201,19 +200,6 @@ class RestoAnalytics {
 			.join("")}</div>`;
 	}
 
-	static trim(el) {
-		// The chart keeps room under the pie for its own legend (hidden): the picture is cut to the pie.
-		const svg = el.querySelector("svg");
-		if (!svg) return;
-		const box = svg.getBoundingClientRect();
-		let bottom = 0;
-		svg.querySelectorAll("path").forEach((path) => {
-			const r = path.getBoundingClientRect();
-			if (r.height) bottom = Math.max(bottom, r.bottom - box.top);
-		});
-		if (bottom && bottom + 12 < box.height) svg.setAttribute("height", Math.ceil(bottom + 12));
-	}
-
 	static top_slices(data, keep) {
 		// The largest keep - 1 slices, and the rest as one «Other».
 		const rows = data.labels.map((label, i) => [label, data.values[i] || 0]).sort((a, b) => b[1] - a[1]);
@@ -242,7 +228,8 @@ class RestoAnalytics {
 		.ra-chart { border:1px solid var(--border-color); border-radius:10px; padding:10px; background:var(--card-bg); }
 		.ra-empty { padding:40px; text-align:center; }
 		.ra-chart .chart-legend { display:none; }
-		.ra-legend { display:flex; flex-wrap:wrap; gap:6px 16px; padding:4px 6px 2px; }
+		/* The chart keeps empty room under the pie for its own legend (hidden): the page's moves up into it. */
+		.ra-legend { display:flex; flex-wrap:wrap; gap:6px 16px; padding:4px 6px 2px; margin-top:-50px; position:relative; }
 		.ra-legend-item { display:flex; align-items:center; gap:6px; min-width:0; font-size:12px; }
 		.ra-dot { width:10px; height:10px; border-radius:50%; flex:none; }
 		.ra-legend-name { font-weight:600; }
