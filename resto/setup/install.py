@@ -13,7 +13,6 @@ STANDARD_PERMISSIONS = {
 	"Item": {WAITER: ["read"], CASHIER: ["read"], HOST: ["read"], MANAGER: ["read"], KITCHEN: ["read"]},
 	# The kitchen's waste and prep forms link a Company; its item lists filter by Item Group and
 	# show the UOM. It runs no report (D-242).
-	"Company": {KITCHEN: ["select"]},
 	"Item Group": {KITCHEN: ["read"], MANAGER: ["read"]},
 	# A waste row is typed in a unit the item converts to (D-250): the kitchen links the unit.
 	"UOM": {KITCHEN: ["read"], MANAGER: ["read"]},
@@ -38,7 +37,7 @@ STANDARD_PERMISSIONS = {
 	"Purchase Receipt": {MANAGER: ["read", "report"]},
 	# Cash purchases from the drawer (D-225): the manager picks the cash supplier and opens the invoice.
 	"Supplier": {MANAGER: ["select"]},
-	"Purchase Invoice": {MANAGER: ["read"]},
+	"Purchase Invoice": {MANAGER: ["read", "report"]},
 	# The restaurant sidebar's Journal Entries (D-259): the manager opens them; posting one needs ERPNext's accounts roles.
 	"Journal Entry": {MANAGER: ["read"]},
 	# The weekly stock count (D-244): the manager counts and posts it (the difference goes to the
@@ -48,7 +47,30 @@ STANDARD_PERMISSIONS = {
 	# The daily prep (Resto Prep) is a Manufacture entry by the prepared item's BOM, and ERPNext
 	# refuses one whose BOM the user cannot read (D-279). Read only: the BOM follows the recipe.
 	"BOM": {MANAGER: ["read"]},
+	# The manager's financial reports (D-286), read only: each report checks its own doctype's
+	# report right (the ledger, the invoices) and its filters link the company, fiscal year, cost
+	# centre and finance book. Posting stays with ERPNext's accounts roles.
+	"GL Entry": {MANAGER: ["read", "report"]},
+	"Fiscal Year": {MANAGER: ["read"]},
+	"Cost Center": {MANAGER: ["select"]},
+	"Finance Book": {MANAGER: ["select"]},
+	"Company": {KITCHEN: ["select"], MANAGER: ["select"]},
 }
+
+# ERPNext reports the manager opens from the restaurant sidebar's Financial Reports (D-286).
+FINANCIAL_REPORTS = (
+	"Profit and Loss Statement",
+	"Balance Sheet",
+	"Cash Flow",
+	"Trial Balance",
+	"General Ledger",
+	"Sales Register",
+	"Gross Profit",
+	"Gross and Net Profit Report",
+	"Sales Invoice Trends",
+	"Purchase Invoice Trends",
+	"Sales Payment Summary",
+)
 
 # A customer's debt paid to the cashier during a shift is counted by that shift's drawer (D-203).
 # Each worker's fixed monthly salary, for the month's salary entry (D-249): money, so at permlevel 1
@@ -290,6 +312,7 @@ def setup():
 	create_custom_fields(item_fields(), update=True)
 	set_new_setting_defaults()
 	grant_standard_permissions()
+	grant_report_roles(FINANCIAL_REPORTS, MANAGER)
 	keep_money_from_the_kitchen()
 	show_stock_row_expense_account()
 	add_accounting_summary_links()
@@ -478,6 +501,29 @@ def grant_standard_permissions():
 					update_permission_property(doctype, role, 0, right, 1, validate=False)
 			if "read" not in rights:
 				_select_only(doctype, role, rights)
+
+
+def grant_report_roles(reports, role):
+	"""Let role open each report, through a Custom Role (as Role Permission for Page and Report
+	does): a standard report's own roles come back from its file at every migrate. A new Custom
+	Role starts with the report's own roles, as the site sees them only through it from then on."""
+	if not frappe.db.exists("Role", role):
+		return
+	for report in reports:
+		if not frappe.db.exists("Report", report):
+			continue
+		name = frappe.db.get_value("Custom Role", {"report": report})
+		if name:
+			doc = frappe.get_doc("Custom Role", name)
+		else:
+			doc = frappe.get_doc({"doctype": "Custom Role", "report": report, "ref_doctype": frappe.db.get_value("Report", report, "ref_doctype")})
+			for r in frappe.get_all("Has Role", filters={"parent": report, "parenttype": "Report"}, pluck="role"):
+				doc.append("roles", {"role": r})
+		if role in {r.role for r in doc.roles}:
+			continue
+		doc.append("roles", {"role": role})
+		doc.flags.ignore_permissions = True
+		doc.save()
 
 
 # A new Custom DocPerm row comes with these by default (the DocPerm field defaults).
