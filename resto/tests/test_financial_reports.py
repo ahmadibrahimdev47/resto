@@ -55,6 +55,7 @@ class TestFinancialReports(IntegrationTestCase):
 			"Sales Register": dates,
 			"Gross Profit": {**dates, "group_by": "Invoice"},
 			"Gross and Net Profit Report": statement,
+			"Financial Ratios": {**statement, "filter_based_on": "Fiscal Year"},
 			"Sales Invoice Trends": trends,
 			"Purchase Invoice Trends": trends,
 			"Sales Payment Summary": dates,

@@ -68,6 +68,7 @@ FINANCIAL_REPORTS = (
 	"Sales Register",
 	"Gross Profit",
 	"Gross and Net Profit Report",
+	"Financial Ratios",
 	"Sales Invoice Trends",
 	"Purchase Invoice Trends",
 	"Sales Payment Summary",
