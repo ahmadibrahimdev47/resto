@@ -971,8 +971,11 @@ class _Run:
 		days = [add_days(day, n) for n in range(date_diff(upto, day) + 1)]
 		raw, prep = {}, {}
 		for d in days:
-			for spec in self.planner.plan(d).orders:
+			planned = self.planner.plan(d)
+			for spec in planned.orders:
 				site.order_parts(spec, raw, prep)
+			for i in (planned.staff["items"] if planned.staff else []):
+				site.parts(i["item_code"], flt(i["qty"]), raw, prep)
 		for item_code, p in site.prepared.items():
 			# prep_raw goes down into the prepared parts: what a sauce takes of its stock is bought too.
 			site.prep_raw(item_code, prep.get(item_code, 0) + p.par + max(-site.stock(item_code), 0), raw)
