@@ -433,6 +433,7 @@ class TestRestaurantFlow(IntegrationTestCase):
 			("Resto Customer Insights", [{}]),
 			("Resto Purchase Price Changes", [{}]),
 			("Resto Negative Prepared Stock", [{}]),
+			("Resto Current Stock", [{}, {"warehouse": fx.KITCHEN}, {"item_group": "Resto Food"}]),
 		):
 			for f in extra:
 				run(name, filters={**base, **f}, ignore_prepared_report=True)
@@ -447,6 +448,14 @@ class TestRestaurantFlow(IntegrationTestCase):
 			)[0][0]
 		)
 		self.assertAlmostEqual(posted, ledger, 2)
+
+		# The current stock: the kitchen's balance as its Bins hold it.
+		stock = run("Resto Current Stock", filters={**base, "warehouse": fx.KITCHEN}, ignore_prepared_report=True)
+		rows = {r["item_code"]: r for r in stock["result"] if isinstance(r, dict) and r.get("item_code")}
+		held = frappe.db.get_value("Bin", {"warehouse": fx.KITCHEN, "actual_qty": (">", 0)}, "item_code")
+		self.assertTrue(held)
+		self.assertAlmostEqual(flt(rows[held]["bal_qty"]), fx.bin_qty(held), 3)
+		self.assertEqual([c["fieldname"] for c in stock["columns"]][-3:], ["bal_qty", "val_rate", "bal_val"])
 
 		from resto.resto.analytics import get_dashboard
 
