@@ -1,5 +1,5 @@
 // The items at a glance (D-288): picture, name, group, unit, selling price, what each is used for and
-// whether it is active. Read only: an item opens in its own form.
+// whether it is active. An item opens in its own form; the manager sets its reorder level here (D-290).
 
 frappe.pages["resto-items"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({ parent: wrapper, title: __("Items"), single_column: true });
@@ -48,6 +48,10 @@ class RestoItems {
 		});
 		this.$body.find(".ri-group, .ri-tag, .ri-status").on("change", () => this.load());
 		this.$grid.on("click", "[data-open]", (e) => frappe.set_route("Form", "Item", $(e.currentTarget).attr("data-open")));
+		this.$grid.on("click", "[data-reorder]", (e) => {
+			const it = this.items.find((i) => i.name === $(e.currentTarget).attr("data-reorder"));
+			it && this.reorder_dialog(it);
+		});
 		frappe.call("resto.resto.items.get_groups").then((r) => {
 			this.$body.find(".ri-group").append((r.message || []).map((g) => opt(g, __(g))).join(""));
 		});
@@ -75,6 +79,9 @@ class RestoItems {
 				this.items = more ? this.items.concat(d.items) : d.items;
 				this.currency = d.currency;
 				this.can_write = d.can_write;
+				this.can_reorder = d.can_reorder;
+				this.kitchen = d.kitchen_warehouse;
+				this.auto_reorder = d.auto_reorder;
 				if (!this.new_button && d.can_create) {
 					this.new_button = this.page.set_primary_action(__("New Item", null, "Resto Items"), () => frappe.new_doc("Item"), "add");
 				}
@@ -125,12 +132,106 @@ class RestoItems {
 								<span class="ri-price">${price}</span>
 							</div>
 							<div class="ri-line ri-tags">${tags.map((t) => `<span class="ri-tag">${esc(t)}</span>`).join("")}</div>
+							${this.reorder_line(it)}
 						</div>
 						<button class="btn btn-default btn-xs ri-act" data-open="${esc(it.name)}">${esc(action)}</button>
 					</div>`;
 				})
 				.join("")
 		);
+	}
+
+	reorder_line(it) {
+		// What the storekeeper looks for: the level below which the item is due to be bought.
+		if (!it.is_stock_item || it.has_variants) return "";
+		const esc = frappe.utils.escape_html;
+		const r = it.reorder;
+		const text = r
+			? __("Reorder level: {0} {1}", [RestoItems.num(r.level), __(it.stock_uom || "")], "Resto Items") +
+			  (r.warehouse !== this.kitchen ? ` · ${r.warehouse}` : "") +
+			  (it.reorder_count > 1 ? ` +${it.reorder_count - 1}` : "")
+			: __("No reorder level", null, "Resto Items");
+		const edit = this.can_reorder
+			? `<button class="btn btn-link btn-xs ri-reorder-edit" data-reorder="${esc(it.name)}">${esc(__("Set", null, "Resto Items"))}</button>`
+			: "";
+		return `<div class="ri-line ri-reorder ${r ? "" : "text-muted"}">${esc(text)}${edit}</div>`;
+	}
+
+	reorder_dialog(it) {
+		const unit = __(it.stock_uom || "");
+		let rows = [];
+		const fill = () => {
+			const r = rows.find((x) => x.warehouse === d.get_value("warehouse"));
+			d.set_value("level", r ? r.level : 0);
+			d.set_value("qty", r ? r.qty : 0);
+			d.set_value("material_request_type", r ? r.type : "Purchase");
+		};
+		const d = new frappe.ui.Dialog({
+			title: __("Reorder Level of {0}", [it.item_name || it.name], "Resto Items"),
+			fields: [
+				{
+					fieldname: "warehouse",
+					fieldtype: "Link",
+					options: "Warehouse",
+					label: __("Warehouse"),
+					reqd: 1,
+					default: this.kitchen,
+					get_query: () => ({ filters: { is_group: 0, disabled: 0 } }),
+					onchange: () => fill(),
+				},
+				{
+					fieldname: "level",
+					fieldtype: "Float",
+					label: `${__("Reorder Level", null, "Resto Items")} (${unit})`,
+					description: __("When the stock falls to this quantity, the item is due to be ordered.", null, "Resto Items"),
+				},
+				{ fieldname: "qty", fieldtype: "Float", label: `${__("Quantity to Order", null, "Resto Items")} (${unit})`, reqd: 1 },
+				{
+					fieldname: "material_request_type",
+					fieldtype: "Select",
+					label: __("Raises", null, "Resto Items"),
+					options: ["Purchase", "Transfer", "Material Issue", "Manufacture"].map((v) => ({ value: v, label: __(v) })),
+					default: "Purchase",
+				},
+				{
+					fieldname: "note",
+					fieldtype: "HTML",
+					options: this.auto_reorder
+						? ""
+						: `<div class="text-muted small">${frappe.utils.escape_html(
+								__("The daily reorder check is off in Stock Settings: the level shows in the reports but raises no material request.", null, "Resto Items")
+						  )}</div>`,
+				},
+			],
+			primary_action_label: __("Save"),
+			primary_action: (v) => this.save_reorder(it, d, v),
+			secondary_action_label: __("Remove", null, "Resto Items"),
+			secondary_action: () => this.save_reorder(it, d, { warehouse: d.get_value("warehouse"), remove: 1 }),
+		});
+		d.show();
+		frappe.call("resto.resto.items.get_reorder", { item_code: it.name }).then((r) => {
+			rows = r.message || [];
+			fill();
+		});
+	}
+
+	save_reorder(it, d, values) {
+		if (!values.warehouse) return;
+		frappe
+			.call({ method: "resto.resto.items.set_reorder", args: { item_code: it.name, ...values }, freeze: true })
+			.then(() => frappe.call("resto.resto.items.get_reorder", { item_code: it.name }))
+			.then((r) => {
+				const rows = r.message || [];
+				it.reorder = rows.find((x) => x.warehouse === this.kitchen) || rows[0] || null;
+				it.reorder_count = rows.length;
+				d.hide();
+				frappe.show_alert({ message: __("Reorder level saved", null, "Resto Items"), indicator: "green" });
+				this.render();
+			});
+	}
+
+	static num(v) {
+		return String(flt(v, 3));
 	}
 
 	static css() {
@@ -160,6 +261,8 @@ class RestoItems {
 		.ri-status.off { background:var(--bg-gray, #eee); color:var(--text-muted); }
 		.ri-act { flex:none; align-self:center; }
 		.ri-empty { padding:40px; text-align:center; grid-column:1 / -1; }
-		.ri-more { text-align:center; margin:14px 0; }`;
+		.ri-more { text-align:center; margin:14px 0; }
+		.ri-reorder { font-weight:600; }
+		.ri-reorder-edit { padding:0 4px; }`;
 	}
 }
