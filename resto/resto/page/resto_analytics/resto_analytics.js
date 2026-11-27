@@ -8,25 +8,6 @@ frappe.pages["resto-analytics"].on_page_load = function (wrapper) {
 class RestoAnalytics {
 	constructor(page) {
 		this.page = page;
-		const today = frappe.datetime.get_today();
-		this.range = page.add_field({
-			fieldname: "range",
-			label: __("Period"),
-			fieldtype: "Select",
-			options: [
-				{ value: "today", label: __("Today", null, "Resto") },
-				{ value: "yesterday", label: __("Yesterday", null, "Resto") },
-				{ value: "7", label: __("Last 7 Days") },
-				{ value: "30", label: __("Last 30 Days", null, "Resto") },
-				{ value: "month", label: __("This Month", null, "Resto") },
-				{ value: "last_month", label: __("Last Month", null, "Resto") },
-				{ value: "custom", label: __("Custom") },
-			],
-			default: "today",
-			change: () => this.set_range(),
-		});
-		this.from = page.add_field({ fieldname: "from_date", label: __("From Date"), fieldtype: "Date", default: today, change: () => this.load() });
-		this.to = page.add_field({ fieldname: "to_date", label: __("To Date"), fieldtype: "Date", default: today, change: () => this.load() });
 		this.company = page.add_field({
 			fieldname: "company",
 			label: __("Company"),
@@ -36,10 +17,37 @@ class RestoAnalytics {
 			change: () => this.load(),
 		});
 		page.add_inner_button(__("Refresh"), () => this.load());
+		// The period in the page itself (plain date inputs): the page's own filter bar did not show
+		// its date fields on every version.
+		const today = frappe.datetime.get_today();
+		const periods = [
+			["today", __("Today", null, "Resto")],
+			["yesterday", __("Yesterday", null, "Resto")],
+			["7", __("Last 7 Days")],
+			["30", __("Last 30 Days", null, "Resto")],
+			["month", __("This Month", null, "Resto")],
+			["last_month", __("Last Month", null, "Resto")],
+			["custom", __("Custom")],
+		];
 		$(page.body).html(`<style>${RestoAnalytics.css()}</style>
+			<div class="ra-filters">
+				<label>${__("Period")}<select class="form-control input-sm ra-range">${periods
+					.map(([v, l]) => `<option value="${v}">${frappe.utils.escape_html(l)}</option>`)
+					.join("")}</select></label>
+				<label>${__("From Date")}<input type="date" class="form-control input-sm ra-from" value="${today}"></label>
+				<label>${__("To Date")}<input type="date" class="form-control input-sm ra-to" value="${today}"></label>
+			</div>
 			<div class="ra-kpis"></div>
 			<div class="ra-charts"></div>
 			<div class="ra-reports"></div>`);
+		this.$range = $(page.body).find(".ra-range");
+		this.$from = $(page.body).find(".ra-from");
+		this.$to = $(page.body).find(".ra-to");
+		this.$range.on("change", () => this.set_range());
+		this.$from.add(this.$to).on("change", () => {
+			this.$range.val("custom");
+			this.load();
+		});
 		this.$kpis = $(page.body).find(".ra-kpis");
 		this.$charts = $(page.body).find(".ra-charts");
 		this.render_reports($(page.body).find(".ra-reports"));
@@ -47,7 +55,7 @@ class RestoAnalytics {
 	}
 
 	set_range() {
-		const v = this.range.get_value();
+		const v = this.$range.val();
 		const today = frappe.datetime.get_today();
 		const add = frappe.datetime.add_days;
 		let from = today, to = today;
@@ -59,16 +67,22 @@ class RestoAnalytics {
 			from = frappe.datetime.add_months(frappe.datetime.month_start(), -1);
 			to = add(frappe.datetime.month_start(), -1);
 		} else return;
-		this._silent = true;
-		this.from.set_value(from);
-		this.to.set_value(to).then(() => { this._silent = false; this.load(); });
+		this.$from.val(from);
+		this.$to.val(to);
+		this.load();
 	}
 
 	load() {
-		if (this._silent) return;
+		if (!this.$from) return; // the company field set before the page is built
+		const from = this.$from.val(), to = this.$to.val();
+		if (!from || !to) return;
+		if (from > to) {
+			frappe.show_alert({ message: __("From Date must be before To Date"), indicator: "orange" });
+			return;
+		}
 		frappe.call({
 			method: "resto.resto.analytics.get_dashboard",
-			args: { from_date: this.from.get_value(), to_date: this.to.get_value(), company: this.company.get_value() },
+			args: { from_date: from, to_date: to, company: this.company.get_value() },
 			callback: (r) => this.render(r.message),
 		});
 	}
@@ -119,10 +133,16 @@ class RestoAnalytics {
 				$(el).html(`<div class="text-muted ra-empty">${__("No data")}</div>`);
 				return;
 			}
+			const round = type === "pie" || type === "donut";
 			new frappe.Chart(el, {
 				data: { labels: data.labels, datasets: [{ name: title, values: data.values }] },
 				type,
-				height: 240,
+				// A round chart's legend is drawn under it, inside the same height: room for it, and
+				// the smaller slices joined into one so the legend stays short.
+				height: round ? 320 : 240,
+				maxSlices: round ? 6 : undefined,
+				maxLegendPoints: round ? 6 : undefined,
+				truncateLegends: round ? 1 : undefined,
 				colors: ["#E8590C", "#2490EF", "#29CD42", "#7575FF", "#FFA00A", "#ECAD4B", "#00BAE5", "#FF5858"],
 				axisOptions: { xIsSeries: type === "line" ? 1 : 0 },
 				tooltipOptions: { formatTooltipY: (v) => format_currency(v) },
@@ -158,6 +178,9 @@ class RestoAnalytics {
 
 	static css() {
 		return `
+		.ra-filters { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin-bottom:12px; }
+		.ra-filters label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--text-muted); margin:0; }
+		.ra-filters .form-control { min-width:150px; }
 		.ra-kpis { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px,1fr)); gap:10px; margin-bottom:16px; }
 		.ra-card { border:1px solid var(--border-color); border-radius:10px; padding:12px; background:var(--card-bg); border-inline-start:4px solid var(--gray-400); }
 		.ra-card.blue { border-inline-start-color:#2490EF } .ra-card.green { border-inline-start-color:#29CD42 }

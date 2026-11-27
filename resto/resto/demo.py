@@ -712,6 +712,11 @@ class _Run:
 		elif day.day <= 15 and date_diff(day, self.planner.start) >= day.day:
 			# Last month's salaries, if the safe could not pay them at its end.
 			add(_at(day, "16:00"), site.manager, lambda: self.salaries(add_days(get_first_day(day), -1)), "salaries")
+		# Now and then a worker takes an advance out of the drawer (taken off at the month's salaries).
+		# Its own random numbers: the days' orders stay as they were planned.
+		adv = random.Random(f"{self.planner.seed}|advance|{day}")
+		if site.settings.get("staff_advance_account") and adv.random() < 0.15:
+			add(_at(day, "16:30", adv.randint(0, 60)), cashier, lambda: self.staff_advance(adv), "staff advance")
 		add(_at(day, "22:45"), site.manager, lambda: self.waste(plan.waste_seed), "waste")
 		add(_at(day, "23:12"), cashier, self.leftovers, "orders left open")
 		add(_at(day, "23:20"), cashier, lambda: self.close_shift(plan.over_short), "close shift", critical=True)
@@ -754,6 +759,35 @@ class _Run:
 		if over_short and main in amounts:
 			amounts[main] = max(flt(amounts[main] + over_short, 2), 0)
 		shifts.close_shift(json.dumps(amounts))
+
+	def staff_advance(self, rng):
+		"""A worker with a monthly salary takes part of it in advance from the drawer's cash."""
+		from resto.resto import shift as shifts
+		from resto.resto import staff_advance
+		from resto.resto.doctype.resto_salary_entry.resto_salary_entry import get_workers
+
+		site = self.site
+		workers = [w for w in get_workers(site.company) if flt(w.get("salary")) > 0]
+		if not workers or not site.main_cash:
+			return
+		worker = rng.choice(workers)
+		shift = frappe.get_doc("Resto Shift", self.shift)
+		row = next((r for r in shifts.compute(shift)["rows"] if r["mode_of_payment"] == site.main_cash), None)
+		# Leave the change float in the drawer.
+		room = flt(row["expected_amount"]) - flt(self.float) if row else 0
+		amount = min(rng.choice([100, 150, 200, 250, 300, 500]), flt(worker["salary"]) * 0.3, room)
+		amount = math.floor(amount / 50) * 50
+		if amount < 50:
+			return
+		staff_advance.add_advance(
+			worker["employee"],
+			amount,
+			site.main_cash,
+			request_id=f"demo-advance-{self.shift}",
+			approver=site.manager,
+			pin=PIN,
+		)
+		self.count("advances")
 
 	def cash_drop(self):
 		from resto.resto import drawer_cash
