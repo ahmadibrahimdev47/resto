@@ -55,6 +55,8 @@ def execute(filters=None):
 		l.waste_at = w.creation if w else None
 		l.result_label = _(l.result)
 		l.result_color = COLORS.get(l.result)
+		# Shown in the user's language (the result above read the stored value).
+		l.order_status = _(l.order_status)
 		rows.append(l)
 
 	data = rows if filters.get("show") == "All Lines" else [l for l in rows if l.result in EXCEPTIONS]

@@ -121,12 +121,13 @@ class RestoAnalytics {
 		const blocks = [
 			["by_day", __("Net Sales by Day"), "line"],
 			["by_hour", __("Net Sales by Hour"), "bar"],
-			["by_weekday", __("Net Sales by Weekday"), "bar"],
+			// Named bars (days, dishes, waiters) drawn by the page: the chart cuts long words under its bars.
+			["by_weekday", __("Net Sales by Weekday"), "bars"],
 			["by_type", __("Sales by Order Type"), "pie"],
-			["top_items", __("Top 10 Items"), "bar"],
+			["top_items", __("Top 10 Items"), "bars"],
 			// A pie, not a donut: the donut's total in its hole ran over the ring for a large amount.
 			["by_group", __("Sales by Item Group"), "pie"],
-			["by_waiter", __("Sales by Waiter"), "bar"],
+			["by_waiter", __("Sales by Waiter"), "bars"],
 		];
 		this.$charts.html(blocks.map(([key, title]) => `<div class="ra-chart"><h6>${title}</h6><div data-chart="${key}"></div></div>`).join(""));
 		blocks.forEach(([key, title, type]) => {
@@ -134,6 +135,10 @@ class RestoAnalytics {
 			const el = this.$charts.find(`[data-chart="${key}"]`)[0];
 			if (!data.labels.length || !data.values.some((v) => v)) {
 				$(el).html(`<div class="text-muted ra-empty">${__("No data")}</div>`);
+				return;
+			}
+			if (type === "bars") {
+				$(el).html(RestoAnalytics.bars(data.labels, data.values));
 				return;
 			}
 			const round = type === "pie";
@@ -183,6 +188,20 @@ class RestoAnalytics {
 		);
 	}
 
+	static bars(labels, values) {
+		// One line per name: the whole name, a bar as long as its share of the largest, the amount.
+		const top = Math.max(...values, 0) || 1;
+		const esc = frappe.utils.escape_html;
+		return `<div class="ra-bars">${labels
+			.map(
+				(label, i) => `<div class="ra-bar-row">
+				<span class="ra-bar-name" title="${esc(String(label))}">${esc(String(label))}</span>
+				<span class="ra-bar-track"><span class="ra-bar-fill" style="width:${Math.max((values[i] / top) * 100, 0).toFixed(1)}%"></span></span>
+				<span class="ra-bar-value">${format_currency(values[i] || 0)}</span></div>`
+			)
+			.join("")}</div>`;
+	}
+
 	static legend(labels, values, other) {
 		// Each slice: its colour, name, amount and share; as many lines as it takes. The chart colours
 		// its slices largest first (the order they are given in): «Other» is listed last with its own.
@@ -228,6 +247,12 @@ class RestoAnalytics {
 		.ra-chart { border:1px solid var(--border-color); border-radius:10px; padding:10px; background:var(--card-bg); }
 		.ra-empty { padding:40px; text-align:center; }
 		.ra-chart .chart-legend { display:none; }
+		.ra-bars { display:flex; flex-direction:column; gap:7px; padding:6px 4px; }
+		.ra-bar-row { display:grid; grid-template-columns:minmax(80px, 34%) 1fr auto; align-items:center; gap:8px; font-size:12px; }
+		.ra-bar-name { font-weight:600; overflow-wrap:anywhere; }
+		.ra-bar-track { height:10px; background:var(--control-bg, #f0f0f0); border-radius:5px; overflow:hidden; }
+		.ra-bar-fill { display:block; height:100%; background:#2490EF; border-radius:5px; }
+		.ra-bar-value { color:var(--text-muted); white-space:nowrap; }
 		/* The chart keeps empty room under the pie for its own legend (hidden): the page's moves up into it. */
 		.ra-legend { display:flex; flex-wrap:wrap; gap:6px 16px; padding:4px 6px 2px; margin-top:-50px; position:relative; }
 		.ra-legend-item { display:flex; align-items:center; gap:6px; min-width:0; font-size:12px; }
