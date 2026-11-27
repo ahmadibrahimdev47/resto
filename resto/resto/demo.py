@@ -1061,12 +1061,16 @@ class _Run:
 		)
 		if not stock:
 			return
+		from resto.resto.units import _precision
+
+		# Resto Waste keeps the quantity to the stock precision: a smaller amount would be 0 there.
+		precision = _precision()
 		rows = []
 		for item_code, qty in rng.sample(list(stock), min(len(stock), rng.randint(1, 2))):
 			if site.whole(item_code):
 				lost = 1 if qty >= 4 else 0
 			else:
-				lost = round(flt(qty) * rng.uniform(0.01, 0.04), 3)
+				lost = flt(flt(qty) * rng.uniform(0.01, 0.04), precision)
 			if lost <= 0:
 				continue
 			reasons = ["Over Production", "Spoiled", "Expired"] if item_code in site.prepared else ["Spoiled", "Expired", "Dropped", "Burnt"]
