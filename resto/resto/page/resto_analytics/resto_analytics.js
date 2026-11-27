@@ -122,7 +122,8 @@ class RestoAnalytics {
 			["by_weekday", __("Net Sales by Weekday"), "bar"],
 			["by_type", __("Sales by Order Type"), "pie"],
 			["top_items", __("Top 10 Items"), "bar"],
-			["by_group", __("Sales by Item Group"), "donut"],
+			// A pie, not a donut: the donut's total in its hole ran over the ring for a large amount.
+			["by_group", __("Sales by Item Group"), "pie"],
 			["by_waiter", __("Sales by Waiter"), "bar"],
 		];
 		this.$charts.html(blocks.map(([key, title]) => `<div class="ra-chart"><h6>${title}</h6><div data-chart="${key}"></div></div>`).join(""));
@@ -133,15 +134,17 @@ class RestoAnalytics {
 				$(el).html(`<div class="text-muted ra-empty">${__("No data")}</div>`);
 				return;
 			}
-			const round = type === "pie" || type === "donut";
+			const round = type === "pie";
+			// A round chart's legend is drawn under it, inside the same height: room for it, and the
+			// smaller slices joined here into one named in the user's language (the chart's own
+			// joining names it "Rest", untranslated).
+			const { labels, values } = round ? RestoAnalytics.top_slices(data, 6) : data;
 			new frappe.Chart(el, {
-				data: { labels: data.labels, datasets: [{ name: title, values: data.values }] },
+				data: { labels, datasets: [{ name: title, values }] },
 				type,
-				// A round chart's legend is drawn under it, inside the same height: room for it, and
-				// the smaller slices joined into one so the legend stays short.
 				height: round ? 320 : 240,
-				maxSlices: round ? 6 : undefined,
-				maxLegendPoints: round ? 6 : undefined,
+				maxSlices: round ? 7 : undefined,
+				maxLegendPoints: round ? 7 : undefined,
 				truncateLegends: round ? 1 : undefined,
 				colors: ["#E8590C", "#2490EF", "#29CD42", "#7575FF", "#FFA00A", "#ECAD4B", "#00BAE5", "#FF5858"],
 				axisOptions: { xIsSeries: type === "line" ? 1 : 0 },
@@ -174,6 +177,15 @@ class RestoAnalytics {
 				.map((r) => `<a class="btn btn-default btn-sm" href="/app/query-report/${encodeURIComponent(r)}">${__(r)}</a>`)
 				.join("")}</div>`
 		);
+	}
+
+	static top_slices(data, keep) {
+		// The largest keep - 1 slices, and the rest as one «Other».
+		const rows = data.labels.map((label, i) => [label, data.values[i] || 0]).sort((a, b) => b[1] - a[1]);
+		if (rows.length <= keep) return { labels: rows.map((r) => r[0]), values: rows.map((r) => r[1]) };
+		const top = rows.slice(0, keep - 1);
+		const rest = rows.slice(keep - 1).reduce((sum, r) => sum + r[1], 0);
+		return { labels: [...top.map((r) => r[0]), __("Other", null, "Resto")], values: [...top.map((r) => r[1]), rest] };
 	}
 
 	static css() {
