@@ -88,7 +88,7 @@ on_login = "resto.resto.approval.on_login"
 scheduler_events = {
 	"daily": ["resto.api.refresh_recipe_costs"],
 	# The nightly backup and its off-site copy (D-256): managers are told once a day while late.
-	"hourly": ["resto.resto.backup_watch.check"],
+	"hourly": ["resto.resto.backup_watch.check", "resto.resto.floor.free_forgotten_tables"],
 }
 
 # The shift print format reads the items sold and the debts collected (D-206).

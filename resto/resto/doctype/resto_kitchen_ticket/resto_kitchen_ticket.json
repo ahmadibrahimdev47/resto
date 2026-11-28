@@ -31,6 +31,7 @@
   "floor_started",
   "floor_ready",
   "floor_served",
+  "moved_from",
   "items_section",
   "items"
  ],
@@ -210,6 +211,15 @@
    "description": "Set from the floor's kitchen state buttons, not by the kitchen: left out of the kitchen times."
   },
   {
+   "fieldname": "moved_from",
+   "fieldtype": "Select",
+   "options": "\nKitchen\nFloor",
+   "read_only": 1,
+   "no_copy": 1,
+   "label": "Last Moved From",
+   "description": "Which screen set the ticket's state last: the kitchen screen or the floor."
+  },
+  {
    "fieldname": "items_section",
    "fieldtype": "Section Break",
    "label": "Items"
@@ -245,7 +255,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-28 14:00:00.000000",
+ "modified": "2026-11-28 17:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Kitchen Ticket",

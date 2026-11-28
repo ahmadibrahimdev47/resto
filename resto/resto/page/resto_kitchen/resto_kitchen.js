@@ -202,11 +202,13 @@ class RestoKitchen {
 			$card.find("button").prop("disabled", true);
 			$card.find(".rk-actions").prepend(`<span class="rk-wait">${__("Saving…")}</span>`);
 			frappe
-				.xcall("resto.resto.kitchen.kds_set_status", { ticket: name, status })
+				.xcall("resto.resto.kitchen.kds_set_status", { ticket: name, status, seen: was })
 				.then(() => this.refresh())
 				.catch(() => {
 					if (t && t.status === status) t.status = was;
 					this.render();
+					// Moved meanwhile from the floor (D-295): the server said so; the board shows it now.
+					this.refresh();
 				});
 		});
 		this.$board.find("[data-waste]").on("click", (e) => {

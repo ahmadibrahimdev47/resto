@@ -3699,11 +3699,17 @@ class RestoFloor {
 			}
 			this.load_order(o.name);
 		};
-		const r = await call("set_kitchen_state", { order: o.name, state }, true);
+		const seen = this.kitchen_state(o);
+		const r = await call("set_kitchen_state", { order: o.name, state, seen }, true);
 		if (r && r.done) return done(r);
+		if (r && r.changed) {
+			// Moved meanwhile on the kitchen screen (D-295): shown again; the next tap is on what is true.
+			frappe.msgprint({ message: r.message, indicator: "orange" });
+			return this.load_order(o.name);
+		}
 		if (r && r.back) {
 			frappe.confirm(__("This takes {0} kitchen ticket(s) back to «{1}». Go ahead?", [r.back, this.kitchen_state_label(state)], "Resto Kitchen State"), async () =>
-				done(await call("set_kitchen_state", { order: o.name, state, confirm: 1 }, true))
+				done(await call("set_kitchen_state", { order: o.name, state, seen, confirm: 1 }, true))
 			);
 		}
 	}
@@ -4040,6 +4046,9 @@ class RestoFloor {
 		// One id per dialog: a retried click after a lost answer returns the same invoice (the server
 		// checks it is the same amounts on the same methods).
 		const request_id = frappe.utils.get_random(20);
+		// A dine-in table stays taken once paid until it is freed (D-294): «Pay» (Enter) keeps it, the
+		// guests may still be waiting for a dish; «Pay and Free the Table» frees it with the payment.
+		const free_btn = o.order_type === "Dine In" && !!o.resto_table && !lines;
 		const P = cint((frappe.boot.sysdefaults || {}).currency_precision) || 2;
 		const EPS = 0.5 / 10 ** P;
 		const round = (v) => flt(v, P);
@@ -4107,12 +4116,13 @@ class RestoFloor {
 						</div>
 					</div>
 					${bill.on_account_customer ? `<label class="rf-onacc" style="display:none"><input type="checkbox"> <span>${__("Leave the rest on the account of {0}", [esc(bill.on_account_customer_name || bill.on_account_customer)])}</span></label>` : ""}
-					${o.order_type === "Dine In" && o.items.some((x) => !["Served", "Void"].includes(x.kitchen_status)) ? `<div class="rf-warn rf-pwarn">⚠ ${__("Some dishes are not served yet: the table stays taken until it is freed (Free the Table).")}</div>` : ""}
+					${o.order_type === "Dine In" && this.floor.auto_free_table && o.items.some((x) => !["Served", "Void"].includes(x.kitchen_status)) ? `<div class="rf-warn rf-pwarn">⚠ ${__("Some dishes are not served yet: the table stays taken until it is freed (Free the Table).")}</div>` : ""}
 					<div class="rf-pnote rf-muted"></div>
 					<div class="rf-pacts">
 						<button class="rf-btn rf-lg" data-p="exact"><span>${__("Exact Amount in Cash")}</span><kbd dir="ltr">Enter</kbd></button>
 						<button class="rf-btn rf-btn-p rf-lg rf-pdone" data-p="done"></button>
 					</div>
+					${free_btn ? `<button class="rf-btn rf-lg rf-pfree" data-p="done_free">${ICON.served}<span>${__("Pay and Free the Table")}</span></button>` : ""}
 					${lines ? "" : `<button class="rf-btn rf-sm rf-psplit" data-p="split">${__("Split by Items")}</button>`}
 				</section>
 			</div>`);
@@ -4166,6 +4176,7 @@ class RestoFloor {
 					: __("Complete Payment · Change {0}", [money(-rest)])
 			);
 			done.prop("disabled", !!this._settling || over || (rest > EPS && !(on_account && $acc.is(":visible"))));
+			$w.find(".rf-pfree").prop("disabled", done.prop("disabled") || rest > EPS);
 			$w.find("[data-p=exact]").toggle(cash >= 0).prop("disabled", busy());
 			$w.find(".rf-k, .rf-qa, .rf-mth, .rf-onacc input, [data-p=customer], [data-p=split]").prop("disabled", busy());
 		};
@@ -4190,7 +4201,7 @@ class RestoFloor {
 			else if ((entry + k).length <= 10) entry = (entry === "0" && k !== "." ? "" : entry) + k;
 			draw();
 		};
-		const settle = async () => {
+		const settle = async (free_table) => {
 			if (this._settling) return;
 			const rest = left();
 			const owed = rest > EPS && on_account ? rest : 0;
@@ -4216,6 +4227,7 @@ class RestoFloor {
 						expected: bill.payable,
 						request_id,
 						on_account: owed ? 1 : 0,
+						free_table: free_table ? 1 : 0,
 						...ok,
 					},
 					false, // the button shows it is saving; the window is not greyed out
@@ -4268,6 +4280,7 @@ class RestoFloor {
 		$w.on("click", "[data-p]", (e) => {
 			const p = $(e.currentTarget).attr("data-p");
 			if (p === "done") return settle();
+			if (p === "done_free") return settle(true);
 			if (p === "exact") return exact_cash();
 			if (busy()) return;
 			d.hide();
@@ -4680,6 +4693,7 @@ class RestoFloor {
 		.rf-pacts .rf-btn { min-height:56px; }
 		.rf-pacts kbd { height:24px; padding:0 8px; border-radius:6px; background:var(--rf-soft); color:var(--rf-ink2); font-size:12px; display:flex; align-items:center; box-shadow:none; }
 		.rf-pdone { font-size:17px; }
+		.rf-pfree { width:100%; margin-top:8px; justify-content:center; }
 		.rf-psplit { align-self:flex-start; }
 		.rf-paidmsg { font-size:16px; display:flex; flex-direction:column; gap:8px; }
 		.rf-paidchg { font-size:22px; }

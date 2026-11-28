@@ -346,13 +346,30 @@ def print_ticket(ticket, reprint=0, copy=0):
 		frappe.log_error(title=_("Kitchen ticket {0} was not printed").format(doc.name))
 
 
-def set_ticket_status(ticket_name, status, recall=False, floor=False):
+class StaleTicketState(frappe.ValidationError):
+	"""The screen showed the ticket in another state than it is in now (D-295)."""
+
+
+MOVED_BY = {"Floor": "the floor", "Kitchen": "the kitchen"}
+
+
+def stale_message(state_label, moved_from):
+	return _("The ticket changed to {0} from {1}. Look again and tap the state you want.").format(
+		state_label, _(MOVED_BY.get(moved_from) or MOVED_BY["Kitchen"])
+	)
+
+
+def set_ticket_status(ticket_name, status, recall=False, floor=False, expected=None, source=None):
 	"""recall: brought back to the board from Today's Tickets (to New): the first ready time is kept
 	for the kitchen times, and the board's timer runs from now (recalled_at).
 
 	floor: set from the floor's kitchen state buttons (D-293), for a kitchen that runs on printers
 	alone: any step, forward or back. The times it sets are flagged (floor_started, floor_ready,
-	floor_served) and left out of the kitchen times; a time the kitchen screen sets clears its flag."""
+	floor_served) and left out of the kitchen times; a time the kitchen screen sets clears its flag.
+
+	expected: the state the screen showed (D-295). Moved meanwhile on the other screen, it is not
+	changed blindly: StaleTicketState says what it is now and who moved it, and the screen shows it.
+	source: who moves it, Floor or Kitchen (the floor's own buttons are Floor)."""
 	require_role(KITCHEN, WAITER, CASHIER, *((HOST,) if floor else ()))
 	if status not in TICKET_STATUSES:
 		frappe.throw(_("Unknown status {0}").format(status))
@@ -361,7 +378,9 @@ def set_ticket_status(ticket_name, status, recall=False, floor=False):
 
 	ticket = frappe.get_doc("Resto Kitchen Ticket", ticket_name, for_update=True)
 	if ticket.status == status:
-		return ticket
+		return ticket  # already there, whoever moved it
+	if expected and ticket.status != expected:
+		frappe.throw(stale_message(_(ticket.status, context="Resto"), ticket.moved_from), StaleTicketState)
 	if floor:
 		if "Cancelled" in (ticket.status, status):
 			frappe.throw(_("Ticket {0} is {1} and cannot become {2}").format(ticket.name, _(ticket.status, context="Resto"), _(status, context="Resto")))
@@ -370,6 +389,7 @@ def set_ticket_status(ticket_name, status, recall=False, floor=False):
 		frappe.throw(_("Ticket {0} is {1} and cannot become {2}").format(ticket.name, _(ticket.status, context="Resto"), _(status, context="Resto")))
 	now = now_datetime()
 	ticket.status = status
+	ticket.moved_from = "Floor" if floor else (source or "Kitchen")
 	if floor:
 		_floor_times(ticket, status, now)
 	elif status == "In Progress" and not ticket.started_at:
@@ -541,8 +561,9 @@ def kds_data(station=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def kds_set_status(ticket, status):
-	set_ticket_status(ticket, status)
+def kds_set_status(ticket, status, seen=None):
+	"""seen: the ticket's state on this screen when it was tapped (D-295)."""
+	set_ticket_status(ticket, status, expected=seen or None)
 	return status
 
 

@@ -162,6 +162,19 @@ class RestoOrder(Document):
 		self.paid_before_served = cint(
 			self.order_type == "Dine In" and any(d.kitchen_status not in ("Served", "Void") for d in self.items)
 		)
+		self.free_table_when_paid()
+
+	def free_table_when_paid(self):
+		"""A paid dine-in table stays taken until it is freed (D-294): the guests may still be waiting
+		for a dish, and with a kitchen on printers alone «served» is not known. It is freed at once
+		when the cashier pays with «Pay and Free the Table», or, when Resto Settings frees tables
+		after payment, when every dish was served (the rule before D-294)."""
+		if self.order_type != "Dine In" or not self.resto_table:
+			return
+		if self.flags.resto_free_table or (
+			cint(get_settings().get("auto_free_table_after_payment")) and not cint(self.paid_before_served)
+		):
+			self.table_freed = 1
 
 	def close_when_all_billed(self):
 		"""Part of the order was paid and the rest was voided or removed: nothing is left to bill."""

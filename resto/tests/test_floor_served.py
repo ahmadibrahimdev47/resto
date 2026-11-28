@@ -147,6 +147,40 @@ class TestFloorServed(IntegrationTestCase):
 		wait, cook, total, pickup, late = spans(t, now_datetime(), 20)
 		self.assertIsNotNone(total)
 
+	# ------------------------------------------------------------------ a stale screen (D-295)
+
+	def test_the_floor_on_a_stale_view_does_not_move_what_the_kitchen_moved(self):
+		order = self.sent_order()
+		for name in self.tickets(order):
+			kitchen.kds_set_status(name, "Ready")  # the kitchen screen
+		# The floor still showed «in the kitchen» and taps Served.
+		r = floor.set_kitchen_state(order, "Served", seen="Sent")
+		self.assertEqual((r["done"], r["changed"]), (0, "Ready"))
+		self.assertIn("the kitchen", r["message"])
+		self.assertEqual(self.line_states(order), {"Ready"})  # nothing moved
+		self.assertFalse(frappe.db.get_value("Resto Order", order, "served_marked_at"))
+		# Looked again, it taps on what is true.
+		self.assertEqual(floor.set_kitchen_state(order, "Served", seen="Ready")["done"], 1)
+		self.assertEqual(self.line_states(order), {"Served"})
+		# Tapped twice on the same state from two screens: no complaint.
+		self.assertEqual(floor.set_kitchen_state(order, "Served", seen="Ready")["done"], 1)
+
+	def test_the_kitchen_on_a_stale_view_does_not_move_what_the_floor_moved(self):
+		order = self.sent_order()
+		name = self.tickets(order)[0]
+		floor.set_kitchen_state(order, "Served", seen="Sent")  # the floor
+		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", name, "moved_from"), "Floor")
+		# The kitchen screen still showed it new and taps Ready.
+		with self.assertRaises(kitchen.StaleTicketState) as e:
+			kitchen.kds_set_status(name, "Ready", seen="New")
+		self.assertIn("the floor", str(e.exception))
+		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", name, "status"), "Served")
+		# Looked again: moved from what it shows, it moves.
+		kitchen.kds_set_status(name, "Ready", seen="Served")
+		self.assertEqual(
+			frappe.db.get_value("Resto Kitchen Ticket", name, ["status", "moved_from"]), ("Ready", "Kitchen")
+		)
+
 	def test_a_new_dish_after_served_from_the_floor_takes_the_table_back(self):
 		order = self.sent_order()
 		floor.set_kitchen_state(order, "Served")

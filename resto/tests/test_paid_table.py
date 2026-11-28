@@ -1,4 +1,6 @@
-"""A dine-in table paid before its food was served stays taken until it is freed (D-220, D-276).
+"""A paid dine-in table stays taken until it is freed (D-220, D-276, D-294): «Pay» keeps it, «Pay and
+Free the Table» frees it, Free the Table on the floor frees it later, and a forgotten one frees itself
+PAID_WAIT_HOURS after payment. Resto Settings can free it at payment when every dish was served.
 
 bench --site test.resto run-tests --module resto.tests.test_paid_table
 """
@@ -7,6 +9,7 @@ import json
 
 import frappe
 from frappe.tests import IntegrationTestCase
+from frappe.utils import add_days, add_to_date, now_datetime, nowdate
 
 from resto.resto import floor, kitchen
 from resto.tests import fixtures as fx
@@ -33,7 +36,17 @@ class TestPaidTable(IntegrationTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		frappe.db.set_single_value("Resto Settings", "require_pos_shift", self._shift)
+		frappe.db.set_single_value("Resto Settings", "auto_free_table_after_payment", 0)
 		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+
+	def auto_free(self, on):
+		frappe.db.set_single_value("Resto Settings", "auto_free_table_after_payment", on)
+		frappe.clear_document_cache("Resto Settings", "Resto Settings")
+
+	def comments(self, order):
+		return frappe.get_all(
+			"Comment", filters={"reference_doctype": "Resto Order", "reference_name": order}, pluck="content"
+		)
 
 	def table(self):
 		return next(t for h in floor.get_floor()["halls"] for t in h["tables"] if t.name == TABLE)
@@ -44,9 +57,9 @@ class TestPaidTable(IntegrationTestCase):
 		floor.send_to_kitchen(order)
 		return order
 
-	def pay(self, order):
+	def pay(self, order, free_table=0):
 		bill = floor.get_bill(order)
-		floor.settle(order, json.dumps([{"mode_of_payment": "Cash", "amount": bill["payable"]}]))
+		floor.settle(order, json.dumps([{"mode_of_payment": "Cash", "amount": bill["payable"]}]), free_table=free_table)
 		self.assertEqual(frappe.db.get_value("Resto Order", order, "status"), "Paid")
 		return order
 
@@ -81,14 +94,89 @@ class TestPaidTable(IntegrationTestCase):
 		t = self.table()
 		self.assertEqual((t.status, t.paid.eating), ("paid", 1))
 
-	def test_paid_after_eating_the_table_frees_at_once(self):
+	def served_order(self):
 		order = self.sent_order()
 		for ticket in self.tickets(order):
 			kitchen.set_ticket_status(ticket, "Ready")
 		floor.mark_served(order)
-		self.pay(order)
+		return order
+
+	def test_pay_keeps_the_table_even_when_every_dish_was_served(self):
+		"""D-294: with a kitchen on printers alone «served» is not known; the table stays until freed."""
+		order = self.pay(self.served_order())
 		self.assertFalse(frappe.db.get_value("Resto Order", order, "paid_before_served"))
+		t = self.table()
+		self.assertEqual((t.status, t.paid.name, t.paid.eating), ("paid", order, 1))
+		self.assertFalse(frappe.db.get_value("Resto Order", order, "table_freed"))
+
+	def test_pay_and_free_the_table_frees_it(self):
+		order = self.pay(self.sent_order(), free_table=1)  # even with a dish not served yet
+		self.assertTrue(frappe.db.get_value("Resto Order", order, "table_freed"))
 		self.assertEqual(self.table().status, "free")
+
+	def test_paid_then_freed_from_the_tile(self):
+		order = self.pay(self.served_order())
+		self.assertEqual(self.table().status, "paid")
+		floor.free_table(order)
+		self.assertEqual(self.table().status, "free")
+		self.assertIn("Table freed", self.comments(order))
+
+	def test_the_setting_frees_it_at_payment_when_every_dish_was_served(self):
+		"""The rule before D-294, kept behind Resto Settings: served, it frees; not served, it stays."""
+		self.auto_free(1)
+		self.assertTrue(floor.get_floor()["auto_free_table"])
+		order = self.pay(self.served_order())
+		self.assertEqual(self.table().status, "free")
+		self.assertTrue(frappe.db.get_value("Resto Order", order, "table_freed"))
+		waiting = self.paid_order()
+		self.assertEqual((self.table().status, self.table().paid.name), ("paid", waiting))
+
+	def test_a_forgotten_table_frees_itself_after_the_wait_and_says_so(self):
+		order = self.pay(self.served_order())
+		floor.free_forgotten_tables()
+		self.assertFalse(frappe.db.get_value("Resto Order", order, "table_freed"))  # not yet
+		frappe.db.set_value(
+			"Resto Order", order, "closed_at", add_to_date(now_datetime(), hours=-(floor.PAID_WAIT_HOURS + 1))
+		)
+		floor.free_forgotten_tables()
+		self.assertTrue(frappe.db.get_value("Resto Order", order, "table_freed"))
+		self.assertIn(
+			"Table freed automatically {0} hours after payment".format(floor.PAID_WAIT_HOURS), self.comments(order)
+		)
+		self.assertEqual(self.table().status, "free")
+
+	def reservation(self):
+		res = frappe.get_doc(
+			{
+				"doctype": "Resto Reservation",
+				"customer_name": "Paid Table Guest",
+				"phone": "01000000000",
+				"reservation_date": add_days(nowdate(), 1),
+				"reservation_time": "20:00:00",
+				"guests": 2,
+				"resto_table": TABLE,
+			}
+		)
+		res.flags.ignore_permissions = True
+		res.insert()
+		return res.name
+
+	def test_a_reservation_is_not_seated_on_a_table_still_taken(self):
+		order = self.pay(self.served_order())
+		res = self.reservation()
+		self.assertRaisesRegex(frappe.ValidationError, "still taken", floor.seat_reservation, res)
+		self.assertEqual(frappe.db.get_value("Resto Reservation", res, "status"), "Booked")
+		floor.free_table(order)
+		seated = floor.seat_reservation(res)
+		self.assertTrue(seated)
+		self.assertEqual(frappe.db.get_value("Resto Reservation", res, "status"), "Seated")
+
+	def test_new_guests_seated_free_the_paid_table(self):
+		order = self.pay(self.served_order())
+		new = floor.create_order(order_type="Dine In", table=TABLE, guests=3)
+		self.assertTrue(frappe.db.get_value("Resto Order", order, "table_freed"))
+		self.assertIn("Table freed: new guests seated", self.comments(order))
+		self.assertEqual(self.table().order.name, new)
 
 	def test_a_dish_left_ready_after_payment_is_served_from_the_floor_or_the_kitchen(self):
 		"""D-277: a ticket ready after payment leaves the kitchen board after two hours; the waiter

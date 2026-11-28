@@ -204,6 +204,8 @@ def get_floor():
 		"refresh_seconds": cint(settings.screen_refresh_seconds) or 15,
 		# No kitchen screen moves the dishes: the order screen shows the kitchen state buttons (D-293).
 		"kitchen_printers_only": cint(settings.get("kitchen_printers_only")),
+		# Paid dine-in tables free themselves when every dish was served (the rule before D-294).
+		"auto_free_table": cint(settings.get("auto_free_table_after_payment")),
 		"roles": {
 			"manager": has_role(),
 			"waiter": has_role(WAITER),
@@ -269,18 +271,18 @@ def _set_served_state(o, lines, served, last_served, now):
 
 
 def _paid_waiting(now):
-	"""{table: order} of dine-in orders paid before their dishes were served (D-220, D-276): the table
-	stays taken, the guests waiting for their food (a dish not served yet; a ready dish is still at
-	the pass) or eating it, until the cashier, the host or the waiter frees it, or after
-	PAID_WAIT_HOURS. Paid after every dish was served, the table frees at once."""
+	"""{table: order} of paid dine-in orders whose table is not freed yet (D-220, D-276, D-294): the
+	guests waiting for their food (a dish not served yet; a ready dish is still at the pass) or eating
+	it, until the cashier, the host or the waiter frees it, or free_forgotten_tables does after
+	PAID_WAIT_HOURS. A table freed at payment never shows here."""
 	rows = frappe.db.sql(
 		"""select o.name, o.resto_table, o.guests, o.closed_at,
 			sum(case when i.kitchen_status in ('Served', 'Void') then 0 else 1 end) as waiting,
 			sum(case when i.kitchen_status = 'Ready' then 1 else 0 end) as ready
 		from `tabResto Order` o join `tabResto Order Item` i on i.parent = o.name and i.parenttype = 'Resto Order'
 		where o.status = 'Paid' and o.order_type = 'Dine In' and ifnull(o.resto_table, '') != ''
-			and ifnull(o.table_freed, 0) = 0 and o.opened_at >= %s
-		group by o.name having waiting > 0 or max(ifnull(o.paid_before_served, 0)) = 1
+			and ifnull(o.table_freed, 0) = 0 and ifnull(o.closed_at, o.opened_at) >= %s
+		group by o.name
 		order by o.opened_at asc""",
 		add_to_date(now, hours=-PAID_WAIT_HOURS),
 		as_dict=True,
@@ -302,7 +304,49 @@ def free_table(order):
 	if status != "Paid" or order_type != "Dine In":
 		frappe.throw(_("Only the table of a paid dine-in order can be freed here"))
 	frappe.db.set_value("Resto Order", order, "table_freed", 1)
+	frappe.get_doc("Resto Order", order).add_comment("Info", _("Table freed"))
 	publish("order", order=order)
+
+
+def _free_paid_tables(table, note):
+	"""Free the table of the paid dine-in orders still holding it: new guests are seated there."""
+	for name in frappe.get_all(
+		"Resto Order",
+		filters={"resto_table": table, "status": "Paid", "order_type": "Dine In", "table_freed": 0},
+		pluck="name",
+	):
+		frappe.db.set_value("Resto Order", name, "table_freed", 1)
+		frappe.get_doc("Resto Order", name).add_comment("Info", note)
+
+
+def _paid_holding(table):
+	"""The paid order still holding the table (not freed, within PAID_WAIT_HOURS), if any."""
+	return frappe.db.get_value(
+		"Resto Order",
+		{
+			"resto_table": table,
+			"status": "Paid",
+			"order_type": "Dine In",
+			"table_freed": 0,
+			"closed_at": (">=", add_to_date(now_datetime(), hours=-PAID_WAIT_HOURS)),
+		},
+		"name",
+	)
+
+
+def free_forgotten_tables():
+	"""Hourly (D-294): a paid table nobody freed is freed PAID_WAIT_HOURS after its payment, so a
+	forgotten one never blocks the floor; the order says it was freed by itself."""
+	since = add_to_date(now_datetime(), hours=-PAID_WAIT_HOURS)
+	for name in frappe.get_all(
+		"Resto Order",
+		filters={"status": "Paid", "order_type": "Dine In", "table_freed": 0, "closed_at": ("<", since)},
+		pluck="name",
+	):
+		frappe.db.set_value("Resto Order", name, "table_freed", 1)
+		frappe.get_doc("Resto Order", name).add_comment(
+			"Info", _("Table freed automatically {0} hours after payment").format(PAID_WAIT_HOURS)
+		)
 
 
 def _bill_rules(settings):
@@ -621,6 +665,9 @@ def create_order(
 	)
 	order.flags.ignore_permissions = True
 	order.insert()
+	if order.resto_table:
+		# Seated on a table still held by guests who paid: they left (Seat New Guests, D-294).
+		_free_paid_tables(order.resto_table, _("Table freed: new guests seated"))
 	return order.name
 
 
@@ -1224,7 +1271,7 @@ def mark_served(order, ticket=None):
 	if ticket:
 		filters["name"] = ticket
 	for name in frappe.get_all("Resto Kitchen Ticket", filters=filters, pluck="name"):
-		kitchen.set_ticket_status(name, "Served")
+		kitchen.set_ticket_status(name, "Served", source="Floor")
 	return order
 
 
@@ -1233,18 +1280,47 @@ FLOOR_STATES = {"Sent": "New", "In Progress": "In Progress", "Ready": "Ready", "
 TICKET_STEP = {"New": 0, "In Progress": 1, "Ready": 2, "Served": 3}
 
 
+def _kitchen_state(doc):
+	"""The order's state as the floor's buttons show it: its least advanced sent dish; marked served,
+	served (resto_floor.js kitchen_state)."""
+	if doc.served_marked_at:
+		return "Served"
+	steps = list(FLOOR_STATES)
+	sent = [steps.index(d.kitchen_status) for d in doc.items if d.kitchen_status in FLOOR_STATES]
+	return steps[min(sent)] if sent else None
+
+
 @frappe.whitelist(methods=["POST"])
-def set_kitchen_state(order, state, confirm=0):
+def set_kitchen_state(order, state, confirm=0, seen=None):
 	"""Set where the order's dishes are from the floor (D-293), for a kitchen that runs on printers
 	alone and never moves them: at the kitchen, in progress, ready, or served (the table then shows
 	served, waiting for payment). Any state at once, no steps between. Every sent ticket of the
 	order moves, and its dishes with it; a dish not sent yet stays. A step back (a wrong tap) is
 	counted first; confirm moves it anyway. The kitchen screen works as before, and whichever moves
-	a ticket last wins. The times set here are flagged and left out of the kitchen times."""
+	a ticket last wins. The times set here are flagged and left out of the kitchen times.
+
+	seen: the state the floor showed (D-295). Changed meanwhile (the kitchen screen moved a ticket),
+	nothing moves: the answer says the state now and who moved it, and the floor shows it again."""
 	require_role(WAITER, CASHIER, HOST)
 	if state not in FLOOR_STATES:
 		frappe.throw(_("Unknown kitchen state {0}").format(state))
 	doc = _get_order(order)
+	now_state = _kitchen_state(doc)
+	if seen and now_state and seen != now_state and now_state != state:
+		last = frappe.get_all(
+			"Resto Kitchen Ticket",
+			filters={"resto_order": doc.name, "ticket_type": "Order"},
+			fields=["moved_from"],
+			order_by="modified desc",
+			limit=1,
+		)
+		return {
+			"done": 0,
+			"changed": now_state,
+			"message": kitchen.stale_message(
+				_(now_state, context="Resto Kitchen State"), last[0].moved_from if last else None
+			),
+		}
 	target = FLOOR_STATES[state]
 	tickets = frappe.get_all(
 		"Resto Kitchen Ticket",
@@ -1566,7 +1642,9 @@ def request_bill(order):
 
 
 @frappe.whitelist(methods=["POST"])
-def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0, approver=None, pin=None):
+def settle(order, payments, lines=None, expected=None, request_id=None, on_account=0, approver=None, pin=None, free_table=0):
+	"""free_table: «Pay and Free the Table» (D-294): the payment that closes a dine-in order frees its
+	table too; without it the table stays taken, paid, until it is freed."""
 	require_role(CASHIER)
 	# A retried click after the last payment closed the order gets the same invoice back.
 	doc = _get_order(order, statuses=None if request_id else ACTIVE)
@@ -1585,6 +1663,7 @@ def settle(order, payments, lines=None, expected=None, request_id=None, on_accou
 		kitchen.send_lines(doc)
 		_save(doc)
 		doc = _get_order(order)
+	doc.flags.resto_free_table = cint(free_table)
 	si = billing.settle(
 		doc,
 		_loads(payments, []),
@@ -1630,6 +1709,10 @@ def seat_reservation(reservation, table=None):
 	table = table or res.resto_table
 	if not table:
 		frappe.throw(_("Choose a table"))
+	held = _paid_holding(table)
+	if held:
+		# Guests who paid are still at the table (D-294): it is freed first, or another table chosen.
+		frappe.throw(_("Table {0} is still taken by the paid order {1}: free it first, or choose another table").format(table, held))
 	order = frappe.new_doc("Resto Order")
 	order.update(
 		{

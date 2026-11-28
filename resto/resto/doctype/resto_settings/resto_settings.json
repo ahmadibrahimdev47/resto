@@ -51,6 +51,7 @@
   "screen_refresh_seconds",
   "enable_screen_lock",
   "lock_after_minutes",
+  "auto_free_table_after_payment",
   "reservation_hold_minutes",
   "business_day_start_hour",
   "service_section",
@@ -392,6 +393,13 @@
    "description": "A floor screen left untouched this long locks itself; its user opens it with their own PIN (set from the floor's user menu). 0: it locks only from the user menu."
   },
   {
+   "fieldname": "auto_free_table_after_payment",
+   "fieldtype": "Check",
+   "default": "0",
+   "label": "Free the Table Automatically After Payment",
+   "description": "Off: a paid dine-in table stays taken until it is freed (Pay and Free the Table, or Free the Table on it). On: it frees itself at payment when every dish was served. Either way a forgotten table is freed 12 hours after payment."
+  },
+  {
    "default": "30",
    "fieldname": "reservation_hold_minutes",
    "fieldtype": "Int",
@@ -605,7 +613,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-28 14:00:00.000000",
+ "modified": "2026-11-28 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

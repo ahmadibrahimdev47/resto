@@ -18,3 +18,4 @@ resto.patches.v0_1.separate_lock_pin
 resto.patches.v0_1.side_option_entered_unit
 resto.patches.v0_1.kitchen_ticket_order_type
 resto.patches.v0_1.paid_before_served
+resto.patches.v0_1.paid_tables_stay_taken
