@@ -1,6 +1,7 @@
 """«Served, waiting for payment» on the floor (D-291): a dine-in table whose every dish was served
-shows it by itself; the floor can mark it by hand, asked first when dishes are not ready; adding a
-dish takes it back to occupied; a bill asked for shows first.
+shows it by itself; adding a dish takes it back to occupied; a bill asked for shows first. The
+floor's kitchen state buttons (D-293) set any state at once, back only when confirmed, alongside the
+kitchen screen, and their times stay out of the kitchen times.
 
 bench --site test.resto run-tests --module resto.tests.test_floor_served
 """
@@ -66,36 +67,6 @@ class TestFloorServed(IntegrationTestCase):
 		t = self.table()
 		self.assertEqual((t.status, t.order.waiting_payment), ("occupied", 0))
 
-	def test_marked_by_hand_asks_about_dishes_not_ready(self):
-		order = self.sent_order()
-		first, *rest = self.tickets(order)
-		self.assertTrue(rest)  # the fries and the drinks go to two stations
-		kitchen.set_ticket_status(first, "Ready")
-
-		asked = floor.mark_waiting_payment(order)
-		self.assertEqual(asked["done"], 0)
-		self.assertGreater(asked["not_ready"], 0)
-		self.assertEqual(self.table().status, "occupied")  # nothing changed yet
-		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", first, "status"), "Ready")
-
-		done = floor.mark_waiting_payment(order, confirm=1)
-		self.assertEqual(done["done"], 1)
-		self.assertEqual(frappe.db.get_value("Resto Kitchen Ticket", first, "status"), "Served")  # what was ready is served
-		self.assertTrue(frappe.db.get_value("Resto Order", order, "served_marked_at"))
-		self.assertEqual(self.table().status, "served")
-
-		floor.add_items(order, json.dumps([{"item_code": "DRK-COLA", "qty": 1, "notes": "one more"}]))
-		self.assertFalse(frappe.db.get_value("Resto Order", order, "served_marked_at"))
-		self.assertEqual(self.table().status, "occupied")
-
-	def test_all_ready_is_marked_without_asking(self):
-		order = self.sent_order()
-		for ticket in self.tickets(order):
-			kitchen.set_ticket_status(ticket, "Ready")
-		self.assertEqual(floor.mark_waiting_payment(order), {"done": 1, "not_ready": 0})
-		self.assertEqual({d.kitchen_status for d in frappe.get_doc("Resto Order", order).items}, {"Served"})
-		self.assertEqual(self.table().status, "served")
-
 	def test_a_bill_asked_for_shows_first(self):
 		order = self.sent_order()
 		self.serve_all(order)
@@ -104,3 +75,81 @@ class TestFloorServed(IntegrationTestCase):
 		t = self.table()
 		self.assertEqual(t.status, "bill")
 		self.assertEqual(t.order.waiting_payment, 1)  # still served: once the bill is changed, served shows again
+
+	# ------------------------------------------------------------------ the floor's kitchen state (D-293)
+
+	def ticket(self, name):
+		return frappe.db.get_value(
+			"Resto Kitchen Ticket", name, ["status", "ready_at", "served_at", "floor_started", "floor_ready", "floor_served"], as_dict=True
+		)
+
+	def line_states(self, order):
+		return {d.kitchen_status for d in frappe.get_doc("Resto Order", order).items if d.kitchen_status != "Void"}
+
+	def test_floor_jumps_straight_to_served_and_flags_it(self):
+		order = self.sent_order()
+		self.assertEqual(floor.set_kitchen_state(order, "Served")["done"], 1)  # from the kitchen, no steps between
+		self.assertEqual(self.line_states(order), {"Served"})
+		self.assertEqual(self.table().status, "served")
+		for name in self.tickets(order):
+			t = self.ticket(name)
+			self.assertEqual((t.status, t.floor_ready, t.floor_served), ("Served", 1, 1))
+			self.assertTrue(t.ready_at and t.served_at)
+
+	def test_floor_goes_back_only_when_confirmed(self):
+		order = self.sent_order()
+		floor.set_kitchen_state(order, "Served")
+		asked = floor.set_kitchen_state(order, "Sent")
+		self.assertEqual((asked["done"], asked["back"]), (0, len(self.tickets(order))))
+		self.assertEqual(self.line_states(order), {"Served"})  # nothing moved yet
+		floor.set_kitchen_state(order, "Sent", confirm=1)
+		self.assertEqual(self.line_states(order), {"Sent"})
+		self.assertFalse(frappe.db.get_value("Resto Order", order, "served_marked_at"))
+		self.assertEqual(self.table().status, "occupied")
+		for name in self.tickets(order):
+			t = self.ticket(name)
+			self.assertEqual((t.status, t.ready_at, t.served_at, t.floor_ready, t.floor_served), ("New", None, None, 0, 0))
+		# Forward is never asked about.
+		self.assertEqual(floor.set_kitchen_state(order, "Ready")["done"], 1)
+
+	def test_kitchen_and_floor_both_move_tickets_and_only_the_floor_is_flagged(self):
+		order = self.sent_order()
+		first, second = self.tickets(order)[:2]
+		# The kitchen screen marks one ready, then the floor serves the table.
+		kitchen.set_ticket_status(first, "Ready")
+		floor.set_kitchen_state(order, "Served")
+		t = self.ticket(first)
+		self.assertEqual((t.status, t.floor_ready, t.floor_served), ("Served", 0, 1))
+		# The floor takes it back to ready, then the kitchen screen serves it: that step is the kitchen's.
+		floor.set_kitchen_state(order, "Ready", confirm=1)
+		kitchen.set_ticket_status(second, "Served")
+		t = self.ticket(second)
+		self.assertEqual((t.status, t.floor_ready, t.floor_served), ("Served", 1, 0))  # the ready time stays the floor's
+		self.assertEqual(
+			frappe.db.get_value("Resto Order Item", {"ticket": second, "kitchen_status": ("!=", "Void")}, "kitchen_status"), "Served"
+		)
+
+	def test_floor_set_times_are_left_out_of_the_kitchen_times(self):
+		from frappe.utils import now_datetime
+
+		from resto.resto.report.resto_kitchen_times.resto_kitchen_times import spans
+
+		order = self.sent_order()
+		floor.set_kitchen_state(order, "Served")
+		name = self.tickets(order)[0]
+		t = frappe.db.get_value(
+			"Resto Kitchen Ticket", name,
+			["sent_at", "started_at", "ready_at", "served_at", "floor_started", "floor_ready", "floor_served"], as_dict=True,
+		)
+		self.assertEqual(spans(t, now_datetime(), 20), (None, None, None, None, False))  # no 0-minute prep
+		frappe.db.set_value("Resto Kitchen Ticket", name, {"floor_ready": 0, "floor_served": 0})  # as if the kitchen had
+		t.floor_ready = t.floor_served = 0
+		wait, cook, total, pickup, late = spans(t, now_datetime(), 20)
+		self.assertIsNotNone(total)
+
+	def test_a_new_dish_after_served_from_the_floor_takes_the_table_back(self):
+		order = self.sent_order()
+		floor.set_kitchen_state(order, "Served")
+		floor.add_items(order, json.dumps([{"item_code": "DISH-FRIES", "qty": 1, "notes": "after"}]))
+		self.assertFalse(frappe.db.get_value("Resto Order", order, "served_marked_at"))
+		self.assertEqual(self.table().status, "occupied")

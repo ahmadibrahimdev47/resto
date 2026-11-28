@@ -1,3 +1,5 @@
+import "./percent_display";
+
 // Recipe Status: every item ticked "Needs a Recipe" with its recipe state. Opened from the
 // Resto Recipe list and form. A row opens the recipe, or a new one for that item.
 frappe.provide("resto");

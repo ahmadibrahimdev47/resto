@@ -46,6 +46,7 @@
   "free_extras_limit",
   "packaging_item_group",
   "show_sides_in_kitchen",
+  "kitchen_printers_only",
   "column_break_pos",
   "screen_refresh_seconds",
   "enable_screen_lock",
@@ -358,6 +359,13 @@
    "description": "The kitchen screen and ticket show every dish's sides, also when they are the recipe's own (for new cooks). Off: only sides that differ from the recipe. The bill and the receipt are not changed."
   },
   {
+   "fieldname": "kitchen_printers_only",
+   "fieldtype": "Check",
+   "default": "0",
+   "label": "Kitchen Works With Printers Only",
+   "description": "No kitchen screen moves the dishes: the order screen shows the kitchen state buttons (in the kitchen, in progress, ready, served) above its lines. Off, they are in the order's More menu. The kitchen screen works the same either way."
+  },
+  {
    "fieldname": "column_break_pos",
    "fieldtype": "Column Break"
   },
@@ -597,7 +605,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-28 10:00:00.000000",
+ "modified": "2026-11-28 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Settings",

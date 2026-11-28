@@ -2744,6 +2744,7 @@ class RestoFloor {
 						<button class="rf-btn rf-sm" data-act="note">${__("Note")}</button>
 						${o.staff_meal ? `<button class="rf-btn rf-sm" data-act="staff_item">${__("Free Ingredient")}</button>` : `<button class="rf-btn rf-sm" data-act="discount">${__("Discount")}</button>`}
 						<button class="rf-ib rf-sm" data-act="more" title="${__("More")}" aria-label="${__("More")}">${ICON.more}</button></div>
+					<div class="rf-kslot"></div>
 					<div class="rf-lines"></div>
 					<div class="rf-cfoot"><div class="rf-totals"></div><div class="rf-cbtns">
 						${o.staff_meal ? (this.floor.roles.cashier || this.floor.roles.manager ? `<button class="rf-btn rf-btn-p rf-xl" data-act="staff_post">${ICON.send}<span>${__("Send and Post")}</span></button>` : `<small class="rf-muted">${__("Only a cashier or a manager makes a staff meal")}</small>`) : `
@@ -2931,6 +2932,7 @@ class RestoFloor {
 
 	render_lines() {
 		const o = this.order;
+		this.render_kitchen_state();
 		const manager = this.floor.roles.manager;
 		// Where each sent dish is (D-220): at the kitchen, its ticket printed, being made, ready.
 		const in_kitchen = (d) =>
@@ -3631,9 +3633,7 @@ class RestoFloor {
 			]);
 		}
 		if (o.order_type === "Dine In") {
-			if (this.floor.roles.waiter || this.floor.roles.cashier || this.floor.roles.manager) {
-				acts.push([__("Served, Waiting for Payment"), () => this.waiting_payment()]);
-			}
+			if (this.can_set_kitchen_state()) acts.push([__("Kitchen State", null, "Resto Kitchen State"), () => this.kitchen_state_menu()]);
 			acts.push([__("Move to Table"), () => this.move()], [__("Merge Table Into This"), () => this.merge()]);
 		}
 		if (o.order_type === "Delivery") acts.push([__("Delivery Status"), () => this.delivery()]);
@@ -3642,22 +3642,69 @@ class RestoFloor {
 		this.menu_dialog(__("Order Actions"), acts);
 	}
 
-	// The guests are done with their food and have not paid yet (D-291): what is ready is served, and
-	// the table shows it in its own colour with the time since. Dishes not ready yet are asked about.
-	async waiting_payment() {
+	// Where the order's dishes are, set from the floor (D-293): for a kitchen that runs on printers
+	// alone, no screen moves them. Any state at once; «Served» shows the table served, waiting for
+	// payment (D-291). The kitchen screen keeps all its own steps, and the last move wins.
+	static KITCHEN_STATES = ["Sent", "In Progress", "Ready", "Served"];
+
+	kitchen_state_label(state) {
+		return {
+			Sent: __("In the Kitchen", null, "Resto"),
+			"In Progress": __("In Progress", null, "Resto"),
+			Ready: __("Ready"),
+			Served: __("Served, Waiting for Payment"),
+		}[state];
+	}
+
+	// The state the order is in: its least advanced sent dish; marked served, served.
+	kitchen_state(o) {
+		if (o.served_marked_at) return "Served";
+		const steps = RestoFloor.KITCHEN_STATES;
+		const sent = (o.items || []).filter((d) => steps.includes(d.kitchen_status));
+		if (!sent.length) return null;
+		return steps[Math.min(...sent.map((d) => steps.indexOf(d.kitchen_status)))];
+	}
+
+	can_set_kitchen_state() {
+		const r = this.floor.roles;
 		const o = this.order;
-		const done = () => {
-			frappe.show_alert({ message: __("Table marked served, waiting for payment"), indicator: "green" });
-			this.refresh();
+		return o && o.order_type === "Dine In" && !o.staff_meal && (r.waiter || r.cashier || r.host || r.manager) && !!this.kitchen_state(o);
+	}
+
+	render_kitchen_state() {
+		const $slot = this.$order.find(".rf-kslot");
+		if (!this.floor.kitchen_printers_only || !this.can_set_kitchen_state()) return $slot.empty();
+		const cur = this.kitchen_state(this.order);
+		$slot.html(`<div class="rf-kstate" role="group" aria-label="${esc(__("Kitchen State", null, "Resto Kitchen State"))}">${RestoFloor.KITCHEN_STATES.map(
+			(v) => `<button type="button" class="rf-kst ${v === cur ? "on" : ""}" data-kstate="${v}" aria-pressed="${v === cur}">${this.kitchen_state_label(v)}</button>`
+		).join("")}</div>`);
+		$slot.find("[data-kstate]").on("click", (e) => this.set_kitchen_state($(e.currentTarget).attr("data-kstate")));
+	}
+
+	kitchen_state_menu() {
+		const cur = this.kitchen_state(this.order);
+		this.menu_dialog(
+			__("Kitchen State", null, "Resto Kitchen State"),
+			RestoFloor.KITCHEN_STATES.map((v) => [`${v === cur ? "● " : ""}${this.kitchen_state_label(v)}`, () => this.set_kitchen_state(v)])
+		);
+	}
+
+	async set_kitchen_state(state) {
+		const o = this.order;
+		if (this.kitchen_state(o) === state) return;
+		const done = (r) => {
+			frappe.show_alert({ message: __("Kitchen state: {0}", [this.kitchen_state_label(state)], "Resto Kitchen State"), indicator: "green" });
+			if (r && flt(r.unsent)) {
+				frappe.show_alert({ message: __("{0} dish(es) not sent to the kitchen yet", [fmt_qty(r.unsent)], "Resto Kitchen State"), indicator: "orange" }, 6);
+			}
 			this.load_order(o.name);
 		};
-		const r = await call("mark_waiting_payment", { order: o.name }, true);
-		if (r && r.done) return done();
-		if (r && r.not_ready) {
-			frappe.confirm(__("{0} dish(es) not ready yet. Mark the table served, waiting for payment, anyway?", [fmt_qty(r.not_ready)]), async () => {
-				await call("mark_waiting_payment", { order: o.name, confirm: 1 }, true);
-				done();
-			});
+		const r = await call("set_kitchen_state", { order: o.name, state }, true);
+		if (r && r.done) return done(r);
+		if (r && r.back) {
+			frappe.confirm(__("This takes {0} kitchen ticket(s) back to «{1}». Go ahead?", [r.back, this.kitchen_state_label(state)], "Resto Kitchen State"), async () =>
+				done(await call("set_kitchen_state", { order: o.name, state, confirm: 1 }, true))
+			);
 		}
 	}
 
@@ -4447,6 +4494,12 @@ class RestoFloor {
 		.rf-tbl.served .rf-st { background:var(--rf-teal); color:#fff; } .rf-tbl.served .rf-tago { color:var(--rf-teal-ink); }
 		.rf-tserved { color:var(--rf-teal-ink); font-weight:700; font-size:14px; }
 		.rf-legend i.served { background:var(--rf-teal); }
+		.rf-kslot:empty { display:none; }
+		.rf-kstate { display:flex; gap:6px; padding:8px 12px; border-bottom:1px solid var(--rf-line2); flex-wrap:wrap; }
+		.rf-kst { all:unset; box-sizing:border-box; cursor:pointer; flex:1 1 0; min-width:84px; text-align:center; padding:9px 8px; border-radius:10px;
+			border:1px solid var(--rf-line); background:var(--rf-card); color:var(--rf-ink2); font-size:14px; font-weight:700; }
+		.rf-kst.on { background:var(--rf-teal); border-color:var(--rf-teal); color:#fff; }
+		.rf-kst:focus-visible { outline:2px solid var(--rf-acc); outline-offset:2px; }
 		.rf-wcount { background:var(--rf-teal); color:#fff; border-radius:999px; padding:0 8px; font-size:12px; }
 		.rf-orow { all:unset; box-sizing:border-box; cursor:pointer; display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-bottom:1px solid var(--rf-line2); }
 		.rf-orow1, .rf-orow2 { display:flex; align-items:center; gap:8px; }

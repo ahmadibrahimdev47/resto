@@ -4,7 +4,7 @@
  "docstatus": 0,
  "doctype": "Page",
  "idx": 0,
- "modified": "2026-11-27 18:00:00.000000",
+ "modified": "2026-11-28 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "resto-items",
@@ -13,6 +13,9 @@
  "roles": [
   {
    "role": "Resto Manager"
+  },
+  {
+   "role": "Resto Kitchen"
   },
   {
    "role": "Stock User"

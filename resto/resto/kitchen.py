@@ -8,7 +8,7 @@ from frappe.utils import add_to_date, cint, flt, get_datetime, getdate, now_date
 
 from resto.resto.routing import get_station
 from resto.resto.sides import kitchen_text, sides_html
-from resto.resto.utils import KITCHEN, MANAGER, WAITER, CASHIER, publish, require_role
+from resto.resto.utils import HOST, KITCHEN, MANAGER, WAITER, CASHIER, publish, require_role
 
 # How a station's tickets are printed (Resto Kitchen Station.print_method).
 SERVER_PRINTER = "Server Printer"
@@ -346,10 +346,14 @@ def print_ticket(ticket, reprint=0, copy=0):
 		frappe.log_error(title=_("Kitchen ticket {0} was not printed").format(doc.name))
 
 
-def set_ticket_status(ticket_name, status, recall=False):
+def set_ticket_status(ticket_name, status, recall=False, floor=False):
 	"""recall: brought back to the board from Today's Tickets (to New): the first ready time is kept
-	for the kitchen times, and the board's timer runs from now (recalled_at)."""
-	require_role(KITCHEN, WAITER, CASHIER)
+	for the kitchen times, and the board's timer runs from now (recalled_at).
+
+	floor: set from the floor's kitchen state buttons (D-293), for a kitchen that runs on printers
+	alone: any step, forward or back. The times it sets are flagged (floor_started, floor_ready,
+	floor_served) and left out of the kitchen times; a time the kitchen screen sets clears its flag."""
+	require_role(KITCHEN, WAITER, CASHIER, *((HOST,) if floor else ()))
 	if status not in TICKET_STATUSES:
 		frappe.throw(_("Unknown status {0}").format(status))
 	if status == "Cancelled":
@@ -358,26 +362,35 @@ def set_ticket_status(ticket_name, status, recall=False):
 	ticket = frappe.get_doc("Resto Kitchen Ticket", ticket_name, for_update=True)
 	if ticket.status == status:
 		return ticket
-	if status not in TRANSITIONS.get(ticket.status, ()):
+	if floor:
+		if "Cancelled" in (ticket.status, status):
+			frappe.throw(_("Ticket {0} is {1} and cannot become {2}").format(ticket.name, _(ticket.status, context="Resto"), _(status, context="Resto")))
+	elif status not in TRANSITIONS.get(ticket.status, ()):
 		# A stale screen (or a ticket cancelled meanwhile) must not move it backwards.
 		frappe.throw(_("Ticket {0} is {1} and cannot become {2}").format(ticket.name, _(ticket.status, context="Resto"), _(status, context="Resto")))
 	now = now_datetime()
 	ticket.status = status
-	if status == "In Progress" and not ticket.started_at:
-		ticket.started_at = now
+	if floor:
+		_floor_times(ticket, status, now)
+	elif status == "In Progress" and not ticket.started_at:
+		ticket.started_at, ticket.floor_started = now, 0
 	elif status == "Ready":
-		ticket.started_at = ticket.started_at or now
-		ticket.ready_at = ticket.ready_at if (ticket.served_at or ticket.recalled_at) and ticket.ready_at else now
-		ticket.served_at = None
+		if not ticket.started_at:
+			ticket.started_at, ticket.floor_started = now, 0
+		if not ((ticket.served_at or ticket.recalled_at) and ticket.ready_at):
+			ticket.ready_at, ticket.floor_ready = now, 0
+		ticket.served_at, ticket.floor_served = None, 0
 	elif status == "Served":
-		ticket.ready_at = ticket.ready_at or now
-		ticket.served_at = now
+		if not ticket.ready_at:
+			ticket.ready_at, ticket.floor_ready = now, 0
+		ticket.served_at, ticket.floor_served = now, 0
 	elif status == "New" and recall:
-		ticket.served_at = None
+		ticket.served_at, ticket.floor_served = None, 0
 		ticket.recalled_at = now
 	elif status == "New":
 		# Recall: back on the screen.
 		ticket.ready_at = ticket.served_at = None
+		ticket.floor_ready = ticket.floor_served = 0
 	ticket.flags.ignore_permissions = True
 	ticket.save()
 
@@ -392,6 +405,27 @@ def set_ticket_status(ticket_name, status, recall=False):
 			)
 	publish("ticket", ticket=ticket.name, station=ticket.station, order=ticket.resto_order, status=status)
 	return ticket
+
+
+def _floor_times(ticket, status, now):
+	"""The times of a step set from the floor (D-293), each flagged as the floor's."""
+	if status == "New":
+		ticket.started_at = ticket.ready_at = ticket.served_at = None
+		ticket.floor_started = ticket.floor_ready = ticket.floor_served = 0
+		return
+	if not ticket.started_at and status in ("In Progress", "Ready"):
+		ticket.started_at, ticket.floor_started = now, 1
+	if status == "In Progress":
+		ticket.ready_at = ticket.served_at = None
+		ticket.floor_ready = ticket.floor_served = 0
+	elif status == "Ready":
+		if not ticket.ready_at:
+			ticket.ready_at, ticket.floor_ready = now, 1
+		ticket.served_at, ticket.floor_served = None, 0
+	elif status == "Served":
+		if not ticket.ready_at:
+			ticket.ready_at, ticket.floor_ready = now, 1
+		ticket.served_at, ticket.floor_served = now, 1
 
 
 def get_tickets(station=None, include_done_minutes=15):

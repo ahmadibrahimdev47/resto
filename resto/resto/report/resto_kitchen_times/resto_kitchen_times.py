@@ -5,6 +5,18 @@ from frappe.utils import cint, flt, now_datetime, time_diff_in_seconds
 from resto.resto.report_utils import prepare_filters
 
 
+def spans(t, now, late):
+	"""(wait, cook, total, pickup, late) of one ticket, in minutes. A time set from the floor's kitchen
+	state buttons (D-293) is when someone tapped, not when the kitchen worked: a span that starts or
+	ends on it is left out (None), and whether the ticket was late is not known."""
+	wait = None if t.floor_started else minutes(t.sent_at, t.started_at)
+	cook = None if t.floor_started or t.floor_ready else minutes(t.started_at, t.ready_at)
+	total = None if t.floor_ready else minutes(t.sent_at, t.ready_at)
+	pickup = None if t.floor_ready or t.floor_served else minutes(t.ready_at, t.served_at)
+	is_late = False if t.floor_ready else (total if total is not None else minutes(t.sent_at, now)) > late
+	return wait, cook, total, pickup, is_late
+
+
 def execute(filters=None):
 	filters = prepare_filters(filters)
 	group_by = filters.get("group_by") or "Station"
@@ -12,7 +24,8 @@ def execute(filters=None):
 	cond = "and t.station = %(station)s" if filters.get("station") else ""
 	tickets = frappe.db.sql(
 		f"""
-		select t.name, t.station, t.waiter, t.sent_at, t.started_at, t.ready_at, t.served_at
+		select t.name, t.station, t.waiter, t.sent_at, t.started_at, t.ready_at, t.served_at,
+			t.floor_started, t.floor_ready, t.floor_served
 		from `tabResto Kitchen Ticket` t
 		where t.ticket_type = 'Order' and t.status != 'Cancelled'
 			and date(t.sent_at) between %(from_date)s and %(to_date)s {cond}
@@ -33,11 +46,7 @@ def execute(filters=None):
 	now = now_datetime()
 	groups = {}
 	for t in tickets:
-		wait = minutes(t.sent_at, t.started_at)
-		cook = minutes(t.started_at, t.ready_at)
-		total = minutes(t.sent_at, t.ready_at)
-		pickup = minutes(t.ready_at, t.served_at)
-		is_late = (total if total is not None else minutes(t.sent_at, now)) > late
+		wait, cook, total, pickup, is_late = spans(t, now, late)
 		if group_by == "Item":
 			keys = [(r.item_code, r.item_name, flt(r.qty)) for r in items.get(t.name, [])]
 		else:

@@ -80,7 +80,8 @@ def get_dashboard(from_date=None, to_date=None, company=None):
 	)
 	tickets = frappe.db.sql(
 		"""select sent_at, ready_at from `tabResto Kitchen Ticket`
-		where ticket_type = 'Order' and ready_at is not null and date(sent_at) between %(from_date)s and %(to_date)s""",
+		where ticket_type = 'Order' and ready_at is not null and ifnull(floor_ready, 0) = 0
+			and date(sent_at) between %(from_date)s and %(to_date)s""",
 		f,
 		as_dict=True,
 	)

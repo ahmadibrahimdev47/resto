@@ -254,7 +254,7 @@ def statement(filters, spread_fixed=False):
 
 	def line(key, label, amount, indent=0, bold=0, account=None):
 		rows.append(
-			{"key": key, "label": label, "amount": amount, "pct": flt(pct(amount, net_sales), 1), "indent": indent, "bold": bold,
+			{"key": key, "label": label, "amount": amount, "pct": flt(pct(amount, net_sales), 2), "indent": indent, "bold": bold,
 			 "account": account}
 		)
 
@@ -311,7 +311,7 @@ def statement_columns():
 def summary(pnl):
 	def card(label, value, indicator):
 		return {
-			"label": f"{label} ({flt(pct(value, pnl.net_sales), 1)}%)",
+			"label": f"{label} ({flt(pct(value, pnl.net_sales), 2)}%)",
 			"value": value,
 			"datatype": "Currency",
 			"indicator": indicator,
@@ -369,7 +369,7 @@ def cogs_rows(filters):
 	rows = sorted(items.values(), key=lambda i: -i.cost)
 	for i in rows:
 		i.unit_cost = i.cost / i.qty if i.qty else 0
-		i.margin = flt(pct(i.sales - i.cost, i.sales), 1) if i.sales else None
+		i.margin = flt(pct(i.sales - i.cost, i.sales), 2) if i.sales else None
 	return rows
 
 
@@ -390,13 +390,13 @@ def cogs_view(filters):
 	data = [*rows]
 	if rows:
 		data.append(
-			{"item_code": None, "item_name": _("Total"), "cost": cost, "sales": sales, "margin": flt(pct(sales - cost, sales), 1) if sales else None,
+			{"item_code": None, "item_name": _("Total"), "cost": cost, "sales": sales, "margin": flt(pct(sales - cost, sales), 2) if sales else None,
 			 "bold": 1}
 		)
 	report_summary = [
 		{"label": _("Total Cost", context=CTX), "value": cost, "datatype": "Currency", "indicator": "Orange"},
 		{"label": _("Net Sales", context=CTX), "value": sales, "datatype": "Currency", "indicator": "Blue"},
-		{"label": _("Margin %", context=CTX), "value": flt(pct(sales - cost, sales), 1), "datatype": "Percent",
+		{"label": _("Margin %", context=CTX), "value": flt(pct(sales - cost, sales), 2), "datatype": "Percent",
 		 "indicator": "Green" if sales >= cost else "Red"},
 	]
 	return columns, data, _(

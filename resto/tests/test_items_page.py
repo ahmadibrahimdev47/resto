@@ -103,3 +103,11 @@ class TestItemsPage(IntegrationTestCase):
 		self.assertRaises(frappe.PermissionError, items.set_reorder, self.code, fx.KITCHEN, level=5, qty=10)
 		frappe.set_user("Administrator")
 		self.assertEqual(self.reorder_rows(), [])
+
+	def test_kitchen_sees_the_items_but_sets_nothing(self):
+		"""The chef sees each item and its reorder level, read only (D-290)."""
+		frappe.set_user("kitchen@resto.test")
+		got = items.get_items(search=self.code)
+		self.assertTrue(any(r.name == self.code for r in got["items"]))
+		self.assertEqual((got["can_write"], got["can_create"], got["can_reorder"]), (False, False, False))
+		self.assertRaises(frappe.PermissionError, items.set_reorder, self.code, fx.KITCHEN, level=5, qty=10)

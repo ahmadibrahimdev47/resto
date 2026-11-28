@@ -349,7 +349,7 @@
    "read_only": 1,
    "no_copy": 1,
    "label": "Marked Served At",
-   "description": "Set from the floor's «Served, Waiting for Payment» while some dishes were not ready yet; cleared when dishes are added."
+   "description": "Set when the floor sets the table served (its kitchen state buttons); cleared when dishes are added or the state is set back."
   },
   {
    "fieldname": "bill_requested_at",
@@ -538,7 +538,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-28 12:00:00.000000",
+ "modified": "2026-11-28 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Order",

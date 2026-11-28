@@ -202,6 +202,8 @@ def get_floor():
 		"kitchen_print": {"unprinted": len(alerts["unprinted"]), "no_screen": alerts["no_screen"]},
 		"receipt_mode": printing.receipt_mode(),
 		"refresh_seconds": cint(settings.screen_refresh_seconds) or 15,
+		# No kitchen screen moves the dishes: the order screen shows the kitchen state buttons (D-293).
+		"kitchen_printers_only": cint(settings.get("kitchen_printers_only")),
 		"roles": {
 			"manager": has_role(),
 			"waiter": has_role(WAITER),
@@ -1226,28 +1228,48 @@ def mark_served(order, ticket=None):
 	return order
 
 
+# The floor's kitchen state buttons (D-293): the state each sets on the order's tickets.
+FLOOR_STATES = {"Sent": "New", "In Progress": "In Progress", "Ready": "Ready", "Served": "Served"}
+TICKET_STEP = {"New": 0, "In Progress": 1, "Ready": 2, "Served": 3}
+
+
 @frappe.whitelist(methods=["POST"])
-def mark_waiting_payment(order, confirm=0):
-	"""«Served, waiting for payment» from the floor (D-291): what is ready at the pass is served, and
-	the table shows the guests done with their food until they pay. Dishes still in the kitchen (or
-	not sent) are counted back first; confirm marks the table anyway. Nothing in the accounts or the
-	stock changes: the mark is cleared when dishes are added, and paying closes the order as ever."""
-	require_role(WAITER, CASHIER)
+def set_kitchen_state(order, state, confirm=0):
+	"""Set where the order's dishes are from the floor (D-293), for a kitchen that runs on printers
+	alone and never moves them: at the kitchen, in progress, ready, or served (the table then shows
+	served, waiting for payment). Any state at once, no steps between. Every sent ticket of the
+	order moves, and its dishes with it; a dish not sent yet stays. A step back (a wrong tap) is
+	counted first; confirm moves it anyway. The kitchen screen works as before, and whichever moves
+	a ticket last wins. The times set here are flagged and left out of the kitchen times."""
+	require_role(WAITER, CASHIER, HOST)
+	if state not in FLOOR_STATES:
+		frappe.throw(_("Unknown kitchen state {0}").format(state))
 	doc = _get_order(order)
-	if doc.order_type != "Dine In":
-		frappe.throw(_("Only dine-in orders have a table"))
-	lines = doc.active_lines()
-	if not lines:
-		frappe.throw(_("Nothing has been ordered on this table yet"))
-	not_ready = sum(flt(d.qty) for d in lines if d.kitchen_status in ("Not Sent", "Sent", "In Progress"))
-	if not_ready and not cint(confirm):
-		return {"done": 0, "not_ready": not_ready}
-	mark_served(doc.name)
-	frappe.db.set_value("Resto Order", doc.name, "served_marked_at", now_datetime(), update_modified=False)
-	if not_ready:
-		doc.add_comment("Info", _("Marked served, waiting for payment, with {0} dish(es) not ready").format("{0:g}".format(not_ready)))
+	target = FLOOR_STATES[state]
+	tickets = frappe.get_all(
+		"Resto Kitchen Ticket",
+		filters={"resto_order": doc.name, "ticket_type": "Order", "status": ("in", list(TICKET_STEP))},
+		fields=["name", "status"],
+		order_by="creation asc",
+	)
+	if not tickets:
+		frappe.throw(_("Nothing on this order has been sent to the kitchen yet"))
+	moving = [t for t in tickets if t.status != target]
+	back = sum(1 for t in moving if TICKET_STEP[t.status] > TICKET_STEP[target])
+	if back and not cint(confirm):
+		return {"done": 0, "back": back}
+	for t in moving:
+		kitchen.set_ticket_status(t.name, target, floor=True)
+	if target == "Served":
+		# Served from the floor: waiting for payment from now, even with a dish not sent yet.
+		frappe.db.set_value("Resto Order", doc.name, "served_marked_at", now_datetime(), update_modified=False)
+	elif doc.served_marked_at:
+		frappe.db.set_value("Resto Order", doc.name, "served_marked_at", None, update_modified=False)
+	if moving:
+		doc.add_comment("Info", _("Kitchen state set from the floor: {0}").format(_(state, context="Resto Kitchen State")))
 	publish("order", order=doc.name, table=doc.resto_table)
-	return {"done": 1, "not_ready": not_ready}
+	unsent = sum(flt(d.qty) for d in doc.active_lines() if d.kitchen_status == "Not Sent")
+	return {"done": 1, "moved": len(moving), "unsent": unsent}
 
 
 @frappe.whitelist(methods=["POST"])

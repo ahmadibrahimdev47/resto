@@ -28,6 +28,9 @@
   "ready_at",
   "served_at",
   "recalled_at",
+  "floor_started",
+  "floor_ready",
+  "floor_served",
   "items_section",
   "items"
  ],
@@ -180,6 +183,33 @@
    "description": "When the ticket was brought back to the kitchen board from Today's Tickets; its timer runs from then, and its first ready time is kept for the kitchen times."
   },
   {
+   "fieldname": "floor_started",
+   "fieldtype": "Check",
+   "default": "0",
+   "read_only": 1,
+   "no_copy": 1,
+   "label": "Started From the Floor",
+   "description": "Set from the floor's kitchen state buttons, not by the kitchen: left out of the kitchen times."
+  },
+  {
+   "fieldname": "floor_ready",
+   "fieldtype": "Check",
+   "default": "0",
+   "read_only": 1,
+   "no_copy": 1,
+   "label": "Ready From the Floor",
+   "description": "Set from the floor's kitchen state buttons, not by the kitchen: left out of the kitchen times."
+  },
+  {
+   "fieldname": "floor_served",
+   "fieldtype": "Check",
+   "default": "0",
+   "read_only": 1,
+   "no_copy": 1,
+   "label": "Served From the Floor",
+   "description": "Set from the floor's kitchen state buttons, not by the kitchen: left out of the kitchen times."
+  },
+  {
    "fieldname": "items_section",
    "fieldtype": "Section Break",
    "label": "Items"
@@ -215,7 +245,7 @@
  "is_submittable": 0,
  "istable": 0,
  "links": [],
- "modified": "2026-11-27 14:00:00.000000",
+ "modified": "2026-11-28 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Resto",
  "name": "Resto Kitchen Ticket",
