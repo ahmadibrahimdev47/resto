@@ -141,7 +141,7 @@ class TestFloorServed(IntegrationTestCase):
 			"Resto Kitchen Ticket", name,
 			["sent_at", "started_at", "ready_at", "served_at", "floor_started", "floor_ready", "floor_served"], as_dict=True,
 		)
-		self.assertEqual(spans(t, now_datetime(), 20), (None, None, None, None, False))  # no 0-minute prep
+		self.assertEqual(spans(t, now_datetime(), 20), (None, None, None, None, None))  # no 0-minute prep, lateness not known
 		frappe.db.set_value("Resto Kitchen Ticket", name, {"floor_ready": 0, "floor_served": 0})  # as if the kitchen had
 		t.floor_ready = t.floor_served = 0
 		wait, cook, total, pickup, late = spans(t, now_datetime(), 20)

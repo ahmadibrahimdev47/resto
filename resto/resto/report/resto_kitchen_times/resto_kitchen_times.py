@@ -8,12 +8,13 @@ from resto.resto.report_utils import prepare_filters
 def spans(t, now, late):
 	"""(wait, cook, total, pickup, late) of one ticket, in minutes. A time set from the floor's kitchen
 	state buttons (D-293) is when someone tapped, not when the kitchen worked: a span that starts or
-	ends on it is left out (None), and whether the ticket was late is not known."""
+	ends on it is left out (None), and whether the ticket was late is not known (None): it counts in
+	neither the late tickets nor the Late % (D-297)."""
 	wait = None if t.floor_started else minutes(t.sent_at, t.started_at)
 	cook = None if t.floor_started or t.floor_ready else minutes(t.started_at, t.ready_at)
 	total = None if t.floor_ready else minutes(t.sent_at, t.ready_at)
 	pickup = None if t.floor_ready or t.floor_served else minutes(t.ready_at, t.served_at)
-	is_late = False if t.floor_ready else (total if total is not None else minutes(t.sent_at, now)) > late
+	is_late = None if t.floor_ready else (total if total is not None else minutes(t.sent_at, now)) > late
 	return wait, cook, total, pickup, is_late
 
 
@@ -60,11 +61,12 @@ def execute(filters=None):
 		for key, name, qty in keys:
 			g = groups.setdefault(
 				key,
-				{"group": key, "item_name": name, "tickets": 0, "qty": 0, "late": 0, "wait": [], "cook": [], "total": [], "pickup": []},
+				{"group": key, "item_name": name, "tickets": 0, "qty": 0, "late": 0, "timed": 0, "wait": [], "cook": [], "total": [], "pickup": []},
 			)
 			g["tickets"] += 1
 			g["qty"] += qty
 			g["late"] += 1 if is_late else 0
+			g["timed"] += 0 if is_late is None else 1
 			for field, value in (("wait", wait), ("cook", cook), ("total", total), ("pickup", pickup)):
 				if value is not None:
 					g[field].append(value)
@@ -76,7 +78,7 @@ def execute(filters=None):
 			values = g[field]
 			row[f"avg_{field}"] = sum(values) / len(values) if values else None
 		row["max_total"] = max(g["total"]) if g["total"] else None
-		row["late_pct"] = g["late"] / g["tickets"] * 100 if g["tickets"] else 0
+		row["late_pct"] = g["late"] / g["timed"] * 100 if g["timed"] else None
 		data.append(row)
 	if group_by in ("Day", "Hour"):
 		data.sort(key=lambda r: r["group"])
