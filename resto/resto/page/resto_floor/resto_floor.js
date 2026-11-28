@@ -1136,7 +1136,8 @@ class RestoFloor {
 				${o.unsent_count ? `<span class="rf-unsent">${__("Not sent: {0}", [o.unsent_count])}</span>` : ""}
 				<div class="rf-tfoot"><b class="rf-tamt">${money(o.bill_grand_total || o.net_total)}</b><span class="rf-spacer"></span>
 					<span class="rf-tago">${__("for {0}", [dur(o.minutes)])}</span></div>
-				${o.waiting_payment && t.status === "served" ? `<span class="rf-tserved">${__("Served {0} ago", [dur(o.served_minutes)])}</span>` : this.kitchen_progress(o)}`;
+				${o.waiting_payment && t.status === "served" ? `<span class="rf-tserved">${__("Served {0} ago", [dur(o.served_minutes)])}</span>` : this.kitchen_progress(o)}
+				${!flt(o.dishes) && !o.unsent_count ? `<span class="rf-unsent rf-tempty">${__("Empty order: add dishes, or cancel it")}</span>` : ""}`;
 		} else if (t.paid) {
 			body = `<span class="rf-tsub">${esc(t.paid.name)}${t.paid.guests ? ` · ${__("{0} guests", [t.paid.guests])}` : ""}</span>
 				<span class="rf-tfoot ${t.paid.eating ? "rf-thint" : "rf-unsent"}">${
